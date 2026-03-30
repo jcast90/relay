@@ -1,0 +1,31 @@
+{
+  "name": "agent-harness",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "bin": {
+    "agent-harness": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "demo": "tsx src/index.ts",
+    "demo:live": "HARNESS_LIVE=1 tsx src/index.ts",
+    "list-runs": "tsx src/index.ts list-runs",
+    "status": "tsx src/index.ts status",
+    "up": "tsx src/index.ts up",
+    "prepare": "pnpm build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4",
+    "zod": "^3.24.4"
+  }
+}
