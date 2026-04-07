@@ -145,13 +145,15 @@ export async function main(): Promise<void> {
   }
 
   const sequential = args.includes("--sequential");
-  const provider = (process.env.HARNESS_PROVIDER ?? "claude") as "claude" | "codex";
-  await registerAgentNames(provider);
+  const defaultProvider = (process.env.HARNESS_PROVIDER ?? "claude") as "claude" | "codex";
+  const agentOverrides = parseAgentOverrides();
+  await registerAgentNames({ defaultProvider, overrides: agentOverrides });
   const registry = new AgentRegistry();
   const agents = createLiveAgents({
     cwd,
     invoker: live ? undefined : new ScriptedInvoker(cwd),
-    provider
+    defaultProvider,
+    overrides: agentOverrides
   });
 
   for (const agent of agents) {
@@ -753,6 +755,28 @@ function parseProviderArg(args: string[]): "claude" | "codex" | null {
   }
 
   return null;
+}
+
+function parseAgentOverrides(): Record<string, { provider?: "claude" | "codex"; model?: string }> {
+  const overrides: Record<string, { provider?: "claude" | "codex"; model?: string }> = {};
+
+  for (const [key, value] of Object.entries(process.env)) {
+    const match = key.match(/^HARNESS_AGENT_(\w+)_PROVIDER$/);
+
+    if (match && value && (value === "claude" || value === "codex")) {
+      const agentId = match[1].toLowerCase();
+      overrides[agentId] = { ...overrides[agentId], provider: value };
+    }
+
+    const modelMatch = key.match(/^HARNESS_AGENT_(\w+)_MODEL$/);
+
+    if (modelMatch && value) {
+      const agentId = modelMatch[1].toLowerCase();
+      overrides[agentId] = { ...overrides[agentId], model: value };
+    }
+  }
+
+  return overrides;
 }
 
 function capitalize(value: string): string {

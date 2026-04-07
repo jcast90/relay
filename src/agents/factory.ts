@@ -10,6 +10,8 @@ export interface AgentSpec {
   displayName: string;
   role: AgentRole;
   specialties: AgentSpecialty[];
+  provider?: AgentProvider;
+  model?: string;
 }
 
 const AGENT_SPECS: AgentSpec[] = [
@@ -48,17 +50,22 @@ const AGENT_SPECS: AgentSpec[] = [
 interface AgentFactoryOptions {
   cwd: string;
   invoker?: CommandInvoker;
-  provider?: AgentProvider;
-  model?: string;
+  defaultProvider?: AgentProvider;
+  defaultModel?: string;
+  overrides?: Record<string, { provider?: AgentProvider; model?: string }>;
 }
 
 export function createLiveAgents(options: AgentFactoryOptions): Agent[] {
   const invoker = options.invoker ?? new NodeCommandInvoker();
-  const provider = options.provider ?? "claude";
-  const AgentClass = provider === "codex" ? CodexCliAgent : ClaudeCliAgent;
+  const defaultProvider = options.defaultProvider ?? "claude";
 
-  return AGENT_SPECS.map((spec) =>
-    new AgentClass({
+  return AGENT_SPECS.map((spec) => {
+    const override = options.overrides?.[spec.id];
+    const provider = override?.provider ?? spec.provider ?? defaultProvider;
+    const model = override?.model ?? spec.model ?? options.defaultModel;
+    const AgentClass = provider === "codex" ? CodexCliAgent : ClaudeCliAgent;
+
+    return new AgentClass({
       id: spec.id,
       name: spec.displayName,
       provider,
@@ -67,14 +74,20 @@ export function createLiveAgents(options: AgentFactoryOptions): Agent[] {
         specialties: spec.specialties
       },
       cwd: options.cwd,
-      model: options.model,
+      model,
       invoker
-    })
-  );
+    });
+  });
 }
 
-export async function registerAgentNames(provider: AgentProvider = "claude"): Promise<void> {
+export async function registerAgentNames(options?: {
+  defaultProvider?: AgentProvider;
+  overrides?: Record<string, { provider?: AgentProvider }>;
+}): Promise<void> {
+  const defaultProvider = options?.defaultProvider ?? "claude";
+
   for (const spec of AGENT_SPECS) {
+    const provider = options?.overrides?.[spec.id]?.provider ?? spec.provider ?? defaultProvider;
     await setAgentName(spec.id, spec.displayName, provider, spec.role);
   }
 }
