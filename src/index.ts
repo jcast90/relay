@@ -162,24 +162,30 @@ export async function main(): Promise<void> {
   const featureRequest = "Build a basic harness scaffold that can select agents by role and specialty.";
   let run: Awaited<ReturnType<Orchestrator["run"]>>;
 
-  if (sequential) {
-    const orchestrator = new Orchestrator(
-      registry,
-      cwd,
-      verificationRunner,
-      artifactStore,
-      workspace.paths.artifactsDir
-    );
-    run = await orchestrator.run(featureRequest);
-  } else {
-    const orchestratorV2 = new OrchestratorV2(
-      registry,
-      cwd,
-      verificationRunner,
-      artifactStore,
-      workspace.paths.artifactsDir
-    );
-    run = await orchestratorV2.run(featureRequest);
+  try {
+    if (sequential) {
+      const orchestrator = new Orchestrator(
+        registry,
+        cwd,
+        verificationRunner,
+        artifactStore,
+        workspace.paths.artifactsDir
+      );
+      run = await orchestrator.run(featureRequest);
+    } else {
+      const orchestratorV2 = new OrchestratorV2(
+        registry,
+        cwd,
+        verificationRunner,
+        artifactStore,
+        workspace.paths.artifactsDir
+      );
+      run = await orchestratorV2.run(featureRequest);
+    }
+  } catch (error) {
+    console.error("Orchestrator failed:", error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+    return;
   }
   const recentRuns = await artifactStore.readRunsIndex();
 
@@ -408,6 +414,14 @@ async function printTaskBoard(channelId: string): Promise<void> {
   }
 
   const store = new ChannelStore();
+  const channel = await store.getChannel(channelId);
+
+  if (!channel) {
+    console.error(`Channel not found: ${channelId}`);
+    process.exitCode = 1;
+    return;
+  }
+
   const runLinks = await store.readRunLinks(channelId);
 
   if (runLinks.length === 0) {
@@ -447,6 +461,14 @@ async function printDecisions(channelId: string): Promise<void> {
   }
 
   const store = new ChannelStore();
+  const channel = await store.getChannel(channelId);
+
+  if (!channel) {
+    console.error(`Channel not found: ${channelId}`);
+    process.exitCode = 1;
+    return;
+  }
+
   const decisions = await store.listDecisions(channelId);
 
   if (decisions.length === 0) {

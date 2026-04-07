@@ -24,6 +24,7 @@ describe("state machine", () => {
   it("supports classification and ticket execution path", () => {
     expect(getNextState("CLASSIFYING", "ClassificationComplete")).toBe("DRAFT_PLAN");
     expect(getNextState("PLAN_REVIEW", "PlanAwaitingApproval")).toBe("AWAITING_APPROVAL");
+    expect(getNextState("PLAN_REVIEW", "TicketsCreated")).toBe("TICKETS_EXECUTING");
     expect(getNextState("AWAITING_APPROVAL", "PlanApproved")).toBe("TICKETS_EXECUTING");
     expect(getNextState("AWAITING_APPROVAL", "PlanRejected")).toBe("DRAFT_PLAN");
     expect(getNextState("TICKETS_EXECUTING", "AllTicketsComplete")).toBe("TICKETS_COMPLETE");

@@ -13,38 +13,6 @@ export interface CrosslinkToolState {
 export function getCrosslinkToolDefinitions(): object[] {
   return [
     {
-      name: "crosslink_register",
-      description:
-        "Update your crosslink session description and capabilities. Your session is auto-registered when the MCP server starts — use this to refine what other agents see about you.",
-      inputSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          description: {
-            type: "string",
-            description:
-              "Human-readable description of what this session is working on."
-          },
-          capabilities: {
-            type: "array",
-            items: {
-              type: "string",
-              enum: [
-                "code_implementation",
-                "code_review",
-                "testing",
-                "documentation",
-                "architecture",
-                "general"
-              ]
-            },
-            description: "Capabilities this session can help with."
-          }
-        },
-        required: ["description"]
-      }
-    },
-    {
       name: "crosslink_discover",
       description:
         "List active crosslink sessions across all repos. Use this to find other agent sessions you can collaborate with.",
@@ -99,36 +67,6 @@ export function getCrosslinkToolDefinitions(): object[] {
       name: "crosslink_poll",
       description:
         "Check for inbound crosslink messages from other sessions. Returns pending messages and marks them as delivered.",
-      inputSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {}
-      }
-    },
-    {
-      name: "crosslink_reply",
-      description:
-        "Reply to a crosslink message. The reply is delivered to the original sender's mailbox.",
-      inputSchema: {
-        type: "object",
-        additionalProperties: false,
-        required: ["messageId", "content"],
-        properties: {
-          messageId: {
-            type: "string",
-            description: "The messageId of the message you are replying to."
-          },
-          content: {
-            type: "string",
-            description: "Your reply content."
-          }
-        }
-      }
-    },
-    {
-      name: "crosslink_deregister",
-      description:
-        "Remove this session from crosslink. Usually handled automatically on exit.",
       inputSchema: {
         type: "object",
         additionalProperties: false,

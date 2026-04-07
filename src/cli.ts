@@ -2,4 +2,7 @@
 
 import { main } from "./index.js";
 
-void main();
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : error);
+  process.exitCode = 1;
+});

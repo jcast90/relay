@@ -1,160 +1,106 @@
 # Agent Harness
 
-Local-first scaffolding for a phase-driven coding harness with real Codex and Claude adapters.
+Local-first orchestration for phase-driven coding with Claude and Codex adapters. Classifies requests by complexity, decomposes work into parallelizable tickets, and executes them with verification loops.
 
-## Why this shape
-
-The initial scaffold treats `agent` as a runtime role, not a hard-coded personality explosion. That lets the orchestrator ask for:
-
-- a `planner`
-- an `implementer`
-- a `reviewer`
-- a `tester`
-
-Each task can also carry a specialty such as `ui`, `business_logic`, or `api_crud`. That gives us useful separation without creating a brittle matrix like "UI QA agent", "API QA agent", "CRUD QA agent", and so on before we know we need them.
-
-## Current pieces
-
-- deterministic run and phase state machine
-- structured phase plan schema with retry policy and verification commands
-- event model and transition guardrails
-- agent registry with role + specialty matching
-- Codex and Claude CLI adapters behind a common `Agent` interface
-- allowlisted verification command execution with captured command-result artifacts
-- scripted simulation mode so the harness can be exercised without consuming model calls
-- tiny `list-runs` CLI mode for inspecting recent persisted runs without starting a new one
-- centralized workspace at `~/.agent-harness/` — register once, use from any repo
-- full run persistence with snapshots (`run.json`) and incremental event logs (`events.jsonl`)
-- PR lifecycle tracking (branch → commits → PR → checks → review → merge)
-- cross-session collaboration via crosslink (discover, message, reply between agent sessions)
-
-## Team quickstart
-
-Install from this repo:
+## Quickstart
 
 ```bash
-pnpm install
-pnpm build
-pnpm link --global
-```
+pnpm install && pnpm build && pnpm link --global
 
-Register a repo (run once per repo, stores config centrally at `~/.agent-harness/`):
-
-```bash
+# Register a repo (stores config at ~/.agent-harness/)
 cd /path/to/your/repo
 agent-harness up
-```
 
-Then use the wrapper that matches your normal workflow — from any registered repo:
-
-```bash
+# Use the wrapper around your normal CLI
 agent-harness claude
 agent-harness codex
+
+# Run the scripted demo
+pnpm demo
 ```
 
-List all registered workspaces:
+## How it works
 
-```bash
-agent-harness list-workspaces
-```
+1. **Classify** — incoming request is triaged into a complexity tier
+2. **Plan** — planner agent generates a phased plan
+3. **Decompose** — plan splits into parallelizable tickets with dependency DAGs
+4. **Approve** — large/architectural requests wait for user approval via MCP
+5. **Execute** — ticket scheduler runs independent tickets concurrently (max 3)
+6. **Verify** — each ticket gets implement → verify → retry loops with failure classification
 
-If you want the global command removed later:
+### Complexity tiers
 
-```bash
-pnpm unlink --global agent-harness
-```
+| Tier | Behavior |
+|------|----------|
+| `trivial` | Heuristic match (typo, rename, lint) — skip planning, single ticket |
+| `bugfix` | Heuristic match — debug-first flow |
+| `feature_small` | LLM classification — lightweight plan, no approval |
+| `feature_large` | Full plan, user approval required |
+| `architectural` | Design doc phase, then plan, then approval |
+| `multi_repo` | Like feature_large + crosslink coordination |
 
-## Where it fits today
+## CLI commands
 
-- `codex` CLI: supported directly through `agent-harness codex`
-- `claude` / Claude Code CLI: supported directly through `agent-harness claude`
-- `iTerm`: supported by running the wrapper in your normal shell or profile
-- `tmux` / `cmux`: supported by running the wrapper in a pane or session the same way you would run `codex` or `claude`
-- IDE integrated terminals: supported by running the wrapper in the terminal built into VS Code, JetBrains, Cursor, and similar tools
-- Codex desktop app: no first-class direct integration yet; best current path is the CLI wrapper in a terminal alongside the app
-- Claude desktop app: no first-class direct integration yet; best current path is Claude Code CLI via `agent-harness claude`
+| Command | Description |
+|---------|-------------|
+| `agent-harness up` | Register repo in global workspace |
+| `agent-harness status` | Workspace paths and recent runs |
+| `agent-harness list-runs` | Recent persisted runs |
+| `agent-harness list-workspaces` | All registered workspaces |
+| `agent-harness claude` | Launch Claude with harness MCP attached |
+| `agent-harness codex` | Launch Codex with harness MCP attached |
+| `agent-harness channels` | List channels |
+| `agent-harness channel create <name>` | Create a channel |
+| `agent-harness channel <id>` | Show channel details + feed |
+| `agent-harness running` | Active tasks across all workspaces |
+| `agent-harness board <channelId>` | Task board (tickets by status) |
+| `agent-harness decisions <channelId>` | Decision history |
+| `agent-harness doctor` | Workspace + MCP diagnostics |
+| `agent-harness crosslink status` | Active agent sessions |
 
-## How teams use it
+## MCP tools (15)
 
-The wrapper is meant to preserve existing muscle memory:
+**Harness (6):** `harness_status`, `harness_list_runs`, `harness_get_run_detail`, `harness_get_artifact`, `harness_approve_plan`, `harness_reject_plan`
 
-- if someone normally runs `codex`, they can run `agent-harness codex`
-- if someone normally runs `claude`, they can run `agent-harness claude`
-- if someone works in iTerm, tmux, cmux, or an IDE terminal, the wrapper works there the same way
+**Channels (6):** `channel_create`, `channel_get`, `channel_post`, `channel_record_decision`, `channel_task_board`, `harness_running_tasks`
 
-The harness MCP server is local stdio only. It adds workspace status, run history, ledgers, and artifact inspection without replacing the rest of your MCP or skill setup.
-
-## Common workflow
-
-- `agent-harness up`: register the current repo in the centralized workspace (`~/.agent-harness/`)
-- `agent-harness status`: show workspace paths and recent runs
-- `agent-harness list-workspaces`: list all registered workspaces
-- `agent-harness doctor`: print workspace status plus native Claude/Codex MCP listings under the wrapper
-- `agent-harness inspect-mcp [claude|codex]`: show which MCP servers the wrapped CLI sees
-- `agent-harness list-runs`: inspect recent persisted runs without starting a new one
-- `agent-harness`: run the local scripted harness flow
-- `HARNESS_LIVE=1 agent-harness`: run with live Claude and Codex adapters
-- `agent-harness claude`: launch Claude with a generated workspace-local MCP config that attaches the `agent_harness` server without replacing existing MCP sources
-- `agent-harness codex`: launch Codex with inline MCP config overrides that attach the `agent_harness` server
-- `agent-harness claude --no-harness-mcp`: launch Claude without attaching the harness MCP server
-- `agent-harness codex --no-harness-mcp`: launch Codex without attaching the harness MCP server
-
-## Verification and troubleshooting
-
-Use these commands when onboarding a team or debugging a workstation:
-
-```bash
-agent-harness status
-agent-harness inspect-mcp
-agent-harness inspect-mcp codex
-agent-harness inspect-mcp claude
-agent-harness inspect-mcp codex --no-harness-mcp
-agent-harness inspect-mcp claude --no-harness-mcp
-agent-harness doctor
-```
-
-Helpful checks:
-
-- `inspect-mcp` shows what the wrapped CLI sees with the harness attached
-- `inspect-mcp --no-harness-mcp` shows the underlying unwrapped CLI view
-- `doctor` gives one combined report for workspace state plus MCP visibility
-
-## Notes for company environments
-
-- local stdio MCP servers are a good fit when only network traffic must go through a company proxy
-- `agent-harness` does not proxy or replace your other MCP servers
-- `agent-harness codex` adds the harness MCP alongside Codex's existing config
-- `agent-harness claude` adds a generated MCP config without using strict isolation, so existing Claude MCP sources can still load
+**Crosslink (3):** `crosslink_discover`, `crosslink_send`, `crosslink_poll`
 
 ## Architecture
 
-All harness data lives under `~/.agent-harness/`:
+All data lives at `~/.agent-harness/`:
 
 ```
 ~/.agent-harness/
-  workspace-registry.json          # maps repo paths to workspace IDs
-  workspaces/
-    <repo-name>-<hash>/            # per-repo workspace
-      artifacts/
-        runs-index.json
-        <runId>/
-          run.json                 # full run snapshot
-          events.jsonl             # incremental event log
-          phase-ledger.json
-          pr-lifecycle.json        # PR tracking (if active)
-          <artifactId>.json        # command results, classifications
-      service-status.json
-      claude.mcp.json
-  crosslink/                       # cross-session collaboration
+  workspace-registry.json
+  workspaces/<repo-hash>/
+    artifacts/
+      runs-index.json
+      <runId>/
+        run.json              # full snapshot
+        events.jsonl          # incremental event log
+        ticket-ledger.json
+        classification.json
+        approval.json
+  channels/<channelId>.json
+    feed.jsonl
+    decisions/<id>.json
+  crosslink/
     sessions/
     mailboxes/
+  agent-names.json
 ```
 
-No per-repo `.agent-harness/` directories are created — everything is centralized.
+## Key concepts
 
-## Next likely steps
+- **Channels** — Slack-like spaces where agents collaborate. Messages, decisions, and runs live in channels.
+- **Tickets** — parallelizable work units with dependency DAGs, decomposed from plans.
+- **Named agents** — display name registry so you can see which agent did what.
+- **Decisions** — recorded with rationale and alternatives considered, queryable per channel.
+- **Crosslink** — file-based session discovery and messaging between concurrent agent sessions.
 
-1. Let live planner output drive the real plan end-to-end.
-2. Run resumption from persisted snapshots.
-3. PR lifecycle automation (auto-advance stages from git/GitHub events).
-4. Multi-repo orchestration via crosslink.
+## Flags
+
+- `HARNESS_LIVE=1` — use real Claude/Codex adapters instead of scripted simulation
+- `--sequential` — use v1 sequential orchestrator instead of v2 ticket-based
+- `--no-harness-mcp` — launch Claude/Codex without attaching the harness MCP server

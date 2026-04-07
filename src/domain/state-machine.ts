@@ -9,7 +9,8 @@ const transitions: Record<RunState, Partial<Record<RunEventType, RunState>>> = {
   },
   PLAN_REVIEW: {
     PlanAccepted: "PHASE_READY",
-    PlanAwaitingApproval: "AWAITING_APPROVAL"
+    PlanAwaitingApproval: "AWAITING_APPROVAL",
+    TicketsCreated: "TICKETS_EXECUTING"
   },
   AWAITING_APPROVAL: {
     PlanApproved: "TICKETS_EXECUTING",

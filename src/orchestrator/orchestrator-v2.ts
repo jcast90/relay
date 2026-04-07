@@ -20,7 +20,7 @@ import type { ArtifactStore } from "../execution/artifact-store.js";
 import type { VerificationRunner } from "../execution/verification-runner.js";
 import { classifyRequest } from "./classifier.js";
 import { decomposePlanToTickets, buildTicketPlanFromPhases } from "./ticket-decomposer.js";
-import { awaitApproval } from "./approval-gate.js";
+import { checkApproval } from "./approval-gate.js";
 import { TicketScheduler } from "./ticket-scheduler.js";
 
 export class OrchestratorV2 {
@@ -141,30 +141,7 @@ export class OrchestratorV2 {
       });
     }
 
-    // Step 5: Approval gate (feature_large, architectural, multi_repo)
-    if (tierNeedsApproval(classification.tier)) {
-      await this.transition(run, "PlanAwaitingApproval", "phase_00");
-
-      const approvalResult = await awaitApproval({
-        run,
-        artifactStore: this.artifactStore
-      });
-
-      if (approvalResult.decision === "rejected") {
-        await this.transition(run, "PlanRejected", "phase_00");
-        run.completedAt = new Date().toISOString();
-        run.updatedAt = run.completedAt;
-        await this.persistRunIndex(run);
-        return run;
-      }
-
-      await this.transition(run, "PlanApproved", "phase_00");
-    } else {
-      // For feature_small and bugfix, skip approval and go straight to tickets
-      await this.transition(run, "PlanAccepted", "phase_00");
-    }
-
-    // Step 6: Decompose to tickets
+    // Step 5: Decompose to tickets (before approval gate so plan is visible)
     const ticketPlan = await decomposePlanToTickets({
       run,
       plan: run.plan,
@@ -176,23 +153,44 @@ export class OrchestratorV2 {
     run.ticketPlan = ticketPlan;
     run.ticketLedger = initializeTicketLedger(ticketPlan.tickets);
 
-    this.recordEvent(run, "TicketsCreated", "phase_00", {
-      ticketCount: String(ticketPlan.tickets.length)
-    });
-
     await this.artifactStore.saveTicketLedger({
       runId: run.id,
       ticketLedger: run.ticketLedger
     });
 
-    // Step 7: Execute tickets
-    if (run.state !== "TICKETS_EXECUTING") {
-      // For non-approval paths, we need to transition to TICKETS_EXECUTING
-      // from PHASE_READY (since PlanAccepted -> PHASE_READY)
-      // Use PhaseStarted -> PHASE_EXECUTE, then route to tickets
-      // Actually, for the ticket path after PlanAccepted, we go PHASE_READY.
-      // Let's handle this by checking state and transitioning appropriately.
+    // Step 6: Approval gate or direct ticket execution
+    if (tierNeedsApproval(classification.tier)) {
+      await this.transition(run, "PlanAwaitingApproval", "phase_00");
+
+      // Non-blocking: check if approval already exists, otherwise return waiting
+      const approvalResult = await checkApproval({
+        runId: run.id,
+        artifactStore: this.artifactStore
+      });
+
+      if (!approvalResult) {
+        // No approval yet — persist and return. Caller resumes after approval.
+        await this.persistRunIndex(run);
+        return run;
+      }
+
+      if (approvalResult.decision === "rejected") {
+        await this.transition(run, "PlanRejected", "phase_00");
+        run.completedAt = new Date().toISOString();
+        run.updatedAt = run.completedAt;
+        await this.persistRunIndex(run);
+        return run;
+      }
+
+      await this.transition(run, "PlanApproved", "phase_00");
+    } else {
+      // Non-approval: transition directly to ticket execution
+      await this.transition(run, "TicketsCreated", "phase_00");
     }
+
+    this.recordEvent(run, "TicketsCreated", "phase_00", {
+      ticketCount: String(ticketPlan.tickets.length)
+    });
 
     const scheduler = new TicketScheduler(
       this.repoRoot,
@@ -229,9 +227,9 @@ export class OrchestratorV2 {
     run.ticketPlan = ticketPlan;
     run.ticketLedger = initializeTicketLedger(ticketPlan.tickets);
 
-    // Fast-track: plan generated, accepted, execute
+    // Fast-track: plan generated, then straight to tickets
     await this.transition(run, "PlanGenerated", "phase_00");
-    await this.transition(run, "PlanAccepted", "phase_00");
+    await this.transition(run, "TicketsCreated", "phase_00");
 
     this.recordEvent(run, "TicketsCreated", "phase_00", {
       ticketCount: String(ticketPlan.tickets.length),

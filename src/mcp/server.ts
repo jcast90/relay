@@ -1,12 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 
-import {
-  createPrLifecycle,
-  advancePrStage,
-  canTransition,
-  type PrStage
-} from "../domain/pr-lifecycle.js";
 import { LocalArtifactStore } from "../execution/artifact-store.js";
 import { submitApproval } from "../orchestrator/approval-gate.js";
 import { getHarnessWorkspacePaths, readWorkspaceSummary } from "../cli/workspace.js";
@@ -144,43 +138,20 @@ async function handleMessage(
                 type: "object",
                 additionalProperties: false,
                 properties: {
-                  limit: {
-                    type: "integer",
-                    minimum: 1,
-                    maximum: 50
-                  }
-                }
-              }
-            },
-            {
-              name: "harness_get_run",
-              description: "Get one run entry and its phase ledger by run id.",
-              inputSchema: {
-                type: "object",
-                additionalProperties: false,
-                required: ["runId"],
-                properties: {
-                  runId: {
-                    type: "string"
-                  }
+                  limit: { type: "integer", minimum: 1, maximum: 50 }
                 }
               }
             },
             {
               name: "harness_get_run_detail",
-              description: "Get full run snapshot including evidence, artifacts, and event log.",
+              description: "Get full run snapshot including classification, tickets, evidence, artifacts, and optionally the event log.",
               inputSchema: {
                 type: "object",
                 additionalProperties: false,
                 required: ["runId"],
                 properties: {
-                  runId: {
-                    type: "string"
-                  },
-                  includeEvents: {
-                    type: "boolean",
-                    description: "Include the full event log. Defaults to false."
-                  }
+                  runId: { type: "string" },
+                  includeEvents: { type: "boolean" }
                 }
               }
             },
@@ -192,58 +163,7 @@ async function handleMessage(
                 additionalProperties: false,
                 required: ["path"],
                 properties: {
-                  path: {
-                    type: "string"
-                  }
-                }
-              }
-            },
-            {
-              name: "harness_get_classification",
-              description: "Get the classification result (complexity tier) for a run.",
-              inputSchema: {
-                type: "object",
-                additionalProperties: false,
-                required: ["runId"],
-                properties: {
-                  runId: { type: "string" }
-                }
-              }
-            },
-            {
-              name: "harness_list_tickets",
-              description: "List all tickets and their status for a run.",
-              inputSchema: {
-                type: "object",
-                additionalProperties: false,
-                required: ["runId"],
-                properties: {
-                  runId: { type: "string" }
-                }
-              }
-            },
-            {
-              name: "harness_get_ticket",
-              description: "Get detailed status of a specific ticket in a run.",
-              inputSchema: {
-                type: "object",
-                additionalProperties: false,
-                required: ["runId", "ticketId"],
-                properties: {
-                  runId: { type: "string" },
-                  ticketId: { type: "string" }
-                }
-              }
-            },
-            {
-              name: "harness_ticket_status",
-              description: "Get a summary of ticket execution progress (counts by status).",
-              inputSchema: {
-                type: "object",
-                additionalProperties: false,
-                required: ["runId"],
-                properties: {
-                  runId: { type: "string" }
+                  path: { type: "string" }
                 }
               }
             },
@@ -261,7 +181,7 @@ async function handleMessage(
             },
             {
               name: "harness_reject_plan",
-              description: "Reject the pending plan for a run with optional feedback. Triggers re-planning.",
+              description: "Reject the pending plan with optional feedback.",
               inputSchema: {
                 type: "object",
                 additionalProperties: false,
@@ -269,62 +189,6 @@ async function handleMessage(
                 properties: {
                   runId: { type: "string" },
                   feedback: { type: "string" }
-                }
-              }
-            },
-            {
-              name: "harness_pr_status",
-              description: "Get the PR lifecycle status for a run.",
-              inputSchema: {
-                type: "object",
-                additionalProperties: false,
-                required: ["runId"],
-                properties: {
-                  runId: { type: "string" }
-                }
-              }
-            },
-            {
-              name: "harness_pr_create",
-              description: "Initialize PR lifecycle tracking for a run. Call this after creating a branch.",
-              inputSchema: {
-                type: "object",
-                additionalProperties: false,
-                required: ["runId", "branch"],
-                properties: {
-                  runId: { type: "string" },
-                  branch: { type: "string" },
-                  baseBranch: { type: "string" }
-                }
-              }
-            },
-            {
-              name: "harness_pr_advance",
-              description: "Advance the PR lifecycle to the next stage (e.g. commits_pushed, pr_opened, checks_passed, merged).",
-              inputSchema: {
-                type: "object",
-                additionalProperties: false,
-                required: ["runId", "stage"],
-                properties: {
-                  runId: { type: "string" },
-                  stage: {
-                    type: "string",
-                    enum: [
-                      "branch_created",
-                      "commits_pushed",
-                      "pr_opened",
-                      "checks_running",
-                      "checks_passed",
-                      "checks_failed",
-                      "review_requested",
-                      "changes_requested",
-                      "approved",
-                      "merged",
-                      "closed"
-                    ]
-                  },
-                  prNumber: { type: "string" },
-                  prUrl: { type: "string" }
                 }
               }
             }
@@ -395,33 +259,11 @@ async function callTool(
     case "harness_list_runs": {
       const runs = await artifactStore.readRunsIndex();
       const limit = Math.max(1, Math.min(Number(args.limit ?? 10), 50));
-      return {
-        workspaceRoot,
-        runs: runs.slice(0, limit)
-      };
-    }
-    case "harness_get_run": {
-      const runs = await artifactStore.readRunsIndex();
-      const runId = String(args.runId ?? "");
-      const run = runs.find((entry) => entry.runId === runId);
-
-      if (!run) {
-        throw new Error(`Run not found: ${runId}`);
-      }
-
-      const phaseLedger = run.phaseLedgerPath
-        ? JSON.parse(await readFile(run.phaseLedgerPath, "utf8"))
-        : null;
-
-      return {
-        run,
-        phaseLedger
-      };
+      return { workspaceRoot, runs: runs.slice(0, limit) };
     }
     case "harness_get_run_detail": {
       const runId = String(args.runId ?? "");
       const includeEvents = Boolean(args.includeEvents ?? false);
-
       const snapshot = await artifactStore.readRunSnapshot(runId);
 
       if (!snapshot) {
@@ -432,10 +274,7 @@ async function callTool(
         ? await artifactStore.readEventLog(runId)
         : [];
 
-      return {
-        ...snapshot,
-        events
-      };
+      return { ...snapshot, events };
     }
     case "harness_get_artifact": {
       const inputPath = String(args.path ?? "");
@@ -448,61 +287,6 @@ async function callTool(
       }
 
       return JSON.parse(await readFile(path, "utf8"));
-    }
-    case "harness_get_classification": {
-      const runId = String(args.runId ?? "");
-      const snapshot = await artifactStore.readRunSnapshot(runId);
-
-      if (!snapshot) {
-        throw new Error(`Run not found: ${runId}`);
-      }
-
-      return {
-        runId,
-        classification: snapshot.classification ?? null
-      };
-    }
-    case "harness_list_tickets": {
-      const runId = String(args.runId ?? "");
-      const tickets = await artifactStore.readTicketLedger(runId);
-
-      return {
-        runId,
-        tickets: tickets ?? [],
-        count: tickets?.length ?? 0
-      };
-    }
-    case "harness_get_ticket": {
-      const runId = String(args.runId ?? "");
-      const ticketId = String(args.ticketId ?? "");
-      const tickets = await artifactStore.readTicketLedger(runId);
-      const ticket = tickets?.find((t) => t.ticketId === ticketId);
-
-      if (!ticket) {
-        throw new Error(`Ticket not found: ${ticketId} in run ${runId}`);
-      }
-
-      return ticket;
-    }
-    case "harness_ticket_status": {
-      const runId = String(args.runId ?? "");
-      const tickets = await artifactStore.readTicketLedger(runId);
-
-      if (!tickets || tickets.length === 0) {
-        return { runId, total: 0, byStatus: {} };
-      }
-
-      const byStatus: Record<string, number> = {};
-
-      for (const ticket of tickets) {
-        byStatus[ticket.status] = (byStatus[ticket.status] ?? 0) + 1;
-      }
-
-      return {
-        runId,
-        total: tickets.length,
-        byStatus
-      };
     }
     case "harness_approve_plan": {
       const runId = String(args.runId ?? "");
@@ -523,65 +307,6 @@ async function callTool(
         artifactStore
       });
       return { runId, decision: "rejected", feedback, path };
-    }
-    case "harness_pr_status": {
-      const runId = String(args.runId ?? "");
-      const lifecycle = await artifactStore.readPrLifecycle(runId);
-
-      if (!lifecycle) {
-        return { runId, status: "no_pr_lifecycle", message: "No PR lifecycle found for this run. Use harness_pr_create to start one." };
-      }
-
-      return lifecycle;
-    }
-    case "harness_pr_create": {
-      const runId = String(args.runId ?? "");
-      const branch = String(args.branch ?? "");
-      const baseBranch = args.baseBranch ? String(args.baseBranch) : undefined;
-
-      if (!runId || !branch) {
-        throw new Error("runId and branch are required.");
-      }
-
-      const existing = await artifactStore.readPrLifecycle(runId);
-
-      if (existing) {
-        throw new Error(`PR lifecycle already exists for run ${runId}. Current stage: ${existing.currentStage}`);
-      }
-
-      const lifecycle = createPrLifecycle({ runId, branch, baseBranch });
-      const path = await artifactStore.savePrLifecycle(lifecycle);
-
-      return { ...lifecycle, path };
-    }
-    case "harness_pr_advance": {
-      const runId = String(args.runId ?? "");
-      const stage = String(args.stage ?? "") as PrStage;
-
-      const lifecycle = await artifactStore.readPrLifecycle(runId);
-
-      if (!lifecycle) {
-        throw new Error(`No PR lifecycle found for run ${runId}.`);
-      }
-
-      if (!canTransition(lifecycle.currentStage, stage)) {
-        throw new Error(`Cannot transition from ${lifecycle.currentStage} to ${stage}.`);
-      }
-
-      const details: Record<string, string> = {};
-
-      if (args.prNumber) {
-        details.prNumber = String(args.prNumber);
-      }
-
-      if (args.prUrl) {
-        details.prUrl = String(args.prUrl);
-      }
-
-      const updated = advancePrStage(lifecycle, stage, details);
-      await artifactStore.savePrLifecycle(updated);
-
-      return updated;
     }
     default:
       throw new Error(`Unknown tool: ${name}`);
