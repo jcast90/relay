@@ -28,6 +28,7 @@ import { VerificationRunner } from "./execution/verification-runner.js";
 import { Orchestrator } from "./orchestrator/orchestrator.js";
 import { OrchestratorV2 } from "./orchestrator/orchestrator-v2.js";
 import { ScriptedInvoker } from "./simulation/scripted-invoker.js";
+import { ChannelStore } from "./channels/channel-store.js";
 import { handleCrosslinkCommand } from "./crosslink/cli.js";
 
 export async function main(): Promise<void> {
@@ -76,6 +77,31 @@ export async function main(): Promise<void> {
       workspace,
       artifactStore
     });
+    return;
+  }
+
+  if (command === "channels") {
+    await printChannels();
+    return;
+  }
+
+  if (command === "channel") {
+    await handleChannelCommand(args);
+    return;
+  }
+
+  if (command === "running") {
+    await printRunningTasks();
+    return;
+  }
+
+  if (command === "board") {
+    await printTaskBoard(args[0] ?? "");
+    return;
+  }
+
+  if (command === "decisions") {
+    await printDecisions(args[0] ?? "");
     return;
   }
 
@@ -256,6 +282,187 @@ export async function main(): Promise<void> {
     console.log(
       `- ${event.createdAt} ${event.phaseId} ${event.type} ${JSON.stringify(event.details)}`
     );
+  }
+}
+
+async function printChannels(): Promise<void> {
+  const store = new ChannelStore();
+  const channels = await store.listChannels();
+
+  if (channels.length === 0) {
+    console.log("No channels. Create one with: agent-harness channel create <name>");
+    return;
+  }
+
+  console.log(`Channels (${channels.length}):`);
+
+  for (const ch of channels) {
+    const activeMembers = ch.members.filter((m) => m.status === "active").length;
+    console.log(`  ${ch.name} (${ch.channelId})`);
+    console.log(`    ${ch.description}`);
+    console.log(`    Status: ${ch.status} | Members: ${activeMembers}/${ch.members.length} | Refs: ${ch.pinnedRefs.length}`);
+    console.log("");
+  }
+}
+
+async function handleChannelCommand(args: string[]): Promise<void> {
+  const sub = args[0];
+  const store = new ChannelStore();
+
+  if (sub === "create") {
+    const name = args[1];
+    if (!name) {
+      console.error("Usage: agent-harness channel create <name> [description]");
+      process.exitCode = 1;
+      return;
+    }
+    const description = args.slice(2).join(" ") || `Channel for ${name}`;
+    const channel = await store.createChannel({ name, description });
+    console.log(`Channel created: ${channel.name} (${channel.channelId})`);
+    return;
+  }
+
+  if (!sub) {
+    console.error("Usage: agent-harness channel <channelId|create>");
+    process.exitCode = 1;
+    return;
+  }
+
+  const channel = await store.getChannel(sub);
+  if (!channel) {
+    console.error(`Channel not found: ${sub}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  console.log(`${channel.name} (${channel.channelId})`);
+  console.log(`  ${channel.description}`);
+  console.log(`  Status: ${channel.status}`);
+  console.log("");
+
+  if (channel.members.length > 0) {
+    console.log("Members:");
+    for (const m of channel.members) {
+      console.log(`  ${m.displayName} [${m.role}/${m.provider}] — ${m.status}`);
+    }
+    console.log("");
+  }
+
+  if (channel.pinnedRefs.length > 0) {
+    console.log("Pinned refs:");
+    for (const ref of channel.pinnedRefs) {
+      console.log(`  ${ref.label} (${ref.type}: ${ref.targetId})`);
+    }
+    console.log("");
+  }
+
+  const feed = await store.readFeed(sub, 10);
+  if (feed.length > 0) {
+    console.log("Recent feed:");
+    for (const entry of feed) {
+      const from = entry.fromDisplayName ?? "system";
+      console.log(`  [${entry.type}] ${from}: ${entry.content.slice(0, 120)}`);
+    }
+  }
+}
+
+async function printRunningTasks(): Promise<void> {
+  const workspaces = await listRegisteredWorkspaces();
+  const activeStates = new Set([
+    "CLASSIFYING", "DRAFT_PLAN", "PLAN_REVIEW", "AWAITING_APPROVAL",
+    "DESIGN_DOC", "PHASE_READY", "PHASE_EXECUTE", "TEST_FIX_LOOP",
+    "REVIEW_FIX_LOOP", "TICKETS_EXECUTING", "TICKETS_COMPLETE"
+  ]);
+
+  let count = 0;
+
+  for (const ws of workspaces) {
+    const wsArtifactStore = new LocalArtifactStore(
+      `${getGlobalRoot()}/workspaces/${ws.workspaceId}/artifacts`
+    );
+    const runs = await wsArtifactStore.readRunsIndex();
+
+    for (const run of runs) {
+      if (activeStates.has(run.state)) {
+        console.log(`  ${run.runId} [${run.state}] ${run.featureRequest.slice(0, 80)}`);
+        console.log(`    Workspace: ${ws.repoPath}`);
+        if (run.channelId) console.log(`    Channel: ${run.channelId}`);
+        console.log("");
+        count += 1;
+      }
+    }
+  }
+
+  if (count === 0) {
+    console.log("No running tasks.");
+  } else {
+    console.log(`${count} active task(s).`);
+  }
+}
+
+async function printTaskBoard(channelId: string): Promise<void> {
+  if (!channelId) {
+    console.error("Usage: agent-harness board <channelId>");
+    process.exitCode = 1;
+    return;
+  }
+
+  const store = new ChannelStore();
+  const runLinks = await store.readRunLinks(channelId);
+
+  if (runLinks.length === 0) {
+    console.log("No runs linked to this channel.");
+    return;
+  }
+
+  const board: Record<string, Array<{ ticketId: string; title: string }>> = {};
+
+  for (const link of runLinks) {
+    const wsStore = new LocalArtifactStore(
+      `${getGlobalRoot()}/workspaces/${link.workspaceId}/artifacts`
+    );
+    const tickets = await wsStore.readTicketLedger(link.runId);
+    if (!tickets) continue;
+
+    for (const ticket of tickets) {
+      if (!board[ticket.status]) board[ticket.status] = [];
+      board[ticket.status].push({ ticketId: ticket.ticketId, title: ticket.title });
+    }
+  }
+
+  for (const [status, tickets] of Object.entries(board)) {
+    console.log(`[${status.toUpperCase()}] (${tickets.length})`);
+    for (const t of tickets) {
+      console.log(`  ${t.ticketId}: ${t.title}`);
+    }
+    console.log("");
+  }
+}
+
+async function printDecisions(channelId: string): Promise<void> {
+  if (!channelId) {
+    console.error("Usage: agent-harness decisions <channelId>");
+    process.exitCode = 1;
+    return;
+  }
+
+  const store = new ChannelStore();
+  const decisions = await store.listDecisions(channelId);
+
+  if (decisions.length === 0) {
+    console.log("No decisions recorded in this channel.");
+    return;
+  }
+
+  for (const d of decisions) {
+    console.log(`${d.decisionId}: ${d.title}`);
+    console.log(`  By: ${d.decidedByName}`);
+    console.log(`  Rationale: ${d.rationale}`);
+    if (d.alternatives.length > 0) {
+      console.log(`  Alternatives: ${d.alternatives.join(", ")}`);
+    }
+    console.log(`  Decided: ${d.createdAt}`);
+    console.log("");
   }
 }
 

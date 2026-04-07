@@ -17,6 +17,7 @@ function buildTestRun(overrides?: Partial<HarnessRun>): HarnessRun {
     startedAt: now,
     updatedAt: now,
     completedAt: null,
+    channelId: null,
     classification: null,
     plan: null,
     ticketPlan: null,

@@ -50,6 +50,7 @@ export interface RunSnapshot {
   startedAt: string;
   updatedAt: string;
   completedAt: string | null;
+  channelId: string | null;
   classification: HarnessRun["classification"];
   plan: HarnessRun["plan"];
   ticketPlan: HarnessRun["ticketPlan"];
@@ -265,6 +266,7 @@ export class LocalArtifactStore implements ArtifactStore {
       startedAt: run.startedAt,
       updatedAt: run.updatedAt,
       completedAt: run.completedAt,
+      channelId: run.channelId,
       classification: run.classification,
       plan: run.plan,
       ticketPlan: run.ticketPlan,

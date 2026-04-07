@@ -11,6 +11,13 @@ import { LocalArtifactStore } from "../execution/artifact-store.js";
 import { submitApproval } from "../orchestrator/approval-gate.js";
 import { getHarnessWorkspacePaths, readWorkspaceSummary } from "../cli/workspace.js";
 import { CrosslinkStore } from "../crosslink/store.js";
+import { ChannelStore } from "../channels/channel-store.js";
+import {
+  callChannelTool,
+  getChannelToolDefinitions,
+  isChannelTool,
+  type ChannelToolState
+} from "./channel-tools.js";
 import {
   callCrosslinkTool,
   getCrosslinkToolDefinitions,
@@ -38,6 +45,11 @@ export async function startMcpServer(workspaceRoot: string): Promise<void> {
     sessionId: null,
     store: crosslinkStore
   };
+  const channelStore = new ChannelStore();
+  const channelState: ChannelToolState = {
+    sessionId: null,
+    channelStore
+  };
 
   // Auto-register this session
   const agentProvider = (process.env.AGENT_HARNESS_PROVIDER ?? "unknown") as
@@ -51,6 +63,7 @@ export async function startMcpServer(workspaceRoot: string): Promise<void> {
     status: "active"
   });
   crosslinkState.sessionId = session.sessionId;
+  channelState.sessionId = session.sessionId;
 
   // Heartbeat every 30 seconds
   const heartbeatInterval = setInterval(() => {
@@ -72,7 +85,7 @@ export async function startMcpServer(workspaceRoot: string): Promise<void> {
   process.on("SIGINT", () => { cleanup(); process.exit(0); });
 
   const transport = new StdioJsonRpcTransport((message) =>
-    handleMessage(message, workspaceRoot, artifactStore, crosslinkState)
+    handleMessage(message, workspaceRoot, artifactStore, crosslinkState, channelState)
   );
 
   transport.start();
@@ -82,7 +95,8 @@ async function handleMessage(
   message: JsonRpcMessage,
   workspaceRoot: string,
   artifactStore: LocalArtifactStore,
-  crosslinkState: CrosslinkToolState
+  crosslinkState: CrosslinkToolState,
+  channelState: ChannelToolState
 ): Promise<JsonRpcMessage | null> {
   if (!message.method) {
     return null;
@@ -113,6 +127,7 @@ async function handleMessage(
         result: {
           tools: [
             ...getCrosslinkToolDefinitions(),
+            ...getChannelToolDefinitions(),
             {
               name: "harness_status",
               description: "Get Agent Harness workspace status and recent runs.",
@@ -322,7 +337,9 @@ async function handleMessage(
         const toolArgs = (message.params?.arguments as Record<string, unknown> | undefined) ?? {};
         const toolResult = isCrosslinkTool(toolName)
           ? await callCrosslinkTool(toolName, toolArgs, crosslinkState)
-          : await callTool(toolName, toolArgs, workspaceRoot, artifactStore);
+          : isChannelTool(toolName)
+            ? await callChannelTool(toolName, toolArgs, channelState)
+            : await callTool(toolName, toolArgs, workspaceRoot, artifactStore);
 
         return {
           jsonrpc: "2.0",

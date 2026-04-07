@@ -20,6 +20,7 @@ describe("runs index", () => {
           startedAt: "2026-03-30T00:00:00.000Z",
           updatedAt: "2026-03-30T00:01:00.000Z",
           completedAt: "2026-03-30T00:01:00.000Z",
+          channelId: null,
           phaseLedgerPath: "/tmp/run-1/phase-ledger.json",
           artifactsRoot: "/tmp/run-1"
         }
@@ -33,6 +34,7 @@ describe("runs index", () => {
           startedAt: "2026-03-30T00:02:00.000Z",
           updatedAt: "2026-03-30T00:03:00.000Z",
           completedAt: "2026-03-30T00:03:00.000Z",
+          channelId: null,
           phaseLedgerPath: "/tmp/run-2/phase-ledger.json",
           artifactsRoot: "/tmp/run-2"
         }

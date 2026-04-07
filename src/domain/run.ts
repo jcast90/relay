@@ -47,6 +47,7 @@ export type RunEventType =
   | "TicketFailed"
   | "TicketRetried"
   | "AllTicketsComplete"
+  | "DecisionRecorded"
   | "PhaseStarted"
   | "PatchGenerated"
   | "ChecksPassed"
@@ -124,6 +125,7 @@ export interface RunIndexEntry {
   runId: string;
   featureRequest: string;
   state: RunState;
+  channelId: string | null;
   startedAt: string;
   updatedAt: string;
   completedAt: string | null;
@@ -138,6 +140,7 @@ export interface HarnessRun {
   startedAt: string;
   updatedAt: string;
   completedAt: string | null;
+  channelId: string | null;
   classification: ClassificationResult | null;
   plan: PhasePlan | null;
   ticketPlan: TicketPlan | null;

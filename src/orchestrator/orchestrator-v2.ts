@@ -41,6 +41,7 @@ export class OrchestratorV2 {
       startedAt: now,
       updatedAt: now,
       completedAt: null,
+      channelId: null,
       classification: null,
       plan: null,
       ticketPlan: null,
@@ -363,6 +364,7 @@ export class OrchestratorV2 {
         startedAt: run.startedAt,
         updatedAt: run.updatedAt,
         completedAt: run.completedAt,
+        channelId: run.channelId,
         phaseLedgerPath: run.phaseLedgerPath,
         artifactsRoot: this.artifactsDir
           ? `${this.artifactsDir}/${run.id}`

@@ -28,6 +28,8 @@ export const CrosslinkSessionSchema = z.object({
   pid: z.number(),
   repoPath: z.string(),
   description: z.string(),
+  displayName: z.string().optional(),
+  channelId: z.string().optional(),
   capabilities: z.array(CrosslinkCapabilitySchema),
   agentProvider: AgentProviderSchema,
   registeredAt: z.string(),
