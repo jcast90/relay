@@ -40,12 +40,16 @@ export class Orchestrator {
       startedAt: now,
       updatedAt: now,
       completedAt: null,
+      classification: null,
       plan: null,
+      ticketPlan: null,
       events: [],
       evidence: [],
       artifacts: [],
       phaseLedger: [],
       phaseLedgerPath: null,
+      ticketLedger: [],
+      ticketLedgerPath: null,
       runIndexPath: null
     };
 

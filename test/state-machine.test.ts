@@ -20,4 +20,18 @@ describe("state machine", () => {
       /Invalid transition/
     );
   });
+
+  it("supports classification and ticket execution path", () => {
+    expect(getNextState("CLASSIFYING", "ClassificationComplete")).toBe("DRAFT_PLAN");
+    expect(getNextState("PLAN_REVIEW", "PlanAwaitingApproval")).toBe("AWAITING_APPROVAL");
+    expect(getNextState("AWAITING_APPROVAL", "PlanApproved")).toBe("TICKETS_EXECUTING");
+    expect(getNextState("AWAITING_APPROVAL", "PlanRejected")).toBe("DRAFT_PLAN");
+    expect(getNextState("TICKETS_EXECUTING", "AllTicketsComplete")).toBe("TICKETS_COMPLETE");
+    expect(getNextState("TICKETS_EXECUTING", "TicketFailed")).toBe("FAILED");
+    expect(getNextState("TICKETS_COMPLETE", "ChecksPassed")).toBe("COMPLETE");
+  });
+
+  it("supports design doc path for architectural tier", () => {
+    expect(getNextState("DESIGN_DOC", "DesignDocGenerated")).toBe("AWAITING_APPROVAL");
+  });
 });

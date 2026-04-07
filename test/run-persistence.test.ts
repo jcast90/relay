@@ -17,7 +17,9 @@ function buildTestRun(overrides?: Partial<HarnessRun>): HarnessRun {
     startedAt: now,
     updatedAt: now,
     completedAt: null,
+    classification: null,
     plan: null,
+    ticketPlan: null,
     events: [
       {
         type: "TaskSubmitted",
@@ -30,6 +32,8 @@ function buildTestRun(overrides?: Partial<HarnessRun>): HarnessRun {
     artifacts: [],
     phaseLedger: [],
     phaseLedgerPath: null,
+    ticketLedger: [],
+    ticketLedgerPath: null,
     runIndexPath: null,
     ...overrides
   };

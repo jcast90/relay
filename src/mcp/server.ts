@@ -8,6 +8,7 @@ import {
   type PrStage
 } from "../domain/pr-lifecycle.js";
 import { LocalArtifactStore } from "../execution/artifact-store.js";
+import { submitApproval } from "../orchestrator/approval-gate.js";
 import { getHarnessWorkspacePaths, readWorkspaceSummary } from "../cli/workspace.js";
 import { CrosslinkStore } from "../crosslink/store.js";
 import {
@@ -179,6 +180,80 @@ async function handleMessage(
                   path: {
                     type: "string"
                   }
+                }
+              }
+            },
+            {
+              name: "harness_get_classification",
+              description: "Get the classification result (complexity tier) for a run.",
+              inputSchema: {
+                type: "object",
+                additionalProperties: false,
+                required: ["runId"],
+                properties: {
+                  runId: { type: "string" }
+                }
+              }
+            },
+            {
+              name: "harness_list_tickets",
+              description: "List all tickets and their status for a run.",
+              inputSchema: {
+                type: "object",
+                additionalProperties: false,
+                required: ["runId"],
+                properties: {
+                  runId: { type: "string" }
+                }
+              }
+            },
+            {
+              name: "harness_get_ticket",
+              description: "Get detailed status of a specific ticket in a run.",
+              inputSchema: {
+                type: "object",
+                additionalProperties: false,
+                required: ["runId", "ticketId"],
+                properties: {
+                  runId: { type: "string" },
+                  ticketId: { type: "string" }
+                }
+              }
+            },
+            {
+              name: "harness_ticket_status",
+              description: "Get a summary of ticket execution progress (counts by status).",
+              inputSchema: {
+                type: "object",
+                additionalProperties: false,
+                required: ["runId"],
+                properties: {
+                  runId: { type: "string" }
+                }
+              }
+            },
+            {
+              name: "harness_approve_plan",
+              description: "Approve the pending plan for a run, unblocking ticket execution.",
+              inputSchema: {
+                type: "object",
+                additionalProperties: false,
+                required: ["runId"],
+                properties: {
+                  runId: { type: "string" }
+                }
+              }
+            },
+            {
+              name: "harness_reject_plan",
+              description: "Reject the pending plan for a run with optional feedback. Triggers re-planning.",
+              inputSchema: {
+                type: "object",
+                additionalProperties: false,
+                required: ["runId"],
+                properties: {
+                  runId: { type: "string" },
+                  feedback: { type: "string" }
                 }
               }
             },
@@ -356,6 +431,81 @@ async function callTool(
       }
 
       return JSON.parse(await readFile(path, "utf8"));
+    }
+    case "harness_get_classification": {
+      const runId = String(args.runId ?? "");
+      const snapshot = await artifactStore.readRunSnapshot(runId);
+
+      if (!snapshot) {
+        throw new Error(`Run not found: ${runId}`);
+      }
+
+      return {
+        runId,
+        classification: snapshot.classification ?? null
+      };
+    }
+    case "harness_list_tickets": {
+      const runId = String(args.runId ?? "");
+      const tickets = await artifactStore.readTicketLedger(runId);
+
+      return {
+        runId,
+        tickets: tickets ?? [],
+        count: tickets?.length ?? 0
+      };
+    }
+    case "harness_get_ticket": {
+      const runId = String(args.runId ?? "");
+      const ticketId = String(args.ticketId ?? "");
+      const tickets = await artifactStore.readTicketLedger(runId);
+      const ticket = tickets?.find((t) => t.ticketId === ticketId);
+
+      if (!ticket) {
+        throw new Error(`Ticket not found: ${ticketId} in run ${runId}`);
+      }
+
+      return ticket;
+    }
+    case "harness_ticket_status": {
+      const runId = String(args.runId ?? "");
+      const tickets = await artifactStore.readTicketLedger(runId);
+
+      if (!tickets || tickets.length === 0) {
+        return { runId, total: 0, byStatus: {} };
+      }
+
+      const byStatus: Record<string, number> = {};
+
+      for (const ticket of tickets) {
+        byStatus[ticket.status] = (byStatus[ticket.status] ?? 0) + 1;
+      }
+
+      return {
+        runId,
+        total: tickets.length,
+        byStatus
+      };
+    }
+    case "harness_approve_plan": {
+      const runId = String(args.runId ?? "");
+      const path = await submitApproval({
+        runId,
+        decision: "approved",
+        artifactStore
+      });
+      return { runId, decision: "approved", path };
+    }
+    case "harness_reject_plan": {
+      const runId = String(args.runId ?? "");
+      const feedback = args.feedback ? String(args.feedback) : undefined;
+      const path = await submitApproval({
+        runId,
+        decision: "rejected",
+        feedback,
+        artifactStore
+      });
+      return { runId, decision: "rejected", feedback, path };
     }
     case "harness_pr_status": {
       const runId = String(args.runId ?? "");

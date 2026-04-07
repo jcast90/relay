@@ -2,13 +2,17 @@ import { z } from "zod";
 
 import type { PhasePlan } from "./phase-plan.js";
 import type { AgentSpecialty } from "./specialty.js";
+import type { TicketPlan } from "./ticket.js";
 
 export type AgentRole = "planner" | "implementer" | "reviewer" | "tester";
 
 export type AgentProvider = "codex" | "claude" | "harness";
 
 export type WorkKind =
+  | "classify_request"
   | "draft_plan"
+  | "generate_design_doc"
+  | "decompose_tickets"
   | "classify_failure"
   | "implement_phase"
   | "review_changes"
@@ -60,6 +64,7 @@ export interface AgentResult {
   blockers: string[];
   failureClassification?: FailureClassification;
   phasePlan?: PhasePlan;
+  ticketPlan?: TicketPlan;
   rawResponse?: string;
 }
 
@@ -73,7 +78,13 @@ export interface Agent {
 
 export function roleForWork(kind: WorkKind): AgentRole {
   switch (kind) {
+    case "classify_request":
+      return "planner";
     case "draft_plan":
+      return "planner";
+    case "generate_design_doc":
+      return "planner";
+    case "decompose_tickets":
       return "planner";
     case "classify_failure":
       return "implementer";

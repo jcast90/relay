@@ -3,7 +3,9 @@ import { join } from "node:path";
 
 import type { CommandResult } from "../agents/command-invoker.js";
 import type { FailureClassification } from "../domain/agent.js";
+import type { ClassificationResult } from "../domain/classification.js";
 import type { PrLifecycle } from "../domain/pr-lifecycle.js";
+import type { TicketLedgerEntry } from "../domain/ticket.js";
 import type {
   ArtifactRecord,
   EvidenceRecord,
@@ -48,10 +50,13 @@ export interface RunSnapshot {
   startedAt: string;
   updatedAt: string;
   completedAt: string | null;
+  classification: HarnessRun["classification"];
   plan: HarnessRun["plan"];
+  ticketPlan: HarnessRun["ticketPlan"];
   evidence: EvidenceRecord[];
   artifacts: ArtifactRecord[];
   phaseLedger: PhaseLedgerEntry[];
+  ticketLedger: HarnessRun["ticketLedger"];
   eventCount: number;
 }
 
@@ -78,6 +83,12 @@ export interface ArtifactStore {
   readEventLog(runId: string): Promise<RunEvent[]>;
   savePrLifecycle(lifecycle: PrLifecycle): Promise<string>;
   readPrLifecycle(runId: string): Promise<PrLifecycle | null>;
+  saveTicketLedger(input: { runId: string; ticketLedger: TicketLedgerEntry[] }): Promise<string>;
+  readTicketLedger(runId: string): Promise<TicketLedgerEntry[] | null>;
+  saveClassification(input: { runId: string; classification: ClassificationResult }): Promise<string>;
+  saveDesignDoc(input: { runId: string; content: string }): Promise<string>;
+  saveApprovalRecord(input: { runId: string; decision: "approved" | "rejected"; feedback?: string }): Promise<string>;
+  readApprovalRecord(runId: string): Promise<{ decision: "approved" | "rejected"; feedback?: string; timestamp: string } | null>;
 }
 
 export class LocalArtifactStore implements ArtifactStore {
@@ -254,10 +265,13 @@ export class LocalArtifactStore implements ArtifactStore {
       startedAt: run.startedAt,
       updatedAt: run.updatedAt,
       completedAt: run.completedAt,
+      classification: run.classification,
       plan: run.plan,
+      ticketPlan: run.ticketPlan,
       evidence: run.evidence,
       artifacts: run.artifacts,
       phaseLedger: run.phaseLedger,
+      ticketLedger: run.ticketLedger,
       eventCount: run.events.length
     };
 
@@ -312,6 +326,126 @@ export class LocalArtifactStore implements ArtifactStore {
 
     try {
       return JSON.parse(await readFile(path, "utf8")) as PrLifecycle;
+    } catch {
+      return null;
+    }
+  }
+
+  async saveTicketLedger(input: {
+    runId: string;
+    ticketLedger: TicketLedgerEntry[];
+  }): Promise<string> {
+    const runDir = join(this.rootDir, input.runId);
+    await mkdir(runDir, { recursive: true });
+
+    const path = join(runDir, "ticket-ledger.json");
+
+    await writeFile(
+      path,
+      JSON.stringify(
+        {
+          runId: input.runId,
+          updatedAt: new Date().toISOString(),
+          tickets: input.ticketLedger
+        },
+        null,
+        2
+      )
+    );
+
+    return path;
+  }
+
+  async readTicketLedger(runId: string): Promise<TicketLedgerEntry[] | null> {
+    const path = join(this.rootDir, runId, "ticket-ledger.json");
+
+    try {
+      const raw = JSON.parse(await readFile(path, "utf8")) as {
+        tickets?: TicketLedgerEntry[];
+      };
+      return raw.tickets ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async saveClassification(input: {
+    runId: string;
+    classification: ClassificationResult;
+  }): Promise<string> {
+    const runDir = join(this.rootDir, input.runId);
+    await mkdir(runDir, { recursive: true });
+
+    const path = join(runDir, "classification.json");
+
+    await writeFile(
+      path,
+      JSON.stringify(
+        {
+          runId: input.runId,
+          ...input.classification,
+          classifiedAt: new Date().toISOString()
+        },
+        null,
+        2
+      )
+    );
+
+    return path;
+  }
+
+  async saveDesignDoc(input: {
+    runId: string;
+    content: string;
+  }): Promise<string> {
+    const runDir = join(this.rootDir, input.runId);
+    await mkdir(runDir, { recursive: true });
+
+    const path = join(runDir, "design-doc.md");
+    await writeFile(path, input.content);
+    return path;
+  }
+
+  async saveApprovalRecord(input: {
+    runId: string;
+    decision: "approved" | "rejected";
+    feedback?: string;
+  }): Promise<string> {
+    const runDir = join(this.rootDir, input.runId);
+    await mkdir(runDir, { recursive: true });
+
+    const path = join(runDir, "approval.json");
+
+    await writeFile(
+      path,
+      JSON.stringify(
+        {
+          runId: input.runId,
+          decision: input.decision,
+          feedback: input.feedback ?? null,
+          timestamp: new Date().toISOString()
+        },
+        null,
+        2
+      )
+    );
+
+    return path;
+  }
+
+  async readApprovalRecord(runId: string): Promise<{
+    decision: "approved" | "rejected";
+    feedback?: string;
+    timestamp: string;
+  } | null> {
+    const path = join(this.rootDir, runId, "approval.json");
+
+    try {
+      return JSON.parse(await readFile(path, "utf8")) as {
+        decision: "approved" | "rejected";
+        feedback?: string;
+        timestamp: string;
+      };
     } catch {
       return null;
     }

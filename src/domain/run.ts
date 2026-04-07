@@ -3,15 +3,22 @@ import type {
   FailureCategory,
   WorkKind
 } from "./agent.js";
+import type { ClassificationResult } from "./classification.js";
 import type { PhasePlan } from "./phase-plan.js";
+import type { TicketLedgerEntry, TicketPlan } from "./ticket.js";
 
 export type RunState =
+  | "CLASSIFYING"
   | "DRAFT_PLAN"
   | "PLAN_REVIEW"
+  | "AWAITING_APPROVAL"
+  | "DESIGN_DOC"
   | "PHASE_READY"
   | "PHASE_EXECUTE"
   | "TEST_FIX_LOOP"
   | "REVIEW_FIX_LOOP"
+  | "TICKETS_EXECUTING"
+  | "TICKETS_COMPLETE"
   | "COMPLETE"
   | "BLOCKED"
   | "FAILED";
@@ -27,8 +34,19 @@ export type RunEventType =
   | "CommandRejected"
   | "ArtifactCaptured"
   | "FailureClassified"
+  | "ClassificationComplete"
   | "PlanGenerated"
   | "PlanAccepted"
+  | "PlanAwaitingApproval"
+  | "PlanApproved"
+  | "PlanRejected"
+  | "DesignDocGenerated"
+  | "TicketsCreated"
+  | "TicketStarted"
+  | "TicketCompleted"
+  | "TicketFailed"
+  | "TicketRetried"
+  | "AllTicketsComplete"
   | "PhaseStarted"
   | "PatchGenerated"
   | "ChecksPassed"
@@ -120,11 +138,15 @@ export interface HarnessRun {
   startedAt: string;
   updatedAt: string;
   completedAt: string | null;
+  classification: ClassificationResult | null;
   plan: PhasePlan | null;
+  ticketPlan: TicketPlan | null;
   events: RunEvent[];
   evidence: EvidenceRecord[];
   artifacts: ArtifactRecord[];
   phaseLedger: PhaseLedgerEntry[];
   phaseLedgerPath: string | null;
+  ticketLedger: TicketLedgerEntry[];
+  ticketLedgerPath: string | null;
   runIndexPath: string | null;
 }

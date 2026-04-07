@@ -26,6 +26,7 @@ import { LocalArtifactStore } from "./execution/artifact-store.js";
 import { startMcpServer } from "./mcp/server.js";
 import { VerificationRunner } from "./execution/verification-runner.js";
 import { Orchestrator } from "./orchestrator/orchestrator.js";
+import { OrchestratorV2 } from "./orchestrator/orchestrator-v2.js";
 import { ScriptedInvoker } from "./simulation/scripted-invoker.js";
 import { handleCrosslinkCommand } from "./crosslink/cli.js";
 
@@ -116,6 +117,7 @@ export async function main(): Promise<void> {
     return;
   }
 
+  const sequential = args.includes("--sequential");
   const registry = new AgentRegistry();
   const agents = createLiveAgents({
     cwd,
@@ -130,22 +132,37 @@ export async function main(): Promise<void> {
     new NodeCommandInvoker(),
     artifactStore
   );
-  const orchestrator = new Orchestrator(
-    registry,
-    cwd,
-    verificationRunner,
-    artifactStore,
-    workspace.paths.artifactsDir
-  );
-  const run = await orchestrator.run(
-    "Build a basic harness scaffold that can select agents by role and specialty."
-  );
+
+  const featureRequest = "Build a basic harness scaffold that can select agents by role and specialty.";
+  let run: Awaited<ReturnType<Orchestrator["run"]>>;
+
+  if (sequential) {
+    const orchestrator = new Orchestrator(
+      registry,
+      cwd,
+      verificationRunner,
+      artifactStore,
+      workspace.paths.artifactsDir
+    );
+    run = await orchestrator.run(featureRequest);
+  } else {
+    const orchestratorV2 = new OrchestratorV2(
+      registry,
+      cwd,
+      verificationRunner,
+      artifactStore,
+      workspace.paths.artifactsDir
+    );
+    run = await orchestratorV2.run(featureRequest);
+  }
   const recentRuns = await artifactStore.readRunsIndex();
 
   console.log(`Run id: ${run.id}`);
   console.log(`Run state: ${run.state}`);
+  console.log(`Classification: ${run.classification?.tier ?? "none"}`);
   console.log("");
   console.log(`Execution mode: ${live ? "live CLI agents" : "scripted simulation"}`);
+  console.log(`Orchestrator: ${sequential ? "sequential (v1)" : "ticket-based (v2)"}`);
   console.log("");
   console.log("Planned phases:");
 
@@ -174,9 +191,20 @@ export async function main(): Promise<void> {
     );
   }
 
+  if (run.ticketLedger.length > 0) {
+    console.log("");
+    console.log("Ticket ledger:");
+
+    for (const entry of run.ticketLedger) {
+      console.log(
+        `- ${entry.ticketId} status=${entry.status} verification=${entry.verification} deps=[${entry.dependsOn.join(",")}]`
+      );
+    }
+  }
+
   console.log("");
   console.log(`Phase ledger path: ${run.phaseLedgerPath ?? "(not written)"}`);
-
+  console.log(`Ticket ledger path: ${run.ticketLedgerPath ?? "(not written)"}`);
   console.log(`Runs index path: ${run.runIndexPath ?? "(not written)"}`);
 
   console.log("");

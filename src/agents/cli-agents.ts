@@ -219,8 +219,11 @@ function buildPrompt(agentName: string, request: WorkRequest): string {
       ? request.priorEvidence.map((item) => `- ${item}`)
       : ["- None yet."]),
     "",
-    "If this is planning work, include a phasePlan object matching the harness phase-plan schema.",
-    "If this is not planning work, omit phasePlan."
+    "If this is planning work (kind=draft_plan), include a phasePlan object matching the harness phase-plan schema.",
+    "If this is classification work (kind=classify_request), return a classification object with: tier (trivial|bugfix|feature_small|feature_large|architectural|multi_repo), rationale, suggestedSpecialties, estimatedTicketCount, needsDesignDoc, needsUserApproval, crosslinkRepos.",
+    "If this is ticket decomposition work (kind=decompose_tickets), return a ticketPlan object with parallelizable tickets and dependsOn edges.",
+    "If this is design doc work (kind=generate_design_doc), provide the design document in your summary.",
+    "Otherwise, omit phasePlan, classification, and ticketPlan."
   ];
 
   return lines.join("\n");

@@ -41,6 +41,94 @@ function buildResponse(prompt: string, cwd: string) {
   const title = readField(prompt, "Title") ?? "Untitled work";
   const workKind = readField(prompt, "Work kind");
 
+  if (workKind === "classify_request") {
+    return {
+      summary: `Classified "${title}" as a feature_small request.`,
+      evidence: [
+        "Request appears to be a moderate-scope feature addition."
+      ],
+      proposedCommands: [],
+      blockers: [],
+      classification: {
+        tier: "feature_small",
+        rationale: "Moderate scope feature request requiring a few implementation tickets.",
+        suggestedSpecialties: ["general"],
+        estimatedTicketCount: 3,
+        needsDesignDoc: false,
+        needsUserApproval: false,
+        crosslinkRepos: []
+      }
+    };
+  }
+
+  if (workKind === "generate_design_doc") {
+    return {
+      summary: `Generated design document for "${title}".`,
+      evidence: [
+        "Design document covers architecture, trade-offs, and implementation approach."
+      ],
+      proposedCommands: [],
+      blockers: []
+    };
+  }
+
+  if (workKind === "decompose_tickets") {
+    return {
+      summary: `Decomposed "${title}" into parallelizable tickets.`,
+      evidence: [
+        "Tickets were derived from the phase plan.",
+        "Dependencies between tickets were identified."
+      ],
+      proposedCommands: [],
+      blockers: [],
+      ticketPlan: {
+        version: 1,
+        task: {
+          title,
+          featureRequest: title,
+          repoRoot: cwd
+        },
+        classification: {
+          tier: "feature_small",
+          rationale: "Scripted classification for simulation.",
+          suggestedSpecialties: ["general"],
+          estimatedTicketCount: 2,
+          needsDesignDoc: false,
+          needsUserApproval: false,
+          crosslinkRepos: []
+        },
+        tickets: [
+          {
+            id: "ticket_01",
+            title: "Implement core logic",
+            objective: "Implement the primary feature logic.",
+            specialty: "general",
+            acceptanceCriteria: ["Core logic implemented and type-safe."],
+            allowedCommands: ["pnpm typecheck"],
+            verificationCommands: ["pnpm typecheck"],
+            docsToUpdate: [],
+            dependsOn: [],
+            retryPolicy: { maxAgentAttempts: 2, maxTestFixLoops: 2 }
+          },
+          {
+            id: "ticket_02",
+            title: "Add tests and verification",
+            objective: "Add tests for the implemented logic.",
+            specialty: "testing",
+            acceptanceCriteria: ["Tests pass for new logic."],
+            allowedCommands: ["pnpm typecheck", "pnpm test"],
+            verificationCommands: ["pnpm typecheck", "pnpm test"],
+            docsToUpdate: ["README.md"],
+            dependsOn: ["ticket_01"],
+            retryPolicy: { maxAgentAttempts: 2, maxTestFixLoops: 2 }
+          }
+        ],
+        finalVerification: { commands: ["pnpm typecheck", "pnpm test"] },
+        docsToUpdate: ["README.md"]
+      }
+    };
+  }
+
   if (workKind === "draft_plan") {
     return {
       summary: `Created a structured phase plan for "${title}".`,
