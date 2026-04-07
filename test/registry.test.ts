@@ -52,7 +52,7 @@ describe("agent registry", () => {
       priorEvidence: []
     });
 
-    expect(uiAgent.id).toBe("implementer-ui-codex");
-    expect(apiAgent.id).toBe("implementer-api-codex");
+    expect(uiAgent.id).toBe("pixel");
+    expect(apiAgent.id).toBe("forge");
   });
 });

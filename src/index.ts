@@ -145,11 +145,13 @@ export async function main(): Promise<void> {
   }
 
   const sequential = args.includes("--sequential");
-  await registerAgentNames();
+  const provider = (process.env.HARNESS_PROVIDER ?? "claude") as "claude" | "codex";
+  await registerAgentNames(provider);
   const registry = new AgentRegistry();
   const agents = createLiveAgents({
     cwd,
-    invoker: live ? undefined : new ScriptedInvoker(cwd)
+    invoker: live ? undefined : new ScriptedInvoker(cwd),
+    provider
   });
 
   for (const agent of agents) {

@@ -1,88 +1,81 @@
-import type { Agent } from "../domain/agent.js";
+import type { Agent, AgentProvider, AgentRole } from "../domain/agent.js";
+import type { AgentSpecialty } from "../domain/specialty.js";
 import { setAgentName } from "../domain/agent-names.js";
 
 import { ClaudeCliAgent, CodexCliAgent } from "./cli-agents.js";
 import { NodeCommandInvoker, type CommandInvoker } from "./command-invoker.js";
 
-interface AgentFactoryOptions {
-  cwd: string;
-  invoker?: CommandInvoker;
-  codexModel?: string;
-  claudeModel?: string;
-}
-
-interface AgentSpec {
+export interface AgentSpec {
   id: string;
   displayName: string;
-  provider: "claude" | "codex";
-  role: "planner" | "implementer" | "reviewer" | "tester";
-  specialties: Array<"general" | "ui" | "business_logic" | "api_crud" | "devops" | "testing">;
-  model?: string;
+  role: AgentRole;
+  specialties: AgentSpecialty[];
 }
 
 const AGENT_SPECS: AgentSpec[] = [
   {
-    id: "planner-claude",
+    id: "atlas",
     displayName: "Atlas (Planner)",
-    provider: "claude",
     role: "planner",
     specialties: ["general"]
   },
   {
-    id: "implementer-ui-codex",
+    id: "pixel",
     displayName: "Pixel (UI Engineer)",
-    provider: "codex",
     role: "implementer",
     specialties: ["ui", "general"]
   },
   {
-    id: "implementer-api-codex",
+    id: "forge",
     displayName: "Forge (Backend Engineer)",
-    provider: "codex",
     role: "implementer",
     specialties: ["api_crud", "business_logic", "general"]
   },
   {
-    id: "reviewer-claude",
+    id: "lens",
     displayName: "Lens (Code Reviewer)",
-    provider: "claude",
     role: "reviewer",
     specialties: ["general", "ui", "business_logic", "api_crud"]
   },
   {
-    id: "tester-codex",
+    id: "probe",
     displayName: "Probe (Test Engineer)",
-    provider: "codex",
     role: "tester",
     specialties: ["general", "ui", "business_logic", "api_crud"]
   }
 ];
 
+interface AgentFactoryOptions {
+  cwd: string;
+  invoker?: CommandInvoker;
+  provider?: AgentProvider;
+  model?: string;
+}
+
 export function createLiveAgents(options: AgentFactoryOptions): Agent[] {
   const invoker = options.invoker ?? new NodeCommandInvoker();
+  const provider = options.provider ?? "claude";
+  const AgentClass = provider === "codex" ? CodexCliAgent : ClaudeCliAgent;
 
-  return AGENT_SPECS.map((spec) => {
-    const AgentClass = spec.provider === "claude" ? ClaudeCliAgent : CodexCliAgent;
-    const model = spec.provider === "claude" ? options.claudeModel : options.codexModel;
-
-    return new AgentClass({
+  return AGENT_SPECS.map((spec) =>
+    new AgentClass({
       id: spec.id,
       name: spec.displayName,
-      provider: spec.provider,
+      provider,
       capability: {
         role: spec.role,
         specialties: spec.specialties
       },
       cwd: options.cwd,
-      model,
+      model: options.model,
       invoker
-    });
-  });
+    })
+  );
 }
 
-export async function registerAgentNames(): Promise<void> {
+export async function registerAgentNames(provider: AgentProvider = "claude"): Promise<void> {
   for (const spec of AGENT_SPECS) {
-    await setAgentName(spec.id, spec.displayName, spec.provider, spec.role);
+    await setAgentName(spec.id, spec.displayName, provider, spec.role);
   }
 }
 
