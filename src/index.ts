@@ -31,6 +31,7 @@ import { OrchestratorV2 } from "./orchestrator/orchestrator-v2.js";
 import { ScriptedInvoker } from "./simulation/scripted-invoker.js";
 import { ChannelStore } from "./channels/channel-store.js";
 import { handleCrosslinkCommand } from "./crosslink/cli.js";
+import { startDashboard } from "./tui/dashboard.js";
 
 export async function main(): Promise<void> {
   const cwd = process.cwd();
@@ -78,6 +79,11 @@ export async function main(): Promise<void> {
       workspace,
       artifactStore
     });
+    return;
+  }
+
+  if (command === "dashboard") {
+    await startDashboard();
     return;
   }
 
