@@ -18,11 +18,16 @@ import {
   type HarnessWorkspacePaths,
   readWorkspaceSummary
 } from "./cli/workspace.js";
+import {
+  getGlobalRoot,
+  listRegisteredWorkspaces
+} from "./cli/workspace-registry.js";
 import { LocalArtifactStore } from "./execution/artifact-store.js";
 import { startMcpServer } from "./mcp/server.js";
 import { VerificationRunner } from "./execution/verification-runner.js";
 import { Orchestrator } from "./orchestrator/orchestrator.js";
 import { ScriptedInvoker } from "./simulation/scripted-invoker.js";
+import { handleCrosslinkCommand } from "./crosslink/cli.js";
 
 export async function main(): Promise<void> {
   const cwd = process.cwd();
@@ -34,7 +39,7 @@ export async function main(): Promise<void> {
   const artifactStore = new LocalArtifactStore(workspace.paths.artifactsDir);
 
   if (command === "up") {
-    printUpStatus(workspace);
+    await printUpStatus(workspace);
     return;
   }
 
@@ -45,6 +50,11 @@ export async function main(): Promise<void> {
 
   if (command === "list-runs") {
     await printRunsIndex(artifactStore, cwd);
+    return;
+  }
+
+  if (command === "list-workspaces") {
+    await printWorkspaces();
     return;
   }
 
@@ -65,6 +75,11 @@ export async function main(): Promise<void> {
       workspace,
       artifactStore
     });
+    return;
+  }
+
+  if (command === "crosslink") {
+    await handleCrosslinkCommand(args[0] ?? "status", args.slice(1));
     return;
   }
 
@@ -119,7 +134,8 @@ export async function main(): Promise<void> {
     registry,
     cwd,
     verificationRunner,
-    artifactStore
+    artifactStore,
+    workspace.paths.artifactsDir
   );
   const run = await orchestrator.run(
     "Build a basic harness scaffold that can select agents by role and specialty."
@@ -215,6 +231,29 @@ export async function main(): Promise<void> {
   }
 }
 
+async function printWorkspaces(): Promise<void> {
+  const globalRoot = getGlobalRoot();
+  const workspaces = await listRegisteredWorkspaces();
+
+  console.log(`Global root: ${globalRoot}`);
+  console.log("");
+
+  if (workspaces.length === 0) {
+    console.log("No workspaces registered. Run `agent-harness up` in a repo to register it.");
+    return;
+  }
+
+  console.log(`Registered workspaces (${workspaces.length}):`);
+
+  for (const ws of workspaces) {
+    console.log(`  ${ws.workspaceId}`);
+    console.log(`    Repo: ${ws.repoPath}`);
+    console.log(`    Registered: ${ws.registeredAt}`);
+    console.log(`    Last accessed: ${ws.lastAccessedAt}`);
+    console.log("");
+  }
+}
+
 async function printRunsIndex(
   artifactStore: LocalArtifactStore,
   cwd: string
@@ -246,7 +285,8 @@ async function printStatus(
   const summary = await readWorkspaceSummary(artifactStore, cwd);
 
   console.log(`Workspace: ${cwd}`);
-  console.log(`Harness home: ${summary.paths.rootDir}`);
+  console.log(`Global root: ${getGlobalRoot()}`);
+  console.log(`Workspace dir: ${summary.paths.rootDir}`);
   console.log(`Artifacts dir: ${summary.paths.artifactsDir}`);
   console.log(`Runs index path: ${summary.paths.runsIndexPath}`);
   console.log("");
@@ -345,14 +385,14 @@ async function printDoctor(input: {
   };
   artifactStore: LocalArtifactStore;
 }): Promise<void> {
-  printUpStatus(input.workspace);
+  await printUpStatus(input.workspace);
   console.log("");
   await printStatus(input.artifactStore, input.cwd);
   console.log("");
   await inspectMcp(input);
 }
 
-function printUpStatus(input: {
+async function printUpStatus(input: {
   paths: {
     rootDir: string;
     artifactsDir: string;
@@ -363,14 +403,27 @@ function printUpStatus(input: {
     version: string;
     updatedAt: string;
   };
-}): void {
+}): Promise<void> {
+  const globalRoot = getGlobalRoot();
+  const workspaces = await listRegisteredWorkspaces();
+
   console.log("Agent Harness is ready.");
-  console.log(`Harness home: ${input.paths.rootDir}`);
+  console.log(`Global root: ${globalRoot}`);
+  console.log(`Workspace dir: ${input.paths.rootDir}`);
   console.log(`Artifacts dir: ${input.paths.artifactsDir}`);
   console.log(`Service status path: ${input.paths.serviceStatusPath}`);
   console.log(`Runs index path: ${input.paths.runsIndexPath}`);
   console.log(`Version: ${input.status.version}`);
   console.log(`Updated: ${input.status.updatedAt}`);
+
+  if (workspaces.length > 1) {
+    console.log("");
+    console.log(`Registered workspaces (${workspaces.length}):`);
+
+    for (const ws of workspaces) {
+      console.log(`  ${ws.workspaceId} -> ${ws.repoPath}`);
+    }
+  }
 }
 
 async function readPackageVersion(): Promise<string> {

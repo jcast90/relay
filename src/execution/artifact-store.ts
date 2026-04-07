@@ -1,11 +1,15 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { CommandResult } from "../agents/command-invoker.js";
 import type { FailureClassification } from "../domain/agent.js";
+import type { PrLifecycle } from "../domain/pr-lifecycle.js";
 import type {
   ArtifactRecord,
+  EvidenceRecord,
+  HarnessRun,
   PhaseLedgerEntry,
+  RunEvent,
   RunIndexEntry
 } from "../domain/run.js";
 
@@ -37,6 +41,20 @@ export interface FailureClassificationArtifactContent {
   capturedAt: string;
 }
 
+export interface RunSnapshot {
+  runId: string;
+  featureRequest: string;
+  state: HarnessRun["state"];
+  startedAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  plan: HarnessRun["plan"];
+  evidence: EvidenceRecord[];
+  artifacts: ArtifactRecord[];
+  phaseLedger: PhaseLedgerEntry[];
+  eventCount: number;
+}
+
 export interface ArtifactStore {
   saveCommandResult(input: SaveCommandArtifactInput): Promise<ArtifactRecord>;
   saveFailureClassification(input: {
@@ -54,6 +72,12 @@ export interface ArtifactStore {
     entry: RunIndexEntry;
   }): Promise<string>;
   readRunsIndex(): Promise<RunIndexEntry[]>;
+  saveRunSnapshot(run: HarnessRun): Promise<string>;
+  readRunSnapshot(runId: string): Promise<RunSnapshot | null>;
+  appendEvent(runId: string, event: RunEvent): Promise<void>;
+  readEventLog(runId: string): Promise<RunEvent[]>;
+  savePrLifecycle(lifecycle: PrLifecycle): Promise<string>;
+  readPrLifecycle(runId: string): Promise<PrLifecycle | null>;
 }
 
 export class LocalArtifactStore implements ArtifactStore {
@@ -215,6 +239,81 @@ export class LocalArtifactStore implements ArtifactStore {
       return raw.runs ?? [];
     } catch {
       return [];
+    }
+  }
+
+  async saveRunSnapshot(run: HarnessRun): Promise<string> {
+    const runDir = join(this.rootDir, run.id);
+    await mkdir(runDir, { recursive: true });
+
+    const path = join(runDir, "run.json");
+    const snapshot: RunSnapshot = {
+      runId: run.id,
+      featureRequest: run.featureRequest,
+      state: run.state,
+      startedAt: run.startedAt,
+      updatedAt: run.updatedAt,
+      completedAt: run.completedAt,
+      plan: run.plan,
+      evidence: run.evidence,
+      artifacts: run.artifacts,
+      phaseLedger: run.phaseLedger,
+      eventCount: run.events.length
+    };
+
+    await writeFile(path, JSON.stringify(snapshot, null, 2));
+    return path;
+  }
+
+  async readRunSnapshot(runId: string): Promise<RunSnapshot | null> {
+    const path = join(this.rootDir, runId, "run.json");
+
+    try {
+      return JSON.parse(await readFile(path, "utf8")) as RunSnapshot;
+    } catch {
+      return null;
+    }
+  }
+
+  async appendEvent(runId: string, event: RunEvent): Promise<void> {
+    const runDir = join(this.rootDir, runId);
+    await mkdir(runDir, { recursive: true });
+
+    const path = join(runDir, "events.jsonl");
+    await appendFile(path, JSON.stringify(event) + "\n");
+  }
+
+  async readEventLog(runId: string): Promise<RunEvent[]> {
+    const path = join(this.rootDir, runId, "events.jsonl");
+
+    try {
+      const raw = await readFile(path, "utf8");
+      return raw
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as RunEvent);
+    } catch {
+      return [];
+    }
+  }
+
+  async savePrLifecycle(lifecycle: PrLifecycle): Promise<string> {
+    const runDir = join(this.rootDir, lifecycle.runId);
+    await mkdir(runDir, { recursive: true });
+
+    const path = join(runDir, "pr-lifecycle.json");
+    await writeFile(path, JSON.stringify(lifecycle, null, 2));
+    return path;
+  }
+
+  async readPrLifecycle(runId: string): Promise<PrLifecycle | null> {
+    const path = join(this.rootDir, runId, "pr-lifecycle.json");
+
+    try {
+      return JSON.parse(await readFile(path, "utf8")) as PrLifecycle;
+    } catch {
+      return null;
     }
   }
 }

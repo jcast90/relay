@@ -3,6 +3,11 @@ import { join } from "node:path";
 
 import type { RunIndexEntry } from "../domain/run.js";
 import type { LocalArtifactStore } from "../execution/artifact-store.js";
+import {
+  buildWorkspaceId,
+  getWorkspaceDir,
+  registerWorkspace
+} from "./workspace-registry.js";
 
 export interface HarnessWorkspacePaths {
   rootDir: string;
@@ -14,6 +19,7 @@ export interface HarnessWorkspacePaths {
 export interface HarnessServiceStatus {
   state: "ready";
   workspaceRoot: string;
+  workspaceId: string;
   artifactsDir: string;
   createdAt: string;
   updatedAt: string;
@@ -27,6 +33,7 @@ export async function ensureHarnessWorkspace(
   paths: HarnessWorkspacePaths;
   status: HarnessServiceStatus;
 }> {
+  await registerWorkspace(cwd);
   const paths = getHarnessWorkspacePaths(cwd);
 
   await mkdir(paths.artifactsDir, {
@@ -38,6 +45,7 @@ export async function ensureHarnessWorkspace(
   const status: HarnessServiceStatus = {
     state: "ready",
     workspaceRoot: cwd,
+    workspaceId: buildWorkspaceId(cwd),
     artifactsDir: paths.artifactsDir,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
@@ -56,7 +64,8 @@ export async function ensureHarnessWorkspace(
 }
 
 export function getHarnessWorkspacePaths(cwd: string): HarnessWorkspacePaths {
-  const rootDir = join(cwd, ".agent-harness");
+  const workspaceId = buildWorkspaceId(cwd);
+  const rootDir = getWorkspaceDir(workspaceId);
 
   return {
     rootDir,

@@ -23,6 +23,10 @@ Each task can also carry a specialty such as `ui`, `business_logic`, or `api_cru
 - allowlisted verification command execution with captured command-result artifacts
 - scripted simulation mode so the harness can be exercised without consuming model calls
 - tiny `list-runs` CLI mode for inspecting recent persisted runs without starting a new one
+- centralized workspace at `~/.agent-harness/` — register once, use from any repo
+- full run persistence with snapshots (`run.json`) and incremental event logs (`events.jsonl`)
+- PR lifecycle tracking (branch → commits → PR → checks → review → merge)
+- cross-session collaboration via crosslink (discover, message, reply between agent sessions)
 
 ## Team quickstart
 
@@ -34,18 +38,24 @@ pnpm build
 pnpm link --global
 ```
 
-Initialize a repo once:
+Register a repo (run once per repo, stores config centrally at `~/.agent-harness/`):
 
 ```bash
 cd /path/to/your/repo
 agent-harness up
 ```
 
-Then use the wrapper that matches your normal workflow:
+Then use the wrapper that matches your normal workflow — from any registered repo:
 
 ```bash
 agent-harness claude
 agent-harness codex
+```
+
+List all registered workspaces:
+
+```bash
+agent-harness list-workspaces
 ```
 
 If you want the global command removed later:
@@ -76,8 +86,9 @@ The harness MCP server is local stdio only. It adds workspace status, run histor
 
 ## Common workflow
 
-- `agent-harness up`: initialize the local harness workspace in the current repo
+- `agent-harness up`: register the current repo in the centralized workspace (`~/.agent-harness/`)
 - `agent-harness status`: show workspace paths and recent runs
+- `agent-harness list-workspaces`: list all registered workspaces
 - `agent-harness doctor`: print workspace status plus native Claude/Codex MCP listings under the wrapper
 - `agent-harness inspect-mcp [claude|codex]`: show which MCP servers the wrapped CLI sees
 - `agent-harness list-runs`: inspect recent persisted runs without starting a new one
@@ -115,9 +126,35 @@ Helpful checks:
 - `agent-harness codex` adds the harness MCP alongside Codex's existing config
 - `agent-harness claude` adds a generated MCP config without using strict isolation, so existing Claude MCP sources can still load
 
+## Architecture
+
+All harness data lives under `~/.agent-harness/`:
+
+```
+~/.agent-harness/
+  workspace-registry.json          # maps repo paths to workspace IDs
+  workspaces/
+    <repo-name>-<hash>/            # per-repo workspace
+      artifacts/
+        runs-index.json
+        <runId>/
+          run.json                 # full run snapshot
+          events.jsonl             # incremental event log
+          phase-ledger.json
+          pr-lifecycle.json        # PR tracking (if active)
+          <artifactId>.json        # command results, classifications
+      service-status.json
+      claude.mcp.json
+  crosslink/                       # cross-session collaboration
+    sessions/
+    mailboxes/
+```
+
+No per-repo `.agent-harness/` directories are created — everything is centralized.
+
 ## Next likely steps
 
-1. Add persistent run, phase, and event storage.
-2. Persist runs, events, evidence, and artifacts.
-3. Let live planner output drive the real plan end-to-end.
-4. Add merge and PR lifecycle handling.
+1. Let live planner output drive the real plan end-to-end.
+2. Run resumption from persisted snapshots.
+3. PR lifecycle automation (auto-advance stages from git/GitHub events).
+4. Multi-repo orchestration via crosslink.

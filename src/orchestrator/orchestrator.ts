@@ -27,7 +27,8 @@ export class Orchestrator {
     private readonly registry: AgentRegistry,
     private readonly repoRoot: string,
     private readonly verificationRunner: VerificationRunner,
-    private readonly artifactStore: ArtifactStore
+    private readonly artifactStore: ArtifactStore,
+    private readonly artifactsDir?: string
   ) {}
 
   async run(featureRequest: string): Promise<HarnessRun> {
@@ -474,6 +475,7 @@ export class Orchestrator {
     };
 
     run.events.push(event);
+    this.artifactStore.appendEvent(run.id, event).catch(() => {});
   }
 
   private recordEvidence(run: HarnessRun, record: EvidenceRecord): void {
@@ -534,9 +536,12 @@ export class Orchestrator {
         updatedAt: run.updatedAt,
         completedAt: run.completedAt,
         phaseLedgerPath: run.phaseLedgerPath,
-        artifactsRoot: `${this.repoRoot}/.agent-harness/artifacts/${run.id}`
+        artifactsRoot: this.artifactsDir
+        ? `${this.artifactsDir}/${run.id}`
+        : `${this.repoRoot}/.agent-harness/artifacts/${run.id}`
       }
     });
+    await this.artifactStore.saveRunSnapshot(run);
   }
 
   private collectPhaseEvidence(run: HarnessRun, phaseId: string): string[] {

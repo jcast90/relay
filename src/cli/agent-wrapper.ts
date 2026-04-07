@@ -26,7 +26,8 @@ export async function ensureClaudeMcpConfig(input: {
         env: {
           AGENT_HARNESS_HOME: input.paths.rootDir,
           AGENT_HARNESS_ARTIFACTS_DIR: input.paths.artifactsDir,
-          AGENT_HARNESS_RUNS_INDEX: input.paths.runsIndexPath
+          AGENT_HARNESS_RUNS_INDEX: input.paths.runsIndexPath,
+          AGENT_HARNESS_PROVIDER: "claude"
         }
       }
     }
@@ -37,6 +38,20 @@ export async function ensureClaudeMcpConfig(input: {
   return path;
 }
 
+const HARNESS_SYSTEM_PROMPT = [
+  "Agent Harness MCP is attached as server agent_harness. Use it to inspect workspace status, recent runs, phase ledgers, and artifacts before deciding how to proceed.",
+  "",
+  "CROSSLINK: You have cross-session collaboration tools. Other agent sessions in different repos may be running simultaneously.",
+  "- crosslink_discover: Find other active sessions and their repos/capabilities.",
+  "- crosslink_send: Send a question or message to another session.",
+  "- crosslink_poll: Check for inbound messages from other sessions.",
+  "- crosslink_reply: Reply to an inbound message.",
+  "- crosslink_register: Update your session description so others know what you're working on.",
+  "",
+  "When you receive a crosslink message (prefixed with [CROSSLINK INBOUND]), read it carefully and use crosslink_reply to respond.",
+  "If you need information from another repo, use crosslink_discover to find the right session, then crosslink_send to ask."
+].join("\n");
+
 export function buildClaudeLaunchArgs(input: {
   userArgs: string[];
   mcpConfigPath: string;
@@ -45,7 +60,7 @@ export function buildClaudeLaunchArgs(input: {
     "--mcp-config",
     input.mcpConfigPath,
     "--append-system-prompt",
-    "Agent Harness MCP is attached as server agent_harness. Use it to inspect workspace status, recent runs, phase ledgers, and artifacts before deciding how to proceed.",
+    HARNESS_SYSTEM_PROMPT,
     ...input.userArgs
   ];
 }
@@ -65,6 +80,8 @@ export function buildCodexLaunchArgs(input: {
       "--workspace",
       input.cwd
     ])}`,
+    "-c",
+    `mcp_servers.agent_harness.env.AGENT_HARNESS_PROVIDER=${tomlString("codex")}`,
     ...input.userArgs
   ];
 }
