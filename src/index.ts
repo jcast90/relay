@@ -87,6 +87,18 @@ export async function main(): Promise<void> {
     return;
   }
 
+  if (command === "tui") {
+    const tuiBinary = fileURLToPath(new URL("../tui/target/release/agent-harness-tui", import.meta.url));
+    const exitCode = await launchInteractiveCommand({
+      command: tuiBinary,
+      args: [],
+      cwd,
+      env: {}
+    });
+    process.exitCode = exitCode;
+    return;
+  }
+
   if (command === "channels") {
     await printChannels();
     return;

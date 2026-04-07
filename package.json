@@ -17,6 +17,8 @@
     "list-runs": "tsx src/cli.ts list-runs",
     "status": "tsx src/cli.ts status",
     "up": "tsx src/cli.ts up",
+    "tui": "tsx src/cli.ts tui",
+    "tui:build": "cd tui && cargo build --release",
     "prepare": "pnpm build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

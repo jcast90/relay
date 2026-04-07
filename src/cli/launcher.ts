@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 
 export async function launchInteractiveCommand(input: {
-  command: "claude" | "codex";
+  command: string;
   args: string[];
   cwd: string;
   env: Record<string, string | undefined>;
