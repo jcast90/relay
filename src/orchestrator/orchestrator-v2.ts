@@ -196,6 +196,7 @@ export class OrchestratorV2 {
       this.repoRoot,
       this.artifactStore,
       this.verificationRunner,
+      this.registry,
       (r, req) => this.dispatch(r, req),
       (r, type, phaseId, details) => this.recordEvent(r, type, phaseId, details)
     );
@@ -240,6 +241,7 @@ export class OrchestratorV2 {
       this.repoRoot,
       this.artifactStore,
       this.verificationRunner,
+      this.registry,
       (r, req) => this.dispatch(r, req),
       (r, type, phaseId, details) => this.recordEvent(r, type, phaseId, details)
     );

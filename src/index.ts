@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-import { createLiveAgents } from "./agents/factory.js";
+import { createLiveAgents, registerAgentNames } from "./agents/factory.js";
+import { getAgentName } from "./domain/agent-names.js";
 import { NodeCommandInvoker } from "./agents/command-invoker.js";
 import {
   buildClaudeLaunchArgs,
@@ -144,6 +145,7 @@ export async function main(): Promise<void> {
   }
 
   const sequential = args.includes("--sequential");
+  await registerAgentNames();
   const registry = new AgentRegistry();
   const agents = createLiveAgents({
     cwd,
@@ -206,8 +208,9 @@ export async function main(): Promise<void> {
   console.log("Evidence:");
 
   for (const item of run.evidence) {
+    const name = await getAgentName(item.agentId);
     console.log(
-      `- ${item.phaseId} ${item.agentId} attempt=${item.attempt} summary=${JSON.stringify(item.summary)}`
+      `- [${name}] ${item.phaseId} attempt=${item.attempt} ${item.summary}`
     );
   }
 
@@ -228,8 +231,9 @@ export async function main(): Promise<void> {
     console.log("Ticket ledger:");
 
     for (const entry of run.ticketLedger) {
+      const agent = entry.assignedAgentName ?? "unassigned";
       console.log(
-        `- ${entry.ticketId} status=${entry.status} verification=${entry.verification} deps=[${entry.dependsOn.join(",")}]`
+        `- ${entry.ticketId} [${agent}] status=${entry.status} verification=${entry.verification} deps=[${entry.dependsOn.join(",")}]`
       );
     }
   }

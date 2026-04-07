@@ -61,6 +61,8 @@ export interface TicketLedgerEntry {
   specialty: AgentSpecialty;
   status: TicketStatus;
   dependsOn: string[];
+  assignedAgentId: string | null;
+  assignedAgentName: string | null;
   crosslinkSessionId: string | null;
   verification: VerificationStatus;
   lastClassification: {
@@ -84,6 +86,8 @@ export function initializeTicketLedger(tickets: TicketDefinition[]): TicketLedge
     specialty: ticket.specialty,
     status: ticket.dependsOn.length > 0 ? "blocked" as const : "ready" as const,
     dependsOn: ticket.dependsOn,
+    assignedAgentId: null,
+    assignedAgentName: null,
     crosslinkSessionId: null,
     verification: "pending" as const,
     lastClassification: null,

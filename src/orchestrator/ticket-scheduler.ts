@@ -1,4 +1,7 @@
 import type { AgentResult, FailureClassification, WorkRequest } from "../domain/agent.js";
+import { getAgentName } from "../domain/agent-names.js";
+import { roleForWork } from "../domain/agent.js";
+import type { AgentRegistry } from "../agents/registry.js";
 import type { HarnessRun, RunEventType } from "../domain/run.js";
 import type { TicketDefinition, TicketLedgerEntry } from "../domain/ticket.js";
 import { getReadyTickets } from "../domain/ticket.js";
@@ -27,6 +30,7 @@ export class TicketScheduler {
     private readonly repoRoot: string,
     private readonly artifactStore: ArtifactStore,
     private readonly verificationRunner: VerificationRunner,
+    private readonly registry: AgentRegistry,
     private readonly dispatch: (
       run: HarnessRun,
       request: Omit<WorkRequest, "runId">
@@ -69,14 +73,22 @@ export class TicketScheduler {
           continue;
         }
 
+        // Resolve which agent will work on this ticket
+        const agentId = this.resolveAgentForTicket(ticketDef);
+        const agentDisplayName = await getAgentName(agentId);
+
         this.updateTicketStatus(run, ticket.ticketId, {
           status: "executing",
+          assignedAgentId: agentId,
+          assignedAgentName: agentDisplayName,
           startedAt: new Date().toISOString()
         });
 
         this.recordEvent(run, "TicketStarted", ticket.ticketId, {
           ticketId: ticket.ticketId,
-          title: ticket.title
+          title: ticket.title,
+          assignedAgent: agentDisplayName,
+          agentId
         });
 
         const promise = this.executeTicket(run, ticketDef).then(
@@ -304,6 +316,31 @@ export class TicketScheduler {
     }
 
     Object.assign(entry, patch, { updatedAt: new Date().toISOString() });
+  }
+
+  private resolveAgentForTicket(ticket: TicketDefinition): string {
+    try {
+      const agent = this.registry.resolve({
+        runId: "",
+        phaseId: ticket.id,
+        kind: "implement_phase",
+        specialty: ticket.specialty,
+        title: ticket.title,
+        objective: ticket.objective,
+        acceptanceCriteria: ticket.acceptanceCriteria,
+        allowedCommands: ticket.allowedCommands,
+        verificationCommands: ticket.verificationCommands,
+        docsToUpdate: ticket.docsToUpdate,
+        context: [],
+        artifactContext: [],
+        attempt: 1,
+        maxAttempts: 1,
+        priorEvidence: []
+      });
+      return agent.id;
+    } catch {
+      return "unknown";
+    }
   }
 
   private findTicketDefinition(
