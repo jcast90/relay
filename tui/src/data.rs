@@ -1,6 +1,7 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 // --- Workspace Registry ---
@@ -59,6 +60,15 @@ pub struct TicketLedgerEntry {
 
 // --- Channel ---
 
+/// A repo assigned to a channel, with an alias for @-addressing in chat
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoAssignment {
+    pub alias: String,        // e.g. "ui", "be", "brain"
+    pub workspace_id: String, // from workspace-registry
+    pub repo_path: String,    // absolute path to repo
+}
+
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Channel {
@@ -68,6 +78,8 @@ pub struct Channel {
     pub status: String,
     pub members: Vec<ChannelMember>,
     pub pinned_refs: Vec<ChannelRef>,
+    #[serde(default)]
+    pub repo_assignments: Vec<RepoAssignment>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -139,6 +151,15 @@ pub struct ChannelRunLink {
     pub workspace_id: String,
 }
 
+// --- Global Config ---
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessConfig {
+    #[serde(default)]
+    pub project_dirs: Vec<String>,
+}
+
 // --- Data Loading ---
 
 pub fn harness_root() -> PathBuf {
@@ -147,11 +168,69 @@ pub fn harness_root() -> PathBuf {
         .join(".agent-harness")
 }
 
+pub fn load_config() -> HarnessConfig {
+    let path = harness_root().join("config.json");
+    load_json::<HarnessConfig>(&path).unwrap_or(HarnessConfig {
+        project_dirs: Vec::new(),
+    })
+}
+
+/// Scan a directory for immediate child directories that contain a .git folder
+fn discover_repos_in(dir: &Path) -> Vec<WorkspaceEntry> {
+    let mut repos = Vec::new();
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return repos,
+    };
+
+    for entry in entries.flatten() {
+        let child = entry.path();
+        if child.is_dir() && child.join(".git").exists() {
+            let repo_path = child.to_string_lossy().to_string();
+            let name = child
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            repos.push(WorkspaceEntry {
+                workspace_id: format!("discovered:{}", name),
+                repo_path,
+            });
+        }
+    }
+
+    repos
+}
+
 pub fn load_workspaces() -> Vec<WorkspaceEntry> {
     let path = harness_root().join("workspace-registry.json");
-    load_json::<WorkspaceRegistry>(&path)
+    let mut workspaces = load_json::<WorkspaceRegistry>(&path)
         .map(|r| r.workspaces)
-        .unwrap_or_default()
+        .unwrap_or_default();
+
+    // Discover repos from configured projectDirs
+    let config = load_config();
+    let existing_paths: std::collections::HashSet<String> =
+        workspaces.iter().map(|w| w.repo_path.clone()).collect();
+
+    for dir in &config.project_dirs {
+        let expanded = if dir.starts_with("~/") {
+            dirs::home_dir()
+                .unwrap_or_default()
+                .join(&dir[2..])
+        } else {
+            PathBuf::from(dir)
+        };
+
+        for repo in discover_repos_in(&expanded) {
+            if !existing_paths.contains(&repo.repo_path) {
+                workspaces.push(repo);
+            }
+        }
+    }
+
+    workspaces.sort_by(|a, b| a.repo_path.cmp(&b.repo_path));
+    workspaces
 }
 
 pub fn load_agent_names() -> Vec<AgentNameEntry> {
@@ -198,6 +277,17 @@ pub fn load_channel_feed(channel_id: &str, limit: usize) -> Vec<ChannelEntry> {
         .collect();
 
     entries.into_iter().rev().take(limit).collect::<Vec<_>>().into_iter().rev().collect()
+}
+
+/// Load channel-local tickets (created via chat, not from orchestrator runs)
+pub fn load_channel_tickets(channel_id: &str) -> Vec<TicketLedgerEntry> {
+    let path = harness_root()
+        .join("channels")
+        .join(channel_id)
+        .join("tickets.json");
+    load_json::<TicketLedger>(&path)
+        .and_then(|l| l.tickets)
+        .unwrap_or_default()
 }
 
 pub fn load_channel_run_links(channel_id: &str) -> Vec<ChannelRunLink> {
@@ -269,4 +359,195 @@ pub fn is_active_state(state: &str) -> bool {
 fn load_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
     let content = fs::read_to_string(path).ok()?;
     serde_json::from_str(&content).ok()
+}
+
+// --- Chat Sessions & Persistence ---
+
+/// A chat session within a channel
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatSession {
+    pub session_id: String,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub message_count: usize,
+    /// Per-worker Claude CLI session IDs for --resume (alias -> claude session id)
+    #[serde(default)]
+    pub claude_session_ids: HashMap<String, String>,
+}
+
+/// Serializable chat message for JSONL persistence
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedChatMessage {
+    pub role: String,       // "user", "assistant", "system", "activity"
+    pub content: String,
+    pub timestamp: String,
+    pub agent_alias: Option<String>,
+}
+
+fn sessions_dir(channel_id: &str) -> PathBuf {
+    harness_root()
+        .join("channels")
+        .join(channel_id)
+        .join("sessions")
+}
+
+fn sessions_index_path(channel_id: &str) -> PathBuf {
+    harness_root()
+        .join("channels")
+        .join(channel_id)
+        .join("sessions.json")
+}
+
+fn session_chat_path(channel_id: &str, session_id: &str) -> PathBuf {
+    sessions_dir(channel_id).join(format!("{}.jsonl", session_id))
+}
+
+/// Load all sessions for a channel, sorted by most recent first
+pub fn load_sessions(channel_id: &str) -> Vec<ChatSession> {
+    let path = sessions_index_path(channel_id);
+    let mut sessions: Vec<ChatSession> = load_json::<Vec<ChatSession>>(&path).unwrap_or_default();
+    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    sessions
+}
+
+/// Save sessions index (atomic write)
+pub fn save_sessions(channel_id: &str, sessions: &[ChatSession]) {
+    let path = sessions_index_path(channel_id);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let tmp_path = path.with_extension("json.tmp");
+    if let Ok(content) = serde_json::to_string_pretty(sessions) {
+        if fs::write(&tmp_path, &content).is_ok() {
+            let _ = fs::rename(&tmp_path, &path);
+        }
+    }
+}
+
+/// Create a new session and return it
+pub fn create_session(channel_id: &str, title: &str) -> ChatSession {
+    let now = chrono::Utc::now().to_rfc3339();
+    let session = ChatSession {
+        session_id: format!("sess-{}", chrono::Utc::now().timestamp_millis()),
+        title: title.to_string(),
+        created_at: now.clone(),
+        updated_at: now,
+        message_count: 0,
+        claude_session_ids: HashMap::new(),
+    };
+
+    let _ = fs::create_dir_all(sessions_dir(channel_id));
+
+    let mut sessions = load_sessions(channel_id);
+    sessions.push(session.clone());
+    save_sessions(channel_id, &sessions);
+
+    session
+}
+
+/// Update a session in the index (title, message count, timestamps, claude session ids)
+pub fn update_session(channel_id: &str, session: &ChatSession) {
+    let mut sessions = load_sessions(channel_id);
+    if let Some(existing) = sessions.iter_mut().find(|s| s.session_id == session.session_id) {
+        *existing = session.clone();
+    }
+    save_sessions(channel_id, &sessions);
+}
+
+/// Load chat messages for a specific session
+pub fn load_session_chat(channel_id: &str, session_id: &str, limit: usize) -> Vec<PersistedChatMessage> {
+    let path = session_chat_path(channel_id, session_id);
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    let entries: Vec<PersistedChatMessage> = content
+        .lines()
+        .filter(|l| !l.is_empty())
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+
+    entries.into_iter().rev().take(limit).collect::<Vec<_>>().into_iter().rev().collect()
+}
+
+/// Append a single chat message to a session's chat file
+pub fn append_session_message(channel_id: &str, session_id: &str, msg: &PersistedChatMessage) {
+    let path = session_chat_path(channel_id, session_id);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        if let Ok(json) = serde_json::to_string(msg) {
+            let _ = writeln!(file, "{}", json);
+        }
+    }
+}
+
+/// Update the last message in a session's chat file (for streaming completions)
+pub fn update_last_session_message(channel_id: &str, session_id: &str, msg: &PersistedChatMessage) {
+    let path = session_chat_path(channel_id, session_id);
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.is_empty() {
+        return;
+    }
+
+    if let Ok(json) = serde_json::to_string(msg) {
+        let mut output: Vec<String> = lines[..lines.len() - 1].iter().map(|l| l.to_string()).collect();
+        output.push(json);
+        let final_content = output.join("\n") + "\n";
+        let tmp_path = path.with_extension("jsonl.tmp");
+        if fs::write(&tmp_path, &final_content).is_ok() {
+            let _ = fs::rename(&tmp_path, &path);
+        }
+    }
+}
+
+/// Migrate old single chat.jsonl to a session (one-time migration)
+pub fn migrate_legacy_chat(channel_id: &str) {
+    let legacy_path = harness_root()
+        .join("channels")
+        .join(channel_id)
+        .join("chat.jsonl");
+
+    if !legacy_path.exists() {
+        return;
+    }
+
+    let content = match fs::read_to_string(&legacy_path) {
+        Ok(c) if !c.trim().is_empty() => c,
+        _ => {
+            let _ = fs::remove_file(&legacy_path);
+            return;
+        }
+    };
+
+    // Create a session for the legacy chat
+    let session = create_session(channel_id, "Imported conversation");
+
+    // Copy messages to the new session file
+    let dest = session_chat_path(channel_id, &session.session_id);
+    let _ = fs::create_dir_all(sessions_dir(channel_id));
+    let _ = fs::write(&dest, &content);
+
+    // Count messages
+    let count = content.lines().filter(|l| !l.is_empty()).count();
+    let mut updated = session;
+    updated.message_count = count;
+    update_session(channel_id, &updated);
+
+    // Remove legacy file
+    let _ = fs::remove_file(&legacy_path);
 }

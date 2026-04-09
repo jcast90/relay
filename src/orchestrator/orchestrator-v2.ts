@@ -18,6 +18,7 @@ import { assertTransition } from "../domain/state-machine.js";
 import type { AgentRegistry } from "../agents/registry.js";
 import type { ArtifactStore } from "../execution/artifact-store.js";
 import type { VerificationRunner } from "../execution/verification-runner.js";
+import type { ChannelStore } from "../channels/channel-store.js";
 import { classifyRequest } from "./classifier.js";
 import { decomposePlanToTickets, buildTicketPlanFromPhases } from "./ticket-decomposer.js";
 import { checkApproval } from "./approval-gate.js";
@@ -29,13 +30,15 @@ export class OrchestratorV2 {
     private readonly repoRoot: string,
     private readonly verificationRunner: VerificationRunner,
     private readonly artifactStore: ArtifactStore,
-    private readonly artifactsDir?: string
+    private readonly artifactsDir?: string,
+    private readonly channelStore?: ChannelStore,
+    private readonly workspaceId?: string
   ) {}
 
-  async run(featureRequest: string): Promise<HarnessRun> {
+  async run(featureRequest: string, runId?: string): Promise<HarnessRun> {
     const now = new Date().toISOString();
     const run: HarnessRun = {
-      id: buildRunId(),
+      id: runId ?? buildRunId(),
       featureRequest,
       state: "CLASSIFYING",
       startedAt: now,
@@ -56,6 +59,28 @@ export class OrchestratorV2 {
     };
 
     this.recordEvent(run, "TaskSubmitted", "phase_00", { featureRequest });
+
+    // Create a channel for this run so the dashboard can display it
+    if (this.channelStore && this.workspaceId) {
+      try {
+        const channel = await this.channelStore.createChannel({
+          name: featureRequest.slice(0, 60),
+          description: featureRequest,
+          workspaceIds: [this.workspaceId]
+        });
+        run.channelId = channel.channelId;
+        await this.channelStore.linkRun(channel.channelId, run.id, this.workspaceId);
+        await this.channelStore.postEntry(channel.channelId, {
+          type: "run_started",
+          fromAgentId: null,
+          fromDisplayName: "Orchestrator",
+          content: `Run started: ${featureRequest}`,
+          metadata: { runId: run.id, state: run.state }
+        });
+      } catch {
+        // Channel creation is non-critical — continue without it
+      }
+    }
 
     // Step 1: Classify
     const classification = await classifyRequest({
@@ -213,6 +238,16 @@ export class OrchestratorV2 {
     run.updatedAt = run.completedAt;
     await this.persistRunIndex(run);
 
+    if (run.channelId && this.channelStore) {
+      await this.channelStore.postEntry(run.channelId, {
+        type: "run_completed",
+        fromAgentId: null,
+        fromDisplayName: "Orchestrator",
+        content: `Run completed: ${run.state}`,
+        metadata: { runId: run.id, state: run.state }
+      }).catch(() => {});
+    }
+
     return run;
   }
 
@@ -221,6 +256,28 @@ export class OrchestratorV2 {
     featureRequest: string,
     classification: ClassificationResult
   ): Promise<HarnessRun> {
+    // Create channel for trivial runs too
+    if (this.channelStore && this.workspaceId && !run.channelId) {
+      try {
+        const channel = await this.channelStore.createChannel({
+          name: featureRequest.slice(0, 60),
+          description: featureRequest,
+          workspaceIds: [this.workspaceId]
+        });
+        run.channelId = channel.channelId;
+        await this.channelStore.linkRun(channel.channelId, run.id, this.workspaceId);
+        await this.channelStore.postEntry(channel.channelId, {
+          type: "run_started",
+          fromAgentId: null,
+          fromDisplayName: "Orchestrator",
+          content: `Run started (trivial): ${featureRequest}`,
+          metadata: { runId: run.id, state: run.state }
+        });
+      } catch {
+        // non-critical
+      }
+    }
+
     const trivialPlan = createSeedPlan(featureRequest, this.repoRoot);
     run.plan = trivialPlan;
 
@@ -252,6 +309,16 @@ export class OrchestratorV2 {
     run.updatedAt = run.completedAt;
     await this.persistRunIndex(run);
 
+    if (run.channelId && this.channelStore) {
+      await this.channelStore.postEntry(run.channelId, {
+        type: "run_completed",
+        fromAgentId: null,
+        fromDisplayName: "Orchestrator",
+        content: `Run completed: ${run.state}`,
+        metadata: { runId: run.id, state: run.state }
+      }).catch(() => {});
+    }
+
     return run;
   }
 
@@ -271,6 +338,16 @@ export class OrchestratorV2 {
         workKind: input.kind,
         attempt: String(attempt)
       });
+
+      if (run.channelId && this.channelStore) {
+        this.channelStore.postEntry(run.channelId, {
+          type: "message",
+          fromAgentId: agent.id,
+          fromDisplayName: agent.name,
+          content: `Dispatched for ${input.kind}: ${input.title}`,
+          metadata: { attempt: String(attempt) }
+        }).catch(() => {});
+      }
 
       try {
         const result = await agent.run(request);
@@ -332,6 +409,16 @@ export class OrchestratorV2 {
     run.updatedAt = new Date().toISOString();
     this.recordEvent(run, eventType, phaseId, { state: run.state });
     await this.persistRunIndex(run);
+
+    if (run.channelId && this.channelStore) {
+      this.channelStore.postEntry(run.channelId, {
+        type: "status_update",
+        fromAgentId: null,
+        fromDisplayName: "Orchestrator",
+        content: `${eventType} → ${run.state}`,
+        metadata: { runId: run.id, state: run.state, event: eventType }
+      }).catch(() => {});
+    }
   }
 
   private recordEvent(
@@ -375,6 +462,6 @@ export class OrchestratorV2 {
   }
 }
 
-function buildRunId(): string {
+export function buildRunId(): string {
   return `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }

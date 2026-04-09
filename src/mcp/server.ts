@@ -3,7 +3,9 @@ import { isAbsolute, resolve } from "node:path";
 
 import { LocalArtifactStore } from "../execution/artifact-store.js";
 import { submitApproval } from "../orchestrator/approval-gate.js";
+import { dispatch } from "../orchestrator/dispatch.js";
 import { getHarnessWorkspacePaths, readWorkspaceSummary } from "../cli/workspace.js";
+import { buildWorkspaceId } from "../cli/workspace-registry.js";
 import { CrosslinkStore } from "../crosslink/store.js";
 import { ChannelStore } from "../channels/channel-store.js";
 import {
@@ -191,6 +193,49 @@ async function handleMessage(
                   feedback: { type: "string" }
                 }
               }
+            },
+            {
+              name: "project_create",
+              description:
+                "Create a new project. A project is a channel that groups related chats, runs, and decisions. " +
+                "Use this when the user wants to kick off a new initiative or workstream.",
+              inputSchema: {
+                type: "object",
+                additionalProperties: false,
+                required: ["name"],
+                properties: {
+                  name: {
+                    type: "string",
+                    description: "Project name, e.g. 'Auth Refactor' or 'New Dashboard'"
+                  },
+                  description: {
+                    type: "string",
+                    description: "What the project is about"
+                  }
+                }
+              }
+            },
+            {
+              name: "harness_dispatch",
+              description:
+                "Dispatch a feature request to the agent team. This kicks off the orchestrator in the background: " +
+                "classifies the request, creates a plan, decomposes into tickets, and assigns agents. " +
+                "Progress is posted to the channel feed and visible in the dashboard. Returns immediately with run ID.",
+              inputSchema: {
+                type: "object",
+                additionalProperties: false,
+                required: ["featureRequest"],
+                properties: {
+                  featureRequest: {
+                    type: "string",
+                    description: "The feature to build — should be well-defined from your chat discussion"
+                  },
+                  channelId: {
+                    type: "string",
+                    description: "Channel/project to link this run to. If omitted, a new channel is created."
+                  }
+                }
+              }
             }
           ]
         }
@@ -307,6 +352,42 @@ async function callTool(
         artifactStore
       });
       return { runId, decision: "rejected", feedback, path };
+    }
+    case "project_create": {
+      const channelStore = new ChannelStore();
+      const workspaceId = buildWorkspaceId(workspaceRoot);
+      const name = String(args.name ?? "");
+      const description = String(args.description ?? name);
+      const channel = await channelStore.createChannel({
+        name,
+        description,
+        workspaceIds: [workspaceId]
+      });
+      await channelStore.postEntry(channel.channelId, {
+        type: "status_update",
+        fromAgentId: null,
+        fromDisplayName: "Orchestrator",
+        content: `Project "${name}" created.`,
+        metadata: { workspaceId }
+      });
+      return {
+        projectId: channel.channelId,
+        channelId: channel.channelId,
+        name: channel.name,
+        description: channel.description,
+        workspaceId
+      };
+    }
+    case "harness_dispatch": {
+      const featureRequest = String(args.featureRequest ?? "");
+      if (!featureRequest) throw new Error("featureRequest is required");
+      const channelId = args.channelId ? String(args.channelId) : undefined;
+      const result = await dispatch({
+        featureRequest,
+        repoPath: workspaceRoot,
+        channelId
+      });
+      return result;
     }
     default:
       throw new Error(`Unknown tool: ${name}`);

@@ -23,6 +23,7 @@ import {
   getGlobalRoot,
   listRegisteredWorkspaces
 } from "./cli/workspace-registry.js";
+import { addProjectDir, readConfig, removeProjectDir } from "./cli/config.js";
 import { LocalArtifactStore } from "./execution/artifact-store.js";
 import { startMcpServer } from "./mcp/server.js";
 import { VerificationRunner } from "./execution/verification-runner.js";
@@ -82,6 +83,11 @@ export async function main(): Promise<void> {
     return;
   }
 
+  if (command === "config") {
+    await handleConfigCommand(args);
+    return;
+  }
+
   if (command === "dashboard") {
     await startDashboard();
     return;
@@ -89,11 +95,13 @@ export async function main(): Promise<void> {
 
   if (command === "tui") {
     const tuiBinary = fileURLToPath(new URL("../tui/target/release/agent-harness-tui", import.meta.url));
+    // Resolve claude binary path so the TUI subprocess can find it
+    const claudeBin = process.env.CLAUDE_BIN ?? "claude";
     const exitCode = await launchInteractiveCommand({
       command: tuiBinary,
       args: [],
       cwd,
-      env: {}
+      env: { CLAUDE_BIN: claudeBin }
     });
     process.exitCode = exitCode;
     return;
@@ -197,12 +205,15 @@ export async function main(): Promise<void> {
       );
       run = await orchestrator.run(featureRequest);
     } else {
+      const channelStore = new ChannelStore();
       const orchestratorV2 = new OrchestratorV2(
         registry,
         cwd,
         verificationRunner,
         artifactStore,
-        workspace.paths.artifactsDir
+        workspace.paths.artifactsDir,
+        channelStore,
+        workspace.status.workspaceId
       );
       run = await orchestratorV2.run(featureRequest);
     }
@@ -534,6 +545,52 @@ async function printWorkspaces(): Promise<void> {
     console.log(`    Registered: ${ws.registeredAt}`);
     console.log(`    Last accessed: ${ws.lastAccessedAt}`);
     console.log("");
+  }
+}
+
+async function handleConfigCommand(args: string[]): Promise<void> {
+  const subcommand = args[0];
+
+  if (subcommand === "add-project-dir") {
+    const dir = args[1];
+    if (!dir) {
+      console.error("Usage: agent-harness config add-project-dir <path>");
+      process.exitCode = 1;
+      return;
+    }
+    const config = await addProjectDir(dir);
+    console.log(`Added project directory: ${dir}`);
+    console.log(`Project directories: ${config.projectDirs.join(", ")}`);
+    return;
+  }
+
+  if (subcommand === "remove-project-dir") {
+    const dir = args[1];
+    if (!dir) {
+      console.error("Usage: agent-harness config remove-project-dir <path>");
+      process.exitCode = 1;
+      return;
+    }
+    const config = await removeProjectDir(dir);
+    console.log(`Removed project directory: ${dir}`);
+    console.log(`Project directories: ${config.projectDirs.join(", ")}`);
+    return;
+  }
+
+  // Default: show current config
+  const config = await readConfig();
+  console.log("Global config:");
+  console.log(`  Config path: ${getGlobalRoot()}/config.json`);
+  console.log("");
+  if (config.projectDirs.length === 0) {
+    console.log("  Project directories: (none)");
+    console.log("");
+    console.log("  Add directories with: agent-harness config add-project-dir ~/projects");
+  } else {
+    console.log("  Project directories:");
+    for (const dir of config.projectDirs) {
+      console.log(`    - ${dir}`);
+    }
   }
 }
 
