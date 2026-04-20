@@ -16,6 +16,7 @@ import {
   type RepoAssignment
 } from "../domain/channel.js";
 import { buildDecisionId, type Decision } from "../domain/decision.js";
+import type { TicketLedgerEntry } from "../domain/ticket.js";
 
 export class ChannelStore {
   private readonly channelsDir: string;
@@ -321,6 +322,93 @@ export class ChannelStore {
     } catch {
       return [];
     }
+  }
+
+  // --- Ticket board (channel-scoped, unified across chat + orchestrator) ---
+
+  async readChannelTickets(channelId: string): Promise<TicketLedgerEntry[]> {
+    try {
+      const raw = JSON.parse(
+        await readFile(
+          join(this.channelsDir, channelId, "tickets.json"),
+          "utf8"
+        )
+      ) as { tickets?: TicketLedgerEntry[] };
+      return raw.tickets ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Replace the full ticket list on the channel board. Callers that only
+   * want to add/update a subset should use `upsertChannelTickets` — this
+   * method is primarily for seeders and full-board rewrites.
+   */
+  async writeChannelTickets(
+    channelId: string,
+    tickets: TicketLedgerEntry[]
+  ): Promise<void> {
+    const channelDir = join(this.channelsDir, channelId);
+    await mkdir(channelDir, { recursive: true });
+
+    const path = join(channelDir, "tickets.json");
+    const tmpPath = `${path}.tmp.${process.pid}`;
+
+    await writeFile(
+      tmpPath,
+      JSON.stringify(
+        {
+          updatedAt: new Date().toISOString(),
+          tickets
+        },
+        null,
+        2
+      )
+    );
+    await rename(tmpPath, path);
+  }
+
+  /**
+   * Merge `incoming` into the existing channel board by `ticketId`. Entries
+   * already present are replaced wholesale by the incoming version (so the
+   * caller owns the full shape, not just a patch). New ticketIds are
+   * appended in the order they appear in `incoming`. Existing entries
+   * absent from `incoming` are preserved unchanged.
+   */
+  async upsertChannelTickets(
+    channelId: string,
+    incoming: TicketLedgerEntry[]
+  ): Promise<TicketLedgerEntry[]> {
+    const existing = await this.readChannelTickets(channelId);
+    const byId = new Map(existing.map((t) => [t.ticketId, t]));
+
+    for (const entry of incoming) {
+      byId.set(entry.ticketId, entry);
+    }
+
+    // Preserve original ordering: existing entries keep their slot; new
+    // entries append at the end in the order supplied by `incoming`.
+    const merged: TicketLedgerEntry[] = [];
+    const seen = new Set<string>();
+
+    for (const entry of existing) {
+      const current = byId.get(entry.ticketId);
+      if (current) {
+        merged.push(current);
+        seen.add(entry.ticketId);
+      }
+    }
+
+    for (const entry of incoming) {
+      if (!seen.has(entry.ticketId)) {
+        merged.push(entry);
+        seen.add(entry.ticketId);
+      }
+    }
+
+    await this.writeChannelTickets(channelId, merged);
+    return merged;
   }
 
   // --- Decisions ---

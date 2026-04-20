@@ -210,12 +210,18 @@ export class OrchestratorV2 {
     });
 
     run.ticketPlan = ticketPlan;
-    run.ticketLedger = initializeTicketLedger(ticketPlan.tickets);
+    run.ticketLedger = initializeTicketLedger(ticketPlan.tickets, run.id);
 
     await this.artifactStore.saveTicketLedger({
       runId: run.id,
       ticketLedger: run.ticketLedger
     });
+
+    // Channel board is the live, unified ticket view across chat + orchestrator.
+    // Per-run ticket-ledger.json remains as an immutable decomposition snapshot.
+    if (run.channelId && this.channelStore) {
+      await this.channelStore.upsertChannelTickets(run.channelId, run.ticketLedger);
+    }
 
     // Step 6: Approval gate or direct ticket execution
     if (tierNeedsApproval(classification.tier)) {
@@ -257,7 +263,9 @@ export class OrchestratorV2 {
       this.verificationRunner,
       this.registry,
       (r, req) => this.dispatch(r, req),
-      (r, type, phaseId, details) => this.recordEvent(r, type, phaseId, details)
+      (r, type, phaseId, details) => this.recordEvent(r, type, phaseId, details),
+      undefined,
+      this.channelStore
     );
 
     const poller = this.startPoller(run, scheduler);
@@ -324,7 +332,11 @@ export class OrchestratorV2 {
 
     const ticketPlan = buildTicketPlanFromPhases(trivialPlan, classification);
     run.ticketPlan = ticketPlan;
-    run.ticketLedger = initializeTicketLedger(ticketPlan.tickets);
+    run.ticketLedger = initializeTicketLedger(ticketPlan.tickets, run.id);
+
+    if (run.channelId && this.channelStore) {
+      await this.channelStore.upsertChannelTickets(run.channelId, run.ticketLedger);
+    }
 
     // Fast-track: plan generated, then straight to tickets
     await this.transition(run, "PlanGenerated", "phase_00");
@@ -341,7 +353,9 @@ export class OrchestratorV2 {
       this.verificationRunner,
       this.registry,
       (r, req) => this.dispatch(r, req),
-      (r, type, phaseId, details) => this.recordEvent(r, type, phaseId, details)
+      (r, type, phaseId, details) => this.recordEvent(r, type, phaseId, details),
+      undefined,
+      this.channelStore
     );
 
     const poller = this.startPoller(run, scheduler);

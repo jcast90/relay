@@ -12,6 +12,7 @@ import {
   initializeTicketLedger
 } from "../domain/ticket.js";
 import type { ArtifactStore } from "../execution/artifact-store.js";
+import type { ChannelStore } from "../channels/channel-store.js";
 import type { VerificationRunner } from "../execution/verification-runner.js";
 import { selectVerificationCommands } from "../execution/verification-runner.js";
 import {
@@ -64,7 +65,8 @@ export class TicketScheduler {
       phaseId: string,
       details: Record<string, string>
     ) => void,
-    options?: Partial<TicketSchedulerOptions>
+    options?: Partial<TicketSchedulerOptions>,
+    private readonly channelStore?: ChannelStore
   ) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
   }
@@ -520,5 +522,17 @@ export class TicketScheduler {
       runId: run.id,
       ticketLedger: run.ticketLedger
     });
+
+    // Mirror status changes onto the channel's unified ticket board so chat
+    // and orchestrator tickets share a single live view. The per-run ledger
+    // above remains as the immutable decomposition snapshot.
+    if (run.channelId && this.channelStore) {
+      try {
+        await this.channelStore.upsertChannelTickets(run.channelId, run.ticketLedger);
+      } catch {
+        // Channel board mirror is best-effort; a transient write failure must
+        // not halt the scheduler loop. The per-run ledger is still persisted.
+      }
+    }
   }
 }

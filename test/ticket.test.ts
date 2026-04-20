@@ -121,4 +121,15 @@ describe("initializeTicketLedger", () => {
     expect(ledger[1].status).toBe("blocked");
     expect(ledger[2].status).toBe("ready");
   });
+
+  it("defaults runId to null for chat-created ledgers", () => {
+    const ledger = initializeTicketLedger([ticket("a")]);
+    expect(ledger[0].runId).toBeNull();
+  });
+
+  it("tags every entry with the supplied runId", () => {
+    const ledger = initializeTicketLedger([ticket("a"), ticket("b")], "run-abc");
+    expect(ledger[0].runId).toBe("run-abc");
+    expect(ledger[1].runId).toBe("run-abc");
+  });
 });

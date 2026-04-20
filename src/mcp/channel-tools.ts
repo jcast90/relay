@@ -174,9 +174,28 @@ export async function callChannelTool(
 
     case "channel_task_board": {
       const channelId = String(args.channelId ?? "");
-      const runLinks = await store.readRunLinks(channelId);
-      const board: Record<string, Array<{ ticketId: string; title: string; runId: string }>> = {};
+      const board: Record<string, Array<{ ticketId: string; title: string; runId: string | null }>> = {};
 
+      // Unified ticket board: channel-scoped file is the live source for both
+      // chat-created and orchestrator-generated tickets. Fall back to the
+      // per-run ledgers only if the channel board is empty (legacy data
+      // written before unification).
+      const channelTickets = await store.readChannelTickets(channelId);
+
+      if (channelTickets.length > 0) {
+        for (const ticket of channelTickets) {
+          if (!board[ticket.status]) board[ticket.status] = [];
+          board[ticket.status].push({
+            ticketId: ticket.ticketId,
+            title: ticket.title,
+            runId: ticket.runId ?? null
+          });
+        }
+        return { channelId, board };
+      }
+
+      // Legacy fallback: traverse run links.
+      const runLinks = await store.readRunLinks(channelId);
       for (const link of runLinks) {
         const artifactStore = buildArtifactStoreForWorkspace(link.workspaceId);
         const tickets = await artifactStore.readTicketLedger(link.runId);

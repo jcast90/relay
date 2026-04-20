@@ -845,30 +845,46 @@ async function printTaskBoard(channelId: string, args: string[] = []): Promise<v
     return;
   }
 
-  const runLinks = await store.readRunLinks(channelId);
-
-  if (runLinks.length === 0) {
-    console.log("No runs linked to this channel.");
-    return;
-  }
-
+  // Unified ticket board: channel-scoped file is the live source for both
+  // chat-created and orchestrator-generated tickets. Fall back to the per-run
+  // ledgers only if the channel board is empty (legacy data).
   const board: Record<string, Array<{ ticketId: string; title: string }>> = {};
+  const channelTickets = await store.readChannelTickets(channelId);
 
-  for (const link of runLinks) {
-    const wsStore = new LocalArtifactStore(
-      `${getGlobalRoot()}/workspaces/${link.workspaceId}/artifacts`
-    );
-    const tickets = await wsStore.readTicketLedger(link.runId);
-    if (!tickets) continue;
-
-    for (const ticket of tickets) {
+  if (channelTickets.length > 0) {
+    for (const ticket of channelTickets) {
       if (!board[ticket.status]) board[ticket.status] = [];
       board[ticket.status].push({ ticketId: ticket.ticketId, title: ticket.title });
+    }
+  } else {
+    const runLinks = await store.readRunLinks(channelId);
+
+    if (runLinks.length === 0) {
+      console.log("No tickets on this channel and no runs linked.");
+      return;
+    }
+
+    for (const link of runLinks) {
+      const wsStore = new LocalArtifactStore(
+        `${getGlobalRoot()}/workspaces/${link.workspaceId}/artifacts`
+      );
+      const tickets = await wsStore.readTicketLedger(link.runId);
+      if (!tickets) continue;
+
+      for (const ticket of tickets) {
+        if (!board[ticket.status]) board[ticket.status] = [];
+        board[ticket.status].push({ ticketId: ticket.ticketId, title: ticket.title });
+      }
     }
   }
 
   if (args.includes("--json")) {
     jsonOut(board);
+    return;
+  }
+
+  if (Object.keys(board).length === 0) {
+    console.log("No tickets on this channel.");
     return;
   }
 

@@ -75,9 +75,14 @@ export interface TicketLedgerEntry {
   startedAt: string | null;
   completedAt: string | null;
   updatedAt: string;
+  /** Orchestrator run this ticket was decomposed from, or null for chat-created. */
+  runId: string | null;
 }
 
-export function initializeTicketLedger(tickets: TicketDefinition[]): TicketLedgerEntry[] {
+export function initializeTicketLedger(
+  tickets: TicketDefinition[],
+  runId: string | null = null
+): TicketLedgerEntry[] {
   const now = new Date().toISOString();
 
   return tickets.map((ticket) => ({
@@ -95,7 +100,8 @@ export function initializeTicketLedger(tickets: TicketDefinition[]): TicketLedge
     attempt: 0,
     startedAt: null,
     completedAt: null,
-    updatedAt: now
+    updatedAt: now,
+    runId
   }));
 }
 
