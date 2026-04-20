@@ -14,7 +14,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node -e \"require('fs').cpSync('src/storage/migrations','dist/storage/migrations',{recursive:true,filter:(p)=>!p.endsWith('.ts')})\"",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-migrations.mjs",
     "demo": "tsx src/cli.ts",
     "demo:live": "HARNESS_LIVE=1 tsx src/cli.ts",
     "list-runs": "tsx src/cli.ts list-runs",

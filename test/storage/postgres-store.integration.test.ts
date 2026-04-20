@@ -117,6 +117,39 @@ maybeDescribe(`PostgresHarnessStore (integration, ${TEST_URL ?? skipReason})`, (
     expect(alphas.map((w) => w.id)).toEqual(["alpha-1", "alpha-2"]);
   });
 
+  it("listDocs escapes LIKE metacharacters in prefix (`_`, `%`)", async () => {
+    if (!TEST_URL) return;
+    // Without escaping, `_` matches any single character and `%` matches
+    // any sequence — so the presence of `alphaXb` would leak into a search
+    // for `alpha_b`. Verify parity with FileHarnessStore's String.startsWith.
+    await store.putDoc<Widget>(ns, "alpha_b1", {
+      id: "alpha_b1",
+      label: "u",
+      count: 0
+    });
+    await store.putDoc<Widget>(ns, "alphaXb1", {
+      id: "alphaXb1",
+      label: "x",
+      count: 0
+    });
+    await store.putDoc<Widget>(ns, "pct%tag", {
+      id: "pct%tag",
+      label: "p",
+      count: 0
+    });
+    await store.putDoc<Widget>(ns, "pctZtag", {
+      id: "pctZtag",
+      label: "z",
+      count: 0
+    });
+
+    const underscoreMatches = await store.listDocs<Widget>(ns, "alpha_");
+    expect(underscoreMatches.map((w) => w.id)).toEqual(["alpha_b1"]);
+
+    const percentMatches = await store.listDocs<Widget>(ns, "pct%");
+    expect(percentMatches.map((w) => w.id)).toEqual(["pct%tag"]);
+  });
+
   it("deleteDoc is idempotent and clears the row", async () => {
     if (!TEST_URL) return;
     await store.putDoc<Widget>(ns, "w1", { id: "w1", label: "a", count: 1 });
@@ -190,6 +223,37 @@ maybeDescribe(`PostgresHarnessStore (integration, ${TEST_URL ?? skipReason})`, (
     };
     const loaded = await store.getBlob(manual);
     expect(new TextDecoder().decode(loaded)).toBe("hello postgres");
+  });
+
+  it("mutate creates the row from a null prev on a fresh key", async () => {
+    if (!TEST_URL) return;
+    const created = await store.mutate<Widget>(ns, "fresh", (prev) => {
+      expect(prev).toBeNull();
+      return { id: "fresh", label: "created", count: 7 };
+    });
+    expect(created).toEqual({ id: "fresh", label: "created", count: 7 });
+    const loaded = await store.getDoc<Widget>(ns, "fresh");
+    expect(loaded).toEqual(created);
+  });
+
+  it("mutate serializes 50 concurrent increments on a FRESH key (advisory lock)", async () => {
+    if (!TEST_URL) return;
+    // Critical: no putDoc first. Without advisory-lock serialization each
+    // caller's SELECT ... FOR UPDATE returns 0 rows, prev=null, and the
+    // final count ends at 1. The advisory lock forces strict ordering even
+    // before the row exists.
+    const ops: Promise<{ count: number }>[] = [];
+    for (let i = 0; i < 50; i++) {
+      ops.push(
+        store.mutate<{ count: number }>(ns, "fresh-ctr", (prev) => ({
+          count: (prev?.count ?? 0) + 1
+        }))
+      );
+    }
+    await Promise.all(ops);
+
+    const final = await store.getDoc<{ count: number }>(ns, "fresh-ctr");
+    expect(final?.count).toBe(50);
   });
 
   it("mutate serializes 50 concurrent increments on one key", async () => {

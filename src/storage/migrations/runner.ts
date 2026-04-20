@@ -68,7 +68,11 @@ export async function migrate(
         await client.query("COMMIT");
         applied.push({ version, alreadyApplied: false });
       } catch (err) {
-        await client.query("ROLLBACK").catch(() => {});
+        await client.query("ROLLBACK").catch((rollbackErr) => {
+          console.warn(
+            `[migration] ROLLBACK failed after ${version} error: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`
+          );
+        });
         throw err;
       } finally {
         client.release();

@@ -31,8 +31,8 @@ import type {
  * callers in the same process can't lose updates on a read-modify-write.
  *
  * Single-process only: cross-process coordination (flock, Postgres advisory
- * locks, etc.) is explicitly out of scope here — use `PgHarnessStore` from
- * T-402 when multiple processes need to share the same state.
+ * locks, etc.) is explicitly out of scope here — use `PostgresHarnessStore`
+ * when multiple processes need to share the same state.
  */
 
 // Per-key mutex shared across all store instances. Keyed by "${ns}\0${id}"
@@ -295,7 +295,7 @@ export class FileHarnessStore implements HarnessStore {
    *
    * Poll interval is 250ms — balances promptness vs CPU and matches the
    * at-least-once coalescing contract consumers already need to tolerate
-   * for the Postgres `LISTEN/NOTIFY` implementation (T-402). `fs.watch` was
+   * for the Postgres `LISTEN/NOTIFY` implementation. `fs.watch` was
    * rejected due to platform-specific quirks (macOS coalescing, Linux
    * non-recursive behavior on subdir creation).
    *

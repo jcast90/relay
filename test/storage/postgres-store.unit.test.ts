@@ -125,6 +125,21 @@ describe("PostgresHarnessStore (unit, mocked pg)", () => {
       await store.listDocs("widgets", "alpha-");
       expect(calls[1]?.values).toEqual(["widgets", "alpha-"]);
     });
+
+    it("escapes LIKE metacharacters and uses an explicit ESCAPE clause", async () => {
+      const { pool, calls } = makePoolMock();
+      const store = new PostgresHarnessStore({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        pool: pool as any
+      });
+
+      await store.listDocs("widgets", "alpha_b%c\\d");
+
+      expect(calls[0]?.text).toContain("id LIKE $2 || '%' ESCAPE '\\'");
+      // `_`, `%`, and `\` in the caller's prefix should all be backslash-
+      // escaped so Postgres treats them as literal characters.
+      expect(calls[0]?.values).toEqual(["widgets", "alpha\\_b\\%c\\\\d"]);
+    });
   });
 
   describe("mutate", () => {
@@ -149,7 +164,11 @@ describe("PostgresHarnessStore (unit, mocked pg)", () => {
       expect(next).toEqual({ count: 2 });
       const texts = clientCalls.map((c) => c.text);
       expect(texts[0]).toBe("BEGIN");
-      expect(texts[1]).toMatch(/SELECT doc.*FOR UPDATE/);
+      // Advisory lock fires before the row SELECT so concurrent callers
+      // serialize on the same (ns, id) slot even when the row doesn't yet
+      // exist (SELECT ... FOR UPDATE alone returns 0 rows in that case).
+      expect(texts[1]).toMatch(/pg_advisory_xact_lock/);
+      expect(texts[2]).toMatch(/SELECT doc.*FOR UPDATE/);
       expect(texts.some((t) => /INSERT INTO harness_docs/.test(t))).toBe(true);
       expect(texts[texts.length - 1]).toBe("COMMIT");
     });
@@ -282,6 +301,24 @@ describe("PostgresHarnessStore (unit, mocked pg)", () => {
     it("requires pool or connectionString", () => {
       expect(() => new PostgresHarnessStore({})).toThrow(
         /requires `pool` or `connectionString`/
+      );
+    });
+  });
+
+  describe("watch ns length guard", () => {
+    it("rejects ns longer than 48 chars so LISTEN channel doesn't truncate", () => {
+      const { pool } = makePoolMock();
+      const store = new PostgresHarnessStore({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        pool: pool as any,
+        connectionString: "postgres://x"
+      });
+      const tooLong = "x".repeat(49);
+      // Postgres truncates identifiers at 63 bytes. `harness_change_`
+      // (15 chars) + 48-char ns = exactly 63 — anything longer loses
+      // bytes off the tail so LISTEN and NOTIFY would disagree.
+      expect(() => store.watch(tooLong, "id1")).toThrow(
+        /ns exceeds 48 chars/
       );
     });
   });

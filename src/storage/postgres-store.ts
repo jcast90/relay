@@ -9,6 +9,15 @@ import type {
 } from "./store.js";
 
 /**
+ * Postgres channel names truncate at 63 bytes. The prefix `harness_change_`
+ * is 15 characters, leaving 48 for the `ns`. Callers that violate this would
+ * silently LISTEN on one identifier and NOTIFY from a different (truncated)
+ * identifier — events would never land. The trigger in `001_init.sql` emits
+ * the untruncated string; both sides of the contract rely on this cap.
+ */
+const MAX_WATCH_NS_LENGTH = 48;
+
+/**
  * Postgres-backed `HarnessStore`. Same contract as `FileHarnessStore`, with
  * durability and cross-process coordination earned via the database:
  *
@@ -34,7 +43,9 @@ interface WatchSubscription {
   expectedId: string;
   queue: ChangeEvent[];
   resolveWaiter: ((event: ChangeEvent | null) => void) | null;
+  rejectWaiter: ((err: unknown) => void) | null;
   closed: boolean;
+  error: unknown;
 }
 
 export class PostgresHarnessStore implements HarnessStore {
@@ -77,11 +88,19 @@ export class PostgresHarnessStore implements HarnessStore {
         sub.closed = true;
         sub.resolveWaiter?.(null);
       }
-      await entry.client.end().catch(() => {});
+      await entry.client.end().catch((err) => {
+        console.warn(
+          `[postgres-store] LISTEN client.end() failed during close(): ${err instanceof Error ? err.message : String(err)}`
+        );
+      });
     }
     this.listenClients.clear();
     if (this.ownsPool) {
-      await this.pool.end().catch(() => {});
+      await this.pool.end().catch((err) => {
+        console.warn(
+          `[postgres-store] pool.end() failed during close(): ${err instanceof Error ? err.message : String(err)}`
+        );
+      });
     }
   }
 
@@ -110,12 +129,18 @@ export class PostgresHarnessStore implements HarnessStore {
 
   async listDocs<T>(ns: string, prefix?: string): Promise<T[]> {
     assertSafeSegment(ns, "ns");
+    // Escape LIKE metacharacters so a prefix containing `_` or `%` matches
+    // literally, mirroring FileHarnessStore.listDocs which uses
+    // `String.startsWith`. Without this, a prefix of `a_b` would match
+    // `axb`, `aab`, etc., diverging from the contract.
+    const escapedPrefix =
+      prefix !== undefined ? prefix.replace(/[\\%_]/g, "\\$&") : null;
     const result = await this.pool.query<{ doc: T }>(
       `SELECT doc FROM harness_docs
        WHERE ns = $1
-         AND ($2::text IS NULL OR id LIKE $2 || '%')
+         AND ($2::text IS NULL OR id LIKE $2 || '%' ESCAPE '\\')
        ORDER BY id`,
-      [ns, prefix ?? null]
+      [ns, escapedPrefix]
     );
     return result.rows.map((r) => r.doc);
   }
@@ -238,6 +263,20 @@ export class PostgresHarnessStore implements HarnessStore {
     return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
   }
 
+  /**
+   * Atomic read-modify-write keyed on `(ns, id)`. Cross-process serialization
+   * is enforced by a transaction-scoped Postgres advisory lock derived from
+   * `hashtextextended(ns || '\0' || id, 0)`. Two callers racing on a fresh
+   * key therefore queue on the same advisory slot and see consistent `prev`
+   * values — `SELECT ... FOR UPDATE` alone is insufficient because it
+   * returns zero rows for a non-existent key, so both callers would see
+   * `prev=null` and both would compute `next` from stale state.
+   *
+   * The transaction also holds a row-level `FOR UPDATE` lock once the row
+   * exists. `fn` runs inside the transaction; if it throws the transaction
+   * is rolled back and no row is modified. `fn` itself should be pure and
+   * fast — the row lock is held for its entire runtime.
+   */
   async mutate<T>(
     ns: string,
     id: string,
@@ -248,6 +287,19 @@ export class PostgresHarnessStore implements HarnessStore {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      // Advisory lock serializes concurrent mutate() callers on the same
+      // (ns, id), including when the row does not yet exist. The lock key
+      // is derived server-side from the composite identifier so all
+      // processes hash to the same slot. `/` is a safe separator because
+      // `assertSafeSegment` already bans it from both `ns` and `id`, so no
+      // two distinct pairs can collide in the concatenated form. A null
+      // byte (`E'\0'`) is rejected by Postgres's UTF8 input at parse time
+      // so we deliberately avoid it even though it would be a more obvious
+      // delimiter.
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1 || '/' || $2, 0))",
+        [ns, id]
+      );
       const existing = await client.query<{ doc: T }>(
         "SELECT doc FROM harness_docs WHERE ns = $1 AND id = $2 FOR UPDATE",
         [ns, id]
@@ -267,7 +319,11 @@ export class PostgresHarnessStore implements HarnessStore {
       await client.query("COMMIT");
       return next;
     } catch (err) {
-      await client.query("ROLLBACK").catch(() => {});
+      await client.query("ROLLBACK").catch((rollbackErr) => {
+        console.warn(
+          `[postgres-store] ROLLBACK failed in mutate(${ns}/${id}): ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`
+        );
+      });
       throw err;
     } finally {
       client.release();
@@ -277,6 +333,14 @@ export class PostgresHarnessStore implements HarnessStore {
   watch(ns: string, id: string): AsyncIterable<ChangeEvent> {
     assertSafeSegment(ns, "ns");
     assertSafeSegment(id, "id");
+    if (ns.length > MAX_WATCH_NS_LENGTH) {
+      // Postgres identifiers truncate at 63 bytes. `harness_change_` is 15
+      // chars, leaving 48 for the ns. Reject early rather than silently
+      // LISTEN on the truncated channel (and miss events).
+      throw new Error(
+        `watch(): ns exceeds ${MAX_WATCH_NS_LENGTH} chars (would truncate Postgres LISTEN channel): ${ns}`
+      );
+    }
 
     // Manual AsyncIterator so `return()` can wake a pending waiter and run
     // cleanup synchronously. An async generator would deadlock — the pending
@@ -288,12 +352,20 @@ export class PostgresHarnessStore implements HarnessStore {
     const iterator: AsyncIterator<ChangeEvent> = {
       async next(): Promise<IteratorResult<ChangeEvent>> {
         const sub = await subPromise;
+        if (sub.error) {
+          const err = sub.error;
+          sub.error = null;
+          throw err;
+        }
         if (sub.closed) return { value: undefined, done: true };
         const queued = sub.queue.shift();
         if (queued) return { value: queued, done: false };
-        const event = await new Promise<ChangeEvent | null>((resolve) => {
-          sub.resolveWaiter = resolve;
-        });
+        const event = await new Promise<ChangeEvent | null>(
+          (resolve, reject) => {
+            sub.resolveWaiter = resolve;
+            sub.rejectWaiter = reject;
+          }
+        );
         if (event === null) return { value: undefined, done: true };
         return { value: event, done: false };
       },
@@ -323,7 +395,9 @@ export class PostgresHarnessStore implements HarnessStore {
       expectedId: id,
       queue: [],
       resolveWaiter: null,
-      closed: false
+      rejectWaiter: null,
+      closed: false,
+      error: null
     };
 
     let entry = this.listenClients.get(ns);
@@ -340,10 +414,14 @@ export class PostgresHarnessStore implements HarnessStore {
 
       client.on("notification", (msg) => {
         if (!msg.payload) return;
+        const channel = msg.channel;
         let parsed: { id?: string; kind?: string };
         try {
           parsed = JSON.parse(msg.payload) as { id?: string; kind?: string };
-        } catch {
+        } catch (err) {
+          console.warn(
+            `[postgres-store] malformed watch payload on channel ${channel}: ${err instanceof Error ? err.message : String(err)}`
+          );
           return;
         }
         const kind = parsed.kind;
@@ -352,12 +430,17 @@ export class PostgresHarnessStore implements HarnessStore {
         const target = this.listenClients.get(ns);
         if (!target) return;
         for (const s of target.subscribers) {
+          // A subscriber may have been unsubscribed between NOTIFY arrival
+          // and the handler running; skip closed subs so we never push into
+          // a queue nobody will read.
+          if (s.closed) continue;
           // Filter at the subscriber so one LISTEN connection can fan out to
           // many watchers on the same ns keyed by different ids.
           if (event.id !== s.expectedId) continue;
           if (s.resolveWaiter) {
             const r = s.resolveWaiter;
             s.resolveWaiter = null;
+            s.rejectWaiter = null;
             r(event);
           } else {
             s.queue.push(event);
@@ -365,12 +448,18 @@ export class PostgresHarnessStore implements HarnessStore {
         }
       });
 
-      client.on("error", () => {
+      client.on("error", (err) => {
         const target = this.listenClients.get(ns);
         if (!target) return;
         for (const s of target.subscribers) {
+          s.error = err;
           s.closed = true;
-          if (s.resolveWaiter) {
+          if (s.rejectWaiter) {
+            const reject = s.rejectWaiter;
+            s.rejectWaiter = null;
+            s.resolveWaiter = null;
+            reject(err);
+          } else if (s.resolveWaiter) {
             const r = s.resolveWaiter;
             s.resolveWaiter = null;
             r(null);
@@ -394,6 +483,7 @@ export class PostgresHarnessStore implements HarnessStore {
     if (sub.resolveWaiter) {
       const r = sub.resolveWaiter;
       sub.resolveWaiter = null;
+      sub.rejectWaiter = null;
       r(null);
     }
     const entry = this.listenClients.get(ns);
@@ -402,10 +492,16 @@ export class PostgresHarnessStore implements HarnessStore {
     entry.refCount--;
     if (entry.refCount <= 0) {
       this.listenClients.delete(ns);
-      await entry.client
-        .query(`UNLISTEN ${quoteChannel(ns)}`)
-        .catch(() => {});
-      await entry.client.end().catch(() => {});
+      await entry.client.query(`UNLISTEN ${quoteChannel(ns)}`).catch((err) => {
+        console.warn(
+          `[postgres-store] UNLISTEN failed for ns ${ns}: ${err instanceof Error ? err.message : String(err)}`
+        );
+      });
+      await entry.client.end().catch((err) => {
+        console.warn(
+          `[postgres-store] LISTEN client.end() failed during unsubscribe(${ns}): ${err instanceof Error ? err.message : String(err)}`
+        );
+      });
     }
   }
 

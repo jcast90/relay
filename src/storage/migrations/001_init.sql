@@ -39,6 +39,11 @@ CREATE TABLE IF NOT EXISTS harness_blobs (
 -- pg_notify from triggers instead of call sites so a future caller that
 -- inserts directly (e.g. an admin SQL session) still emits the event and
 -- watchers don't silently go stale.
+--
+-- Channel name cap: Postgres identifiers truncate at 63 bytes. The prefix
+-- `harness_change_` is 15 chars, leaving 48 for `ns`. The application layer
+-- (`postgres-store.ts` `watch()` guard and `MAX_WATCH_NS_LENGTH`) rejects
+-- any `ns` longer than 48 so LISTEN and NOTIFY agree on the same identifier.
 CREATE OR REPLACE FUNCTION harness_notify_change() RETURNS TRIGGER AS $$
 DECLARE
   change_kind TEXT;
