@@ -620,9 +620,12 @@ async function handlePrWatchCommand(args: string[]): Promise<void> {
   const input = args[0];
   const ticketId = parseNamedArg(args, "--ticket") ?? `manual-${Date.now()}`;
   const channelId = parseNamedArg(args, "--channel");
+  const branchHint = parseNamedArg(args, "--branch");
 
   if (!input) {
-    console.error("Usage: agent-harness pr-watch <pr-url-or-number> [--ticket <id>] [--channel <id>]");
+    console.error(
+      "Usage: agent-harness pr-watch <pr-url-or-number> [--ticket <id>] [--channel <id>] [--branch <branch>]"
+    );
     process.exitCode = 1;
     return;
   }
@@ -643,11 +646,23 @@ async function handlePrWatchCommand(args: string[]): Promise<void> {
     return;
   }
 
-  const pr = await resolvePrFromInput(input, watcher.repo, watcher.scm);
+  const pr = await resolvePrFromInput(input, watcher.repo, watcher.scm, branchHint);
   if (!pr) {
     console.error(`Could not resolve PR from "${input}". Provide a full GitHub URL or a PR number.`);
     process.exitCode = 1;
     return;
+  }
+
+  if (!pr.branch && branchHint) {
+    // Explicit branch flag wins over synthesised empty — surfaces in follow-up
+    // prompts that interpolate entry.pr.branch into git push instructions.
+    pr.branch = branchHint;
+  } else if (!pr.branch) {
+    console.warn(
+      "[pr-watch] tracking with empty branch — CI/review transitions will surface, " +
+        "but fix-ci / address-reviews follow-up prompts will lack a branch for git push. " +
+        "Pass --branch <branch> to populate it."
+    );
   }
 
   watcher.track({
@@ -704,22 +719,35 @@ async function handlePrStatusCommand(args: string[] = []): Promise<void> {
 }
 
 /**
- * Accept either a full GitHub PR URL or a bare number. Bare numbers require
- * the watcher to know the repo; detectPR won't work for numbers, so we parse
- * the URL ourselves or synthesize a minimal `HarnessPR` for numbers.
+ * Resolve a PR reference into a `HarnessPR`.
  *
- * For URL mode we still want the branch, so we ask the SCM to resolve the
- * ref. AO's SCM doesn't expose a `getPR(number)` today, so we fall back to a
- * best-effort `detectPR(branch)` if the caller provides `--branch`; otherwise
- * we stash an empty branch. Empty-branch tracking still surfaces CI/review
- * transitions via `enrichBatch`, which is what the poller consumes.
+ * - `https://github.com/owner/name/pull/123` URLs and bare `123` / `#123`
+ *   numbers both work.
+ * - If a `branchHint` is supplied, we first try `scm.detectPR(branchHint, repo)`
+ *   so we can fill in the actual branch (used by fix-ci / address-reviews
+ *   follow-up prompts that interpolate `pr.branch` into git push commands).
+ * - When we can't learn the branch, we synthesise a `HarnessPR` with an empty
+ *   branch. Empty-branch tracking still surfaces CI/review transitions via
+ *   `enrichBatch`, which is what the poller consumes.
  */
 async function resolvePrFromInput(
   input: string,
   repo: { owner: string; name: string },
-  _scm: { detectPR: (branch: string, repo: { owner: string; name: string }) => Promise<HarnessPR | null> }
+  scm: { detectPR: (branch: string, repo: { owner: string; name: string }) => Promise<HarnessPR | null> },
+  branchHint?: string
 ): Promise<HarnessPR | null> {
   const trimmed = input.trim();
+
+  if (branchHint) {
+    try {
+      const viaBranch = await scm.detectPR(branchHint, repo);
+      if (viaBranch) return viaBranch;
+    } catch {
+      // Fall through to URL/number parsing. A transient SCM failure shouldn't
+      // block manual tracking.
+    }
+  }
+
   // https://github.com/owner/name/pull/123
   const urlMatch = trimmed.match(
     /^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+?)\/pull\/(\d+)(?:[/?#].*)?$/i
@@ -729,7 +757,7 @@ async function resolvePrFromInput(
     return {
       number,
       url: `https://github.com/${urlMatch[1]}/${urlMatch[2]}/pull/${number}`,
-      branch: ""
+      branch: branchHint ?? ""
     };
   }
 
@@ -739,7 +767,7 @@ async function resolvePrFromInput(
     return {
       number,
       url: `https://github.com/${repo.owner}/${repo.name}/pull/${number}`,
-      branch: ""
+      branch: branchHint ?? ""
     };
   }
 

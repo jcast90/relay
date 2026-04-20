@@ -274,6 +274,13 @@ export function createPrWatcherFactory(opts: CreateFactoryOpts): PollerFactory {
               return poller?.listTracked() ?? [];
             }
           };
+          if (activeWatcher && activeWatcher.handle !== handle) {
+            console.warn(
+              "[pr-watcher] replacing previously-active watcher singleton — " +
+                "concurrent orchestrator runs in the same process will share a single " +
+                "`pr-watch` target. File-based routing will arrive in a follow-up."
+            );
+          }
           activeWatcher = { handle, view };
 
           // Branch-detection loop: cheap-ish, uses the same cadence as the
@@ -345,6 +352,18 @@ async function scanCompletedTickets(input: {
 }): Promise<void> {
   const channelId = input.run.channelId ?? input.defaultChannelId;
   if (!channelId) return; // Nowhere to post status updates — skip.
+
+  // Release auto-track entries for tickets that went back to a non-completed
+  // status (e.g. a retry). Without this, a ticket that completes, retries, and
+  // re-completes would skip re-detection — which matters if the retry pushed to
+  // a different branch, or if the initial detectPR returned null and the later
+  // retry actually produced the PR.
+  for (const ticketId of Array.from(input.autoTracked)) {
+    const ledgerEntry = input.run.ticketLedger.find((t) => t.ticketId === ticketId);
+    if (!ledgerEntry || ledgerEntry.status !== "completed") {
+      input.autoTracked.delete(ticketId);
+    }
+  }
 
   for (const entry of input.run.ticketLedger) {
     if (entry.status !== "completed") continue;
