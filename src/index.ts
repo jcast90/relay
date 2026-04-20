@@ -847,7 +847,9 @@ async function printTaskBoard(channelId: string, args: string[] = []): Promise<v
 
   // Unified ticket board: channel-scoped file is the live source for both
   // chat-created and orchestrator-generated tickets. Fall back to the per-run
-  // ledgers only if the channel board is empty (legacy data).
+  // ledgers only if the channel board is empty (legacy data written before
+  // the unification in PR #10). Remove the fallback once all workspaces have
+  // a non-empty channel board.
   const board: Record<string, Array<{ ticketId: string; title: string }>> = {};
   const channelTickets = await store.readChannelTickets(channelId);
 

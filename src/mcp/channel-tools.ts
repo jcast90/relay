@@ -179,7 +179,8 @@ export async function callChannelTool(
       // Unified ticket board: channel-scoped file is the live source for both
       // chat-created and orchestrator-generated tickets. Fall back to the
       // per-run ledgers only if the channel board is empty (legacy data
-      // written before unification).
+      // written before the unification in PR #10). Remove the fallback once
+      // all workspaces have a non-empty channel board.
       const channelTickets = await store.readChannelTickets(channelId);
 
       if (channelTickets.length > 0) {

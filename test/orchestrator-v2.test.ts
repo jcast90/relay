@@ -7,12 +7,17 @@ import { describe, expect, it } from "vitest";
 import { AgentRegistry } from "../src/agents/registry.js";
 import { createLiveAgents } from "../src/agents/factory.js";
 import { NodeCommandInvoker } from "../src/agents/command-invoker.js";
+import { ChannelStore } from "../src/channels/channel-store.js";
 import { LocalArtifactStore } from "../src/execution/artifact-store.js";
 import { VerificationRunner } from "../src/execution/verification-runner.js";
 import { OrchestratorV2 } from "../src/orchestrator/orchestrator-v2.js";
 import { ScriptedInvoker } from "../src/simulation/scripted-invoker.js";
 
-function buildOrchestrator(cwd: string, artifactsDir: string) {
+function buildOrchestrator(
+  cwd: string,
+  artifactsDir: string,
+  opts: { channelStore?: ChannelStore; workspaceId?: string } = {}
+) {
   const registry = new AgentRegistry();
   const agents = createLiveAgents({
     cwd,
@@ -34,7 +39,9 @@ function buildOrchestrator(cwd: string, artifactsDir: string) {
     cwd,
     verificationRunner,
     artifactStore,
-    artifactsDir
+    artifactsDir,
+    opts.channelStore,
+    opts.workspaceId
   );
 }
 
@@ -140,6 +147,91 @@ describe("OrchestratorV2 integration", () => {
       // Verify runs index
       const runs = await artifactStore.readRunsIndex();
       expect(runs.some((r) => r.runId === run.id)).toBe(true);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("mirrors ticket ledger to the channel board on the regular decomposition path", async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), "orch-v2-test-"));
+    const artifactsDir = join(tmpDir, "artifacts");
+    const channelsDir = join(tmpDir, "channels");
+
+    try {
+      const channelStore = new ChannelStore(channelsDir);
+      const orchestrator = buildOrchestrator(tmpDir, artifactsDir, {
+        channelStore,
+        workspaceId: "ws-test"
+      });
+      const run = await orchestrator.run(
+        "Implement a new authentication system with JWT tokens and session management"
+      );
+
+      expect(run.channelId).not.toBeNull();
+      const boardTickets = await channelStore.readChannelTickets(run.channelId!);
+      expect(boardTickets.length).toBe(run.ticketLedger.length);
+      for (const entry of boardTickets) {
+        expect(entry.runId).toBe(run.id);
+      }
+      const boardIds = boardTickets.map((t) => t.ticketId).sort();
+      const ledgerIds = run.ticketLedger.map((t) => t.ticketId).sort();
+      expect(boardIds).toEqual(ledgerIds);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("mirrors ticket ledger to the channel board on the trivial fast-track path", async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), "orch-v2-test-"));
+    const artifactsDir = join(tmpDir, "artifacts");
+    const channelsDir = join(tmpDir, "channels");
+
+    try {
+      const channelStore = new ChannelStore(channelsDir);
+      const orchestrator = buildOrchestrator(tmpDir, artifactsDir, {
+        channelStore,
+        workspaceId: "ws-test"
+      });
+      const run = await orchestrator.run("Fix typo in README");
+
+      expect(run.classification!.tier).toBe("trivial");
+      expect(run.channelId).not.toBeNull();
+      const boardTickets = await channelStore.readChannelTickets(run.channelId!);
+      expect(boardTickets.length).toBeGreaterThan(0);
+      expect(boardTickets[0].runId).toBe(run.id);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("continues the run when the channel store mirror throws", async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), "orch-v2-test-"));
+    const artifactsDir = join(tmpDir, "artifacts");
+    const channelsDir = join(tmpDir, "channels");
+
+    try {
+      const channelStore = new ChannelStore(channelsDir);
+      // Force upsert to fail for the duration of the run.
+      const originalUpsert = channelStore.upsertChannelTickets.bind(channelStore);
+      channelStore.upsertChannelTickets = async () => {
+        throw new Error("simulated write failure");
+      };
+
+      const orchestrator = buildOrchestrator(tmpDir, artifactsDir, {
+        channelStore,
+        workspaceId: "ws-test"
+      });
+      const run = await orchestrator.run(
+        "Implement a new authentication system with JWT tokens and session management"
+      );
+
+      // Run still completes the per-run ledger even though the mirror failed.
+      expect(run.ticketLedger.length).toBeGreaterThan(0);
+
+      // Restore and verify the channel board is empty as expected.
+      channelStore.upsertChannelTickets = originalUpsert;
+      const boardTickets = await channelStore.readChannelTickets(run.channelId!);
+      expect(boardTickets).toEqual([]);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }

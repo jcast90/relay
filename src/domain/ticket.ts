@@ -75,7 +75,13 @@ export interface TicketLedgerEntry {
   startedAt: string | null;
   completedAt: string | null;
   updatedAt: string;
-  /** Orchestrator run this ticket was decomposed from, or null for chat-created. */
+  /**
+   * ID of the orchestrator run that produced this entry; null when the
+   * ticket was created directly via chat rather than run decomposition.
+   * Set at `initializeTicketLedger` and not rewritten afterward — `upsert`
+   * replaces the full entry, so downstream stages that stamp a new runId
+   * must do so by re-initializing, not by patching this field in place.
+   */
   runId: string | null;
 }
 

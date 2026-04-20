@@ -1,12 +1,16 @@
 /**
  * One-shot seeder: creates a synthetic Relay run for the storage/executor/MCP
  * refactor plan, writes the unified channel ticket board, and links the run
- * so both `rly board <channelId>` and the GUI render the 23 tickets.
+ * so both `rly board <channelId>` and the GUI render the plan's tickets.
  *
  * Usage:
  *   tsx scripts/seed-plan-tickets.ts <channelId>
+ *   RELAY_REPO=/path/to/other/repo tsx scripts/seed-plan-tickets.ts <channelId>
  *
- * Idempotency: not provided — each invocation creates a new run and overwrites
+ * Repo resolution: `RELAY_REPO` env var wins; otherwise `process.cwd()` is
+ * used so the seeder works on any machine without editing source.
+ *
+ * Idempotency: not provided — each invocation creates a new run and upserts
  * the channel board. Archive/remove unwanted runs manually if re-seeded.
  */
 
@@ -23,7 +27,7 @@ import {
 import { buildRunId } from "../src/orchestrator/orchestrator-v2.js";
 import { join } from "node:path";
 
-const REPO = "/Users/jonathanlancaster/projects/agent-harness";
+const REPO = process.env.RELAY_REPO ?? process.cwd();
 
 type Phase = 0 | 1 | 2 | 3 | 4 | 5;
 type Effort = "S" | "M" | "L";
