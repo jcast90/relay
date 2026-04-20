@@ -7,7 +7,12 @@ import type {
   ExecutionStatus,
   ExecutorStartOptions
 } from "./executor.js";
-import type { RepoRef, SandboxProvider, SandboxRef } from "./sandbox.js";
+import type {
+  DestroyResult,
+  RepoRef,
+  SandboxProvider,
+  SandboxRef
+} from "./sandbox.js";
 import { resolveLocalPath } from "./sandbox.js";
 
 export class NoopSandboxProvider implements SandboxProvider {
@@ -25,10 +30,12 @@ export class NoopSandboxProvider implements SandboxProvider {
     };
   }
 
-  async destroy(ref: SandboxRef): Promise<void> {
-    // Idempotent: missing entries are a silent no-op so callers can retry
-    // destroy without guarding on existence.
-    this.refs.delete(ref.id);
+  async destroy(ref: SandboxRef): Promise<DestroyResult> {
+    // Idempotent: `Set#delete` already reports whether the id was present;
+    // surface that as the discriminated result so callers (and tests) can
+    // tell a real removal from a no-op retry.
+    const hadRef = this.refs.delete(ref.id);
+    return hadRef ? { kind: "removed" } : { kind: "missing" };
   }
 }
 

@@ -27,11 +27,34 @@ export interface RepoRef {
   remoteUrl?: string;
 }
 
+/**
+ * Discriminated outcome of {@link SandboxProvider.destroy}.
+ *
+ * Callers (and crash-recovery tooling) must be able to tell these three cases
+ * apart — a bare `void` collapses them into an apparent success and hides the
+ * "preserved" case where uncommitted work is sitting on disk, waiting to be
+ * salvaged.
+ *
+ * - `removed` — the sandbox was torn down successfully.
+ * - `preserved` — the backing store refused to delete (e.g. a git worktree
+ *   reported modified/untracked files) and the provider deliberately did NOT
+ *   force-delete; on-disk state is intact for recovery.
+ * - `missing` — nothing to remove. Either the sandbox was never created, or
+ *   a previous `destroy` already removed it (idempotent retry).
+ */
+export type DestroyResult =
+  | { kind: "removed" }
+  | { kind: "preserved"; reason: "dirty"; stderr: string }
+  | { kind: "missing" };
+
 export interface SandboxProvider {
   /** Create a sandbox rooted at `base` (typically a branch or commit ref). */
   create(repo: RepoRef, base: string): Promise<SandboxRef>;
-  /** Destroy the sandbox. Idempotent — calling on a missing sandbox is a no-op. */
-  destroy(ref: SandboxRef): Promise<void>;
+  /**
+   * Destroy the sandbox. Idempotent — calling on a missing sandbox resolves
+   * to `{ kind: "missing" }` rather than throwing. See {@link DestroyResult}.
+   */
+  destroy(ref: SandboxRef): Promise<DestroyResult>;
 }
 
 /**

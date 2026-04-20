@@ -60,12 +60,15 @@ describe("NoopSandboxProvider", () => {
     expect(a.id).not.toBe(b.id);
   });
 
-  it("destroy is idempotent", async () => {
+  it("destroy is idempotent and reports removed/missing via the discriminated result", async () => {
     const provider = new NoopSandboxProvider();
     const ref = await provider.create(repo, "main");
 
-    await provider.destroy(ref);
-    await expect(provider.destroy(ref)).resolves.toBeUndefined();
+    await expect(provider.destroy(ref)).resolves.toEqual({ kind: "removed" });
+    // Second call: the id is gone from the internal set, so it resolves to
+    // `missing` rather than silently succeeding. Callers (and T-203) need
+    // this distinction to tell a real teardown from a redundant retry.
+    await expect(provider.destroy(ref)).resolves.toEqual({ kind: "missing" });
     // resolveLocalPath is a pure function of the ref — it stays valid even
     // after destroy. The destroyed-ness lives in the provider's own state;
     // that's intentional for the free-function design.
