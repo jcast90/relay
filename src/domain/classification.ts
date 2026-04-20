@@ -20,7 +20,13 @@ export const ClassificationResultSchema = z.object({
   estimatedTicketCount: z.number().int().min(1).max(50),
   needsDesignDoc: z.boolean(),
   needsUserApproval: z.boolean(),
-  crosslinkRepos: z.array(z.string()).default([])
+  crosslinkRepos: z.array(z.string()).default([]),
+  /**
+   * Branch name suggested by a tracker plugin (GitHub/Linear) when the request
+   * was an issue URL or bare Linear identifier. Purely advisory — callers may
+   * use it to seed worktree names for downstream tickets.
+   */
+  suggestedBranch: z.string().optional()
 });
 
 export type ClassificationResult = z.infer<typeof ClassificationResultSchema>;

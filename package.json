@@ -31,5 +31,11 @@
     "typescript": "^5.9.3",
     "vitest": "^3.2.4",
     "zod": "^3.24.4"
+  },
+  "dependencies": {
+    "@aoagents/ao-core": "0.2.5",
+    "@aoagents/ao-plugin-scm-github": "0.2.5",
+    "@aoagents/ao-plugin-tracker-github": "0.2.5",
+    "@aoagents/ao-plugin-tracker-linear": "0.2.5"
   }
 }

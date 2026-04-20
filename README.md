@@ -110,6 +110,27 @@ pnpm gui:build    # produce a release .app/.dmg
 
 The Rust backend in `gui/src-tauri/` shares `crates/harness-data` with the TUI, so both read the same `~/.agent-harness/` files.
 
+## Tracker & PR integrations
+
+Harness consumes Composio's [`@aoagents/ao-core`](https://www.npmjs.com/package/@aoagents/ao-core) plugin packages for issue-tracker and SCM integrations. No plugin from their stack runs harness itself — we import only the leaf adapters.
+
+### Issue-URL ingestion
+
+If the first argument to the classifier is a GitHub or Linear issue URL (or a bare Linear key like `ABC-123`), the harness fetches the full issue (title, body, labels, branch hint) and feeds it into classification. Classifier output carries an optional `suggestedBranch` so downstream ticket creation can match the tracker's native branch name.
+
+Tokens are read from the environment:
+
+- `GITHUB_TOKEN` — GitHub issues + PR watcher
+- `LINEAR_API_KEY` (or `COMPOSIO_API_KEY`) — Linear issues
+
+### PR watcher
+
+`src/integrations/pr-poller.ts` polls all tracked PRs via `enrichSessionsPRBatch` (30s by default). State transitions (CI pass→fail, review pending→changes_requested, PR merged/closed) post `status_update` entries into the ticket's channel. CI failures and change-request reviews emit a `FollowUpRequest` through an injected `FollowUpDispatcher`; wiring that dispatcher into the scheduler so it creates real follow-up tickets is the next piece of work.
+
+### AO-compatible notifier
+
+`src/channels/ao-notifier.ts` exports `HarnessChannelNotifier` implementing AO's `Notifier` interface on top of the channel store. If you ever run Composio's `ao` orchestrator, harness can be plugged in as its notifier without a rewrite.
+
 ## Flags
 
 - `HARNESS_LIVE=1` — use real Claude/Codex adapters instead of scripted simulation
