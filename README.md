@@ -30,6 +30,8 @@ pnpm install && pnpm build && pnpm link --global
 
 ## Getting started
 
+> **Shortcut:** run `rly welcome` for a 6-step interactive tour that covers everything below plus auto-approve and the dashboards. Full reference in [`docs/getting-started.md`](docs/getting-started.md).
+
 1. **Register a repo.** From inside any repo you want Relay to manage:
 
    ```bash
@@ -119,6 +121,7 @@ The **TUI** (`rly tui`, built with `--with-tui`) and **GUI** (built with `--with
 | `rly tui` | Launch the ratatui dashboard (auto-builds on first run) |
 | `rly gui` | Launch the Tauri desktop app (auto-builds on first run; `--dev` for hot reload) |
 | `rly rebuild` | Rebuild the TS dist; `--tui` / `--gui` / `--all` to rebuild more |
+| `rly welcome` | 6-step interactive tour of Relay's concepts and commands |
 
 `agent-harness <cmd>` is accepted as a legacy alias for `rly <cmd>` — both binaries are shipped so existing scripts don't break. `rly` reads current TypeScript source by default (via `tsx`), so a rebuild is **not** required after `git pull`. Set `RELAY_USE_DIST=1` for the compiled dist if you want slightly faster startup.
 

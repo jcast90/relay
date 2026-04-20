@@ -17,6 +17,7 @@ import { AgentRegistry } from "./agents/registry.js";
 import { launchGui, launchTui, parseGuiFlags } from "./cli/launch-gui-tui.js";
 import { parseRebuildFlags, runRebuild } from "./cli/rebuild.js";
 import { launchInteractiveCommand } from "./cli/launcher.js";
+import { hasOnboarded, parseWelcomeFlags, runWelcome } from "./cli/welcome.js";
 import {
   ensureHarnessWorkspace,
   type HarnessServiceStatus,
@@ -130,6 +131,11 @@ export async function main(): Promise<void> {
     return;
   }
 
+  if (command === "welcome") {
+    process.exitCode = await runWelcome(parseWelcomeFlags(args));
+    return;
+  }
+
   if (command === "channels") {
     await printChannels(args);
     return;
@@ -176,6 +182,13 @@ export async function main(): Promise<void> {
   }
 
   if (command === "claude" || command === "codex" || command.startsWith("claude-") || command.startsWith("codex-")) {
+    // First-run nudge: print a one-liner pointing at `rly welcome` if the
+    // user hasn't done the tour. Non-blocking.
+    if (!hasOnboarded()) {
+      console.log(
+        "\x1b[2mTip: `rly welcome` walks through channels, sessions, board, and auto-approve.\x1b[0m"
+      );
+    }
     const cliEntrypoint = resolveCliEntrypoint();
     const attachHarnessMcp = !hasHarnessMcpOptOut(args);
     const autoApprove = isAutoApproveEnabled(args);
