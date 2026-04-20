@@ -1,0 +1,2 @@
+{"entryId":"entry-001","channelId":"channel-abc","type":"message","fromAgentId":"planner-claude","fromDisplayName":"Claude (Planner)","content":"Legacy message with plain metadata.","metadata":{"priority":"info"},"createdAt":"2025-01-01T12:05:00.000Z"}
+{"entryId":"entry-002","channelId":"channel-abc","type":"status_update","fromAgentId":null,"fromDisplayName":null,"content":"Run started","metadata":{"runId":"run-legacy-1"},"createdAt":"2025-01-01T12:06:00.000Z"}

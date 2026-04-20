@@ -10,6 +10,7 @@ import {
 } from "../cli/workspace-registry.js";
 import { OrchestratorV2, buildRunId } from "./orchestrator-v2.js";
 import { createPrWatcherFactory } from "../cli/pr-watcher-factory.js";
+import { getHarnessStore } from "../storage/factory.js";
 
 export interface DispatchInput {
   featureRequest: string;
@@ -35,7 +36,7 @@ export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
   const workspaceId = buildWorkspaceId(repoPath);
   const artifactsDir = `${getWorkspaceDir(workspaceId)}/artifacts`;
   const artifactStore = new LocalArtifactStore(artifactsDir);
-  const channelStore = new ChannelStore();
+  const channelStore = new ChannelStore(undefined, getHarnessStore());
 
   // Ensure agents are registered
   const defaultProvider = (process.env.HARNESS_PROVIDER ?? "claude") as "claude" | "codex";
