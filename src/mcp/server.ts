@@ -22,7 +22,7 @@ import {
   type CrosslinkToolState
 } from "../crosslink/tools.js";
 
-interface JsonRpcMessage {
+export interface JsonRpcMessage {
   jsonrpc: "2.0";
   id?: string | number | null;
   method?: string;
@@ -34,7 +34,24 @@ interface JsonRpcMessage {
   };
 }
 
-export async function startMcpServer(workspaceRoot: string): Promise<void> {
+export type McpMessageHandler = (message: JsonRpcMessage) => Promise<JsonRpcMessage | null>;
+
+export interface McpHandlerContext {
+  workspaceRoot: string;
+  artifactStore: LocalArtifactStore;
+  crosslinkState: CrosslinkToolState;
+  channelState: ChannelToolState;
+  cleanup: () => void;
+}
+
+/**
+ * Build the JSON-RPC message handler + supporting state for an MCP server
+ * instance. Shared between the stdio and HTTP/SSE transports so both paths
+ * serve the same tool surface.
+ */
+export async function buildMcpMessageHandler(
+  workspaceRoot: string
+): Promise<{ handler: McpMessageHandler; context: McpHandlerContext }> {
   const paths = getHarnessWorkspacePaths(workspaceRoot);
   const artifactStore = new LocalArtifactStore(paths.artifactsDir);
   const crosslinkStore = new CrosslinkStore();
@@ -69,22 +86,31 @@ export async function startMcpServer(workspaceRoot: string): Promise<void> {
     }
   }, 30_000);
 
-  // Cleanup on exit
-  const cleanup = () => {
+  const cleanup = (): void => {
     clearInterval(heartbeatInterval);
     if (crosslinkState.sessionId) {
       crosslinkStore.deregisterSession(crosslinkState.sessionId).catch(() => {});
+      crosslinkState.sessionId = null;
     }
   };
 
-  process.on("exit", cleanup);
-  process.on("SIGTERM", () => { cleanup(); process.exit(0); });
-  process.on("SIGINT", () => { cleanup(); process.exit(0); });
+  const handler: McpMessageHandler = (message) =>
+    handleMessage(message, workspaceRoot, artifactStore, crosslinkState, channelState);
 
-  const transport = new StdioJsonRpcTransport((message) =>
-    handleMessage(message, workspaceRoot, artifactStore, crosslinkState, channelState)
-  );
+  return {
+    handler,
+    context: { workspaceRoot, artifactStore, crosslinkState, channelState, cleanup }
+  };
+}
 
+export async function startMcpServer(workspaceRoot: string): Promise<void> {
+  const { handler, context } = await buildMcpMessageHandler(workspaceRoot);
+
+  process.on("exit", context.cleanup);
+  process.on("SIGTERM", () => { context.cleanup(); process.exit(0); });
+  process.on("SIGINT", () => { context.cleanup(); process.exit(0); });
+
+  const transport = new StdioJsonRpcTransport(handler);
   transport.start();
 }
 

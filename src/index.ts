@@ -31,7 +31,8 @@ import {
 import { addProjectDir, readConfig, removeProjectDir } from "./cli/config.js";
 import { LocalArtifactStore } from "./execution/artifact-store.js";
 import { getHarnessStore } from "./storage/factory.js";
-import { startMcpServer } from "./mcp/server.js";
+import { buildMcpMessageHandler, startMcpServer } from "./mcp/server.js";
+import { startHttpMcpServer } from "./mcp/http-transport.js";
 import { VerificationRunner } from "./execution/verification-runner.js";
 import { Orchestrator } from "./orchestrator/orchestrator.js";
 import { OrchestratorV2 } from "./orchestrator/orchestrator-v2.js";
@@ -179,6 +180,11 @@ export async function main(): Promise<void> {
 
   if (command === "mcp-server") {
     await startMcpServer(resolveWorkspaceRoot(cwd, args));
+    return;
+  }
+
+  if (command === "serve") {
+    await handleServeCommand(cwd, args);
     return;
   }
 
@@ -1448,6 +1454,90 @@ async function readPackageVersion(): Promise<string> {
 
 function resolveCliEntrypoint(): string {
   return fileURLToPath(new URL("../dist/cli.js", import.meta.url));
+}
+
+async function handleServeCommand(cwd: string, args: string[]): Promise<void> {
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log("Usage: rly serve [--port <n>] [--host <host>] [--token <token>] [--workspace <id>]");
+    console.log("");
+    console.log("Starts an HTTP/SSE MCP server exposing Relay's tool surface.");
+    console.log("");
+    console.log("Options:");
+    console.log("  --port <n>       TCP port to bind (env: RELAY_PORT, default: 7420)");
+    console.log("  --host <host>    Host/interface (default: 127.0.0.1 / loopback only)");
+    console.log("  --token <token>  Require Authorization: Bearer <token> (env: RELAY_TOKEN)");
+    console.log("  --workspace <id> Workspace id (defaults to the current repo's registered id)");
+    console.log("");
+    console.log("For multi-host deployments pass BOTH --host 0.0.0.0 AND --token explicitly.");
+    return;
+  }
+
+  const portArg = parseNamedArg(args, "--port") ?? process.env.RELAY_PORT;
+  const port = portArg ? Number(portArg) : 7420;
+  if (!Number.isFinite(port) || port < 0 || port > 65535) {
+    console.error(`Invalid port: ${portArg}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const host = parseNamedArg(args, "--host") ?? "127.0.0.1";
+  const token = parseNamedArg(args, "--token") ?? process.env.RELAY_TOKEN;
+
+  let workspaceId = parseNamedArg(args, "--workspace");
+  if (!workspaceId) {
+    const workspaces = await listRegisteredWorkspaces();
+    const match = workspaces.find((w) => w.repoPath === cwd);
+    if (!match) {
+      console.error(
+        "No workspace id. Register the current repo with `rly up` or pass --workspace <id>."
+      );
+      process.exitCode = 1;
+      return;
+    }
+    workspaceId = match.workspaceId;
+  }
+
+  if (!token) {
+    console.warn(
+      "[rly serve] WARNING: no auth token — anyone who can reach this host:port can use the MCP server."
+    );
+    console.warn("           Set RELAY_TOKEN or pass --token <token> to require a Bearer token.");
+  }
+
+  if (host !== "127.0.0.1" && host !== "localhost" && !token) {
+    console.warn(
+      `[rly serve] WARNING: listening on non-loopback host "${host}" without auth. This is dangerous.`
+    );
+  }
+
+  const handle = await startHttpMcpServer(
+    async () => {
+      const { handler, context } = await buildMcpMessageHandler(cwd);
+      return { handler, cleanup: context.cleanup };
+    },
+    { port, host, authToken: token, workspaceId }
+  );
+
+  console.log(`Serving MCP at ${handle.url}`);
+  console.log(`Workspace: ${workspaceId}`);
+  console.log(`Auth: ${token ? "Bearer token required" : "none (loopback only recommended)"}`);
+  console.log("Press Ctrl+C to stop.");
+
+  let stopping = false;
+  const shutdown = async (signal: string) => {
+    if (stopping) return;
+    stopping = true;
+    console.log(`\n[rly serve] received ${signal}, shutting down...`);
+    try {
+      await handle.stop();
+    } catch (error) {
+      console.error("[rly serve] stop failed:", error instanceof Error ? error.message : error);
+    }
+    process.exit(0);
+  };
+
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
 }
 
 function resolveWorkspaceRoot(cwd: string, args: string[]): string {
