@@ -9,7 +9,7 @@ import {
   writeFile
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import type {
   BlobRef,
@@ -44,6 +44,27 @@ const keyLocks: Map<string, Promise<void>> = new Map();
 // collide on a tmp-file name.
 let tmpCounter = 0;
 
+/**
+ * Reject path segments that could escape `rootDir` via traversal (`..`),
+ * collapse to the parent (`.`), pierce a directory boundary (`/`, `\`), or
+ * trip the kernel's null-byte guard. Called on every `ns` and `id` at the
+ * entry of every public method — a malicious caller controlling either
+ * would otherwise be able to read/write arbitrary files under the process's
+ * uid.
+ */
+function assertSafeSegment(segment: string, kind: "ns" | "id"): void {
+  if (
+    segment === "" ||
+    segment === "." ||
+    segment === ".." ||
+    segment.includes("/") ||
+    segment.includes("\\") ||
+    segment.includes("\0")
+  ) {
+    throw new Error(`Unsafe path segment in ${kind}: ${segment}`);
+  }
+}
+
 export class FileHarnessStore implements HarnessStore {
   private readonly rootDir: string;
 
@@ -52,6 +73,8 @@ export class FileHarnessStore implements HarnessStore {
   }
 
   async getDoc<T>(ns: string, id: string): Promise<T | null> {
+    assertSafeSegment(ns, "ns");
+    assertSafeSegment(id, "id");
     const path = this.docPath(ns, id);
     let content: string;
 
@@ -72,7 +95,8 @@ export class FileHarnessStore implements HarnessStore {
       return JSON.parse(content) as T;
     } catch (err) {
       // Surface corruption so callers don't silently overwrite via putDoc.
-      // Mirrors the pattern `readChannelTickets` uses on the ticket board.
+      // Callers rely on corrupt→throw to avoid overwriting real data via a
+      // subsequent putDoc.
       throw new Error(
         `Corrupt doc at ${path}: ${
           err instanceof Error ? err.message : String(err)
@@ -82,11 +106,14 @@ export class FileHarnessStore implements HarnessStore {
   }
 
   async putDoc<T>(ns: string, id: string, doc: T): Promise<void> {
+    assertSafeSegment(ns, "ns");
+    assertSafeSegment(id, "id");
     const path = this.docPath(ns, id);
     await this.writeJsonAtomic(path, doc);
   }
 
   async listDocs<T>(ns: string, prefix?: string): Promise<T[]> {
+    assertSafeSegment(ns, "ns");
     const dir = this.nsDir(ns);
     const files = await safeReaddir(dir);
     const ids = files
@@ -104,6 +131,8 @@ export class FileHarnessStore implements HarnessStore {
   }
 
   async deleteDoc(ns: string, id: string): Promise<void> {
+    assertSafeSegment(ns, "ns");
+    assertSafeSegment(id, "id");
     const path = this.docPath(ns, id);
     try {
       await rm(path);
@@ -114,6 +143,8 @@ export class FileHarnessStore implements HarnessStore {
   }
 
   async appendLog(ns: string, id: string, entry: unknown): Promise<void> {
+    assertSafeSegment(ns, "ns");
+    assertSafeSegment(id, "id");
     const path = this.logPath(ns, id);
     await mkdir(this.nsDir(ns), { recursive: true });
     await appendFile(path, JSON.stringify(entry) + "\n");
@@ -124,6 +155,8 @@ export class FileHarnessStore implements HarnessStore {
     id: string,
     opts?: ReadLogOptions
   ): Promise<T[]> {
+    assertSafeSegment(ns, "ns");
+    assertSafeSegment(id, "id");
     const path = this.logPath(ns, id);
     let raw: string;
 
@@ -134,10 +167,23 @@ export class FileHarnessStore implements HarnessStore {
       throw err;
     }
 
-    const entries = raw
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as T);
+    const lines = raw.split("\n").filter(Boolean);
+    const entries: T[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] ?? "";
+      try {
+        entries.push(JSON.parse(line) as T);
+      } catch (err) {
+        // Match `getDoc`'s corruption posture: surface with file + line so
+        // operators can repair instead of silently dropping the bad record.
+        throw new Error(
+          `Corrupt log at ${path} line ${i}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          { cause: err }
+        );
+      }
+    }
 
     let filtered = entries;
     if (opts?.after !== undefined) {
@@ -145,7 +191,10 @@ export class FileHarnessStore implements HarnessStore {
       const idx = filtered.findIndex(
         (e) => cursorKey(e) !== undefined && cursorKey(e) === cursor
       );
-      filtered = idx >= 0 ? filtered.slice(idx + 1) : filtered;
+      // Cursor not found → return []. Returning the full log would cause
+      // duplicate delivery on resume; the contract is documented on
+      // `ReadLogOptions.after`.
+      filtered = idx >= 0 ? filtered.slice(idx + 1) : [];
     }
     if (opts?.limit !== undefined && opts.limit < filtered.length) {
       filtered = filtered.slice(-opts.limit);
@@ -160,28 +209,63 @@ export class FileHarnessStore implements HarnessStore {
     bytes: Uint8Array,
     meta?: Record<string, string>
   ): Promise<BlobRef> {
+    assertSafeSegment(ns, "ns");
+    assertSafeSegment(id, "id");
     const path = this.blobPath(ns, id);
+    const metaPath = `${path}.meta.json`;
     await mkdir(this.nsDir(ns), { recursive: true });
 
-    const tmpPath = `${path}.tmp.${process.pid}.${tmpCounter++}`;
-    await writeFile(tmpPath, bytes);
-    await rename(tmpPath, path);
+    const hasMeta = meta !== undefined && Object.keys(meta).length > 0;
+    const blobTmp = `${path}.tmp.${process.pid}.${tmpCounter++}`;
+    const metaTmp = hasMeta
+      ? `${metaPath}.tmp.${process.pid}.${tmpCounter++}`
+      : null;
 
-    let contentType: string | undefined;
-    if (meta && Object.keys(meta).length > 0) {
-      await this.writeJsonAtomic(`${path}.meta.json`, meta);
-      contentType = meta["contentType"];
+    // Stage both tmp files BEFORE either rename so we never end up with a
+    // durable blob that's missing its sidecar metadata.
+    await writeFile(blobTmp, bytes);
+    if (metaTmp !== null && meta !== undefined) {
+      await writeFile(metaTmp, JSON.stringify(meta, null, 2));
+    }
+
+    try {
+      await rename(blobTmp, path);
+    } catch (err) {
+      await rm(blobTmp, { force: true }).catch(() => {});
+      if (metaTmp !== null) {
+        await rm(metaTmp, { force: true }).catch(() => {});
+      }
+      throw err;
+    }
+
+    if (metaTmp !== null) {
+      try {
+        await rename(metaTmp, metaPath);
+      } catch (err) {
+        // Blob is already durable; roll it back so the caller isn't left
+        // holding a blob without its declared contentType.
+        await rm(path, { force: true }).catch(() => {});
+        await rm(metaTmp, { force: true }).catch(() => {});
+        throw new Error(
+          `Failed to commit blob meta sidecar at ${metaPath}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          { cause: err }
+        );
+      }
     }
 
     return {
       ns,
       id,
       size: bytes.byteLength,
-      contentType
+      contentType: hasMeta ? meta?.["contentType"] : undefined
     };
   }
 
   async getBlob(ref: BlobRef): Promise<Uint8Array> {
+    assertSafeSegment(ref.ns, "ns");
+    assertSafeSegment(ref.id, "id");
     const path = this.blobPath(ref.ns, ref.id);
     const buf = await readFile(path);
     return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
@@ -192,6 +276,8 @@ export class FileHarnessStore implements HarnessStore {
     id: string,
     fn: (prev: T | null) => T
   ): Promise<T> {
+    assertSafeSegment(ns, "ns");
+    assertSafeSegment(id, "id");
     return withKeyLock(ns, id, async () => {
       const prev = await this.getDoc<T>(ns, id);
       const next = fn(prev);
@@ -206,8 +292,22 @@ export class FileHarnessStore implements HarnessStore {
    * coalesce across rapid writes, no cross-namespace ordering. Cleans up
    * when the iterator is returned (break out of `for await`) so callers
    * don't leak the polling interval.
+   *
+   * Poll interval is 250ms — balances promptness vs CPU and matches the
+   * at-least-once coalescing contract consumers already need to tolerate
+   * for the Postgres `LISTEN/NOTIFY` implementation (T-402). `fs.watch` was
+   * rejected due to platform-specific quirks (macOS coalescing, Linux
+   * non-recursive behavior on subdir creation).
+   *
+   * Error semantics: if `stat` on a tracked path fails with anything other
+   * than `ENOENT` (e.g. `EACCES` after a `chmod`), the iterator throws
+   * from its next iteration and terminates. A silent watch that stops
+   * emitting was considered worse than a loud failure — callers can
+   * observe the throw and decide whether to retry.
    */
   async *watch(ns: string, id: string): AsyncIterable<ChangeEvent> {
+    assertSafeSegment(ns, "ns");
+    assertSafeSegment(id, "id");
     const pollIntervalMs = 250;
     const candidates = [
       this.docPath(ns, id),
@@ -250,20 +350,27 @@ export class FileHarnessStore implements HarnessStore {
   }
 
   private async writeJsonAtomic(path: string, doc: unknown): Promise<void> {
-    const dir = path.slice(0, path.lastIndexOf("/"));
+    const dir = dirname(path);
     await mkdir(dir, { recursive: true });
 
     const tmpPath = `${path}.tmp.${process.pid}.${tmpCounter++}`;
     await writeFile(tmpPath, JSON.stringify(doc, null, 2));
-    await rename(tmpPath, path);
+    try {
+      await rename(tmpPath, path);
+    } catch (err) {
+      // Legitimately best-effort — we're already in an error path and the
+      // caller needs to see the original rename failure, not a cleanup one.
+      await rm(tmpPath, { force: true }).catch(() => {});
+      throw err;
+    }
   }
 }
 
 /**
  * Serialize work keyed by (ns, id) through an in-process Promise-chain
- * mutex. Matches the shape of `withChannelLock` in `channel-store.ts`: the
- * tail promise in the map is what the next caller awaits, and the entry
- * self-cleans when no successor has queued behind it. In-process only.
+ * mutex. Chain of tail promises per key; each caller awaits the previous
+ * tail and installs its own. Self-cleans when no successor is queued.
+ * In-process only.
  */
 async function withKeyLock<T>(
   ns: string,
@@ -293,8 +400,9 @@ async function withKeyLock<T>(
 async function safeReaddir(dir: string): Promise<string[]> {
   try {
     return await readdir(dir);
-  } catch {
-    return [];
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw err;
   }
 }
 
@@ -304,8 +412,12 @@ async function readMtimes(paths: string[]): Promise<Map<string, number>> {
     try {
       const s = await stat(p);
       out.set(p, s.mtimeMs);
-    } catch {
-      // Missing file is fine; we'll detect creation on the next poll.
+    } catch (err) {
+      // Missing file is fine — we'll detect creation on the next poll.
+      // Any other error (permissions, I/O) is surfaced so the watch
+      // iterator throws instead of going silent.
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw err;
     }
   }
   return out;

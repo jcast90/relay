@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -211,8 +211,9 @@ describe("FileHarnessStore", () => {
       const iterator = store.watch("widgets", "watched")[Symbol.asyncIterator]();
       const nextEvent = iterator.next();
 
-      // Wait long enough for the watcher's baseline poll, then trigger a write.
-      // 300ms > 250ms poll interval + small margin for mtime resolution.
+      // Brief sleep so the watcher has a chance to capture baseline mtimes
+      // before we trigger a write. The 250ms poll interval still governs
+      // when the first event is observed; 50ms here just orders the setup.
       await new Promise((resolve) => setTimeout(resolve, 50));
       await store.putDoc<Widget>("widgets", "watched", {
         id: "watched",
@@ -243,6 +244,148 @@ describe("FileHarnessStore", () => {
 
       // Return closes the async generator; the polling loop should exit.
       await iterator.return?.();
+    });
+
+    it("surfaces non-ENOENT errors from stat instead of going silent", async () => {
+      // Platform guard: chmod 000 is only reliable on POSIX. On Windows we
+      // skip because the permission model doesn't map cleanly.
+      if (process.platform === "win32") return;
+      // Root on unix can read anything regardless of perms — the chmod path
+      // won't trigger EACCES. Skip so we don't green a broken test.
+      if (typeof process.getuid === "function" && process.getuid() === 0) {
+        return;
+      }
+
+      // Seed the watched doc so stat() succeeds on the first poll and the
+      // watcher captures a baseline mtime for it.
+      await store.putDoc<Widget>("watch-errs", "w1", {
+        id: "w1",
+        label: "seed",
+        count: 0
+      });
+
+      const iterator = store
+        .watch("watch-errs", "w1")
+        [Symbol.asyncIterator]();
+      const nextEvent = iterator.next();
+
+      // Deny read on the namespace dir so stat() throws EACCES on the next
+      // poll. The iterator should throw rather than silently coalescing
+      // into a no-event stream.
+      const nsDir = join(root, "watch-errs");
+      await chmod(nsDir, 0o000);
+
+      try {
+        await expect(
+          Promise.race<IteratorResult<ChangeEvent> | "timeout">([
+            nextEvent,
+            new Promise<"timeout">((resolve) =>
+              setTimeout(() => resolve("timeout"), 2000)
+            )
+          ])
+        ).rejects.toThrow();
+      } finally {
+        // Restore perms so afterEach cleanup can rm -rf the tmpdir.
+        await chmod(nsDir, 0o700).catch(() => {});
+        await iterator.return?.().catch(() => {});
+      }
+    });
+  });
+
+  describe("concurrency", () => {
+    it("50 concurrent putDoc writes on one key never yield a torn JSON file", async () => {
+      const ops: Promise<void>[] = [];
+      for (let i = 0; i < 50; i++) {
+        ops.push(
+          store.putDoc<Widget>("widgets", "concurrent", {
+            id: "concurrent",
+            label: `write-${i}`,
+            count: i
+          })
+        );
+      }
+      await Promise.all(ops);
+
+      // Without tmp-file + atomic rename this would sometimes throw
+      // "Unexpected token" from a half-written doc.
+      const final = await store.getDoc<Widget>("widgets", "concurrent");
+      expect(final).not.toBeNull();
+      expect(final?.id).toBe("concurrent");
+      // Final count must be one of the 50 writes — the specific winner is
+      // a race and we don't care which, only that it's internally
+      // consistent.
+      expect(final?.count).toBeGreaterThanOrEqual(0);
+      expect(final?.count).toBeLessThan(50);
+      expect(final?.label).toBe(`write-${final?.count}`);
+    });
+  });
+
+  describe("path traversal rejection", () => {
+    const unsafeNs = "..";
+    const unsafeId = "../x";
+
+    it("getDoc rejects unsafe ns and id", async () => {
+      await expect(store.getDoc("valid", unsafeId)).rejects.toThrow(
+        /Unsafe path segment/
+      );
+      await expect(store.getDoc(unsafeNs, "valid")).rejects.toThrow(
+        /Unsafe path segment/
+      );
+    });
+
+    it("putDoc rejects unsafe ns and id", async () => {
+      const widget: Widget = { id: "x", label: "a", count: 0 };
+      await expect(store.putDoc("valid", unsafeId, widget)).rejects.toThrow(
+        /Unsafe path segment/
+      );
+      await expect(store.putDoc(unsafeNs, "valid", widget)).rejects.toThrow(
+        /Unsafe path segment/
+      );
+    });
+
+    it("deleteDoc rejects unsafe ns and id", async () => {
+      await expect(store.deleteDoc("valid", unsafeId)).rejects.toThrow(
+        /Unsafe path segment/
+      );
+      await expect(store.deleteDoc(unsafeNs, "valid")).rejects.toThrow(
+        /Unsafe path segment/
+      );
+    });
+
+    it("appendLog rejects unsafe ns and id", async () => {
+      await expect(store.appendLog("valid", unsafeId, { v: 1 })).rejects.toThrow(
+        /Unsafe path segment/
+      );
+      await expect(store.appendLog(unsafeNs, "valid", { v: 1 })).rejects.toThrow(
+        /Unsafe path segment/
+      );
+    });
+
+    it("putBlob rejects unsafe ns and id", async () => {
+      const bytes = new Uint8Array([0, 1, 2]);
+      await expect(store.putBlob("valid", unsafeId, bytes)).rejects.toThrow(
+        /Unsafe path segment/
+      );
+      await expect(store.putBlob(unsafeNs, "valid", bytes)).rejects.toThrow(
+        /Unsafe path segment/
+      );
+    });
+  });
+
+  describe("readLog cursor semantics", () => {
+    it("returns [] when the `after` cursor isn't in the log", async () => {
+      await store.appendLog("events", "run-x", { id: "e1", v: 1 });
+      await store.appendLog("events", "run-x", { id: "e2", v: 2 });
+      await store.appendLog("events", "run-x", { id: "e3", v: 3 });
+
+      // Contract: unknown cursor → []. Returning the full log would cause
+      // duplicate delivery on resume.
+      const out = await store.readLog<{ id: string; v: number }>(
+        "events",
+        "run-x",
+        { after: "does-not-exist" }
+      );
+      expect(out).toEqual([]);
     });
   });
 });
