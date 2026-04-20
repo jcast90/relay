@@ -25,13 +25,11 @@ export class HarnessChannelNotifier implements Notifier {
     this.defaultChannelId = options.defaultChannelId;
   }
 
-  /** Push a notification to the default channel as a status_update entry. */
+  /** Push a notification to the default channel as an `event` entry. */
   async notify(event: OrchestratorEvent): Promise<void> {
-    await this.channelStore.postEntry(this.defaultChannelId, {
-      type: "status_update",
-      fromAgentId: null,
+    await this.channelStore.post(this.defaultChannelId, this.formatEventMessage(event), {
+      type: "event",
       fromDisplayName: "orchestrator",
-      content: this.formatEventMessage(event),
       metadata: this.buildEventMetadata(event)
     });
   }
@@ -51,11 +49,9 @@ export class HarnessChannelNotifier implements Notifier {
 
     const content = actionLines ? `${base}\n\nActions:\n${actionLines}` : base;
 
-    await this.channelStore.postEntry(this.defaultChannelId, {
-      type: "status_update",
-      fromAgentId: null,
+    await this.channelStore.post(this.defaultChannelId, content, {
+      type: "event",
       fromDisplayName: "orchestrator",
-      content,
       metadata: this.buildEventMetadata(event)
     });
   }
@@ -68,20 +64,16 @@ export class HarnessChannelNotifier implements Notifier {
   async post(message: string, context?: NotifyContext): Promise<string | null> {
     const channelId = context?.channel ?? this.defaultChannelId;
 
-    const metadata: Record<string, string> = {};
+    const metadata: Record<string, unknown> = {};
     if (context?.sessionId) metadata.sessionId = context.sessionId;
     if (context?.projectId) metadata.projectId = context.projectId;
     if (context?.prUrl) metadata.prUrl = context.prUrl;
 
-    const entry = await this.channelStore.postEntry(channelId, {
+    return this.channelStore.post(channelId, message, {
       type: "message",
-      fromAgentId: null,
       fromDisplayName: "orchestrator",
-      content: message,
       metadata
     });
-
-    return entry.entryId;
   }
 
   private formatEventMessage(event: OrchestratorEvent): string {
@@ -89,14 +81,17 @@ export class HarnessChannelNotifier implements Notifier {
     return event.message ? `${prefix} — ${event.message}` : prefix;
   }
 
-  private buildEventMetadata(event: OrchestratorEvent): Record<string, string> {
+  private buildEventMetadata(event: OrchestratorEvent): Record<string, unknown> {
     return {
       eventId: event.id,
       eventType: event.type,
       priority: event.priority,
       sessionId: event.sessionId,
       projectId: event.projectId,
-      timestamp: event.timestamp.toISOString()
+      timestamp: event.timestamp.toISOString(),
+      // Preserve the event payload — the channel store will JSON-serialize
+      // this so downstream readers keep seeing string-valued metadata.
+      data: event.data
     };
   }
 }

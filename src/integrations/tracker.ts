@@ -4,7 +4,8 @@
  * The AO plugin packages expose a `create(): Tracker` factory and read their
  * credentials from `process.env` (GITHUB_TOKEN / LINEAR_API_KEY). We honor
  * `opts.token` by installing it into the expected env var for the duration of
- * the factory call, then restoring the previous value.
+ * the factory call via a shared serialization primitive so concurrent calls
+ * with different tokens cannot observe each other's values.
  *
  * Keep this file as the single boundary: no other module in the harness should
  * import from `@aoagents/*`.
@@ -12,6 +13,8 @@
 import type { ProjectConfig, Tracker } from "@aoagents/ao-core";
 import githubTracker from "@aoagents/ao-plugin-tracker-github";
 import linearTracker from "@aoagents/ao-plugin-tracker-linear";
+
+import { withEnvOverride } from "./plugin-env-mutex.js";
 
 export type TrackerKind = "github" | "linear";
 
@@ -32,26 +35,37 @@ const ENV_VAR: Record<TrackerKind, string> = {
 
 /**
  * Build a configured Tracker. The AO plugin factories consume their token from
- * env vars at construction time, so we temporarily overlay `opts.token` into
- * the matching var if provided.
+ * env vars at construction time, so when `opts.token` is provided we overlay
+ * the matching env var through `withEnvOverride`, which serializes concurrent
+ * callers so they cannot observe each other's tokens.
+ *
+ * Overloads:
+ *  - No-token call returns `Tracker` synchronously; this preserves the legacy
+ *    call site in `classifier.ts` (`const tracker = createTracker(kind)`).
+ *  - With-token call returns `Promise<Tracker>` because the shared env-mutex
+ *    is fundamentally async.
  */
+export function createTracker(kind: TrackerKind): Tracker;
+export function createTracker(
+  kind: TrackerKind,
+  opts: { token?: undefined },
+): Tracker;
+export function createTracker(
+  kind: TrackerKind,
+  opts: { token: string },
+): Promise<Tracker>;
 export function createTracker(
   kind: TrackerKind,
   opts: { token?: string } = {},
-): Tracker {
-  const envVar = ENV_VAR[kind];
-  const previous = process.env[envVar];
-  if (opts.token !== undefined) {
-    process.env[envVar] = opts.token;
+): Tracker | Promise<Tracker> {
+  const build = (): Tracker =>
+    kind === "github" ? githubTracker.create() : linearTracker.create();
+
+  if (opts.token === undefined) {
+    // No overlay needed — plugin reads whatever is already in env.
+    return build();
   }
-  try {
-    return kind === "github" ? githubTracker.create() : linearTracker.create();
-  } finally {
-    if (opts.token !== undefined) {
-      if (previous === undefined) delete process.env[envVar];
-      else process.env[envVar] = previous;
-    }
-  }
+  return withEnvOverride({ [ENV_VAR[kind]]: opts.token }, build);
 }
 
 /**

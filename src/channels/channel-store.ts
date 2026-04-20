@@ -178,7 +178,7 @@ export class ChannelStore {
       fromAgentId: string | null;
       fromDisplayName: string | null;
       content: string;
-      metadata: Record<string, string>;
+      metadata: Record<string, unknown>;
     }
   ): Promise<ChannelEntry> {
     const feedDir = join(this.channelsDir, channelId);
@@ -191,7 +191,7 @@ export class ChannelStore {
       fromAgentId: input.fromAgentId,
       fromDisplayName: input.fromDisplayName,
       content: input.content,
-      metadata: input.metadata,
+      metadata: normalizeMetadata(input.metadata),
       createdAt: new Date().toISOString()
     };
 
@@ -201,6 +201,33 @@ export class ChannelStore {
     );
 
     return entry;
+  }
+
+  /**
+   * Thin wrapper over `postEntry` with ergonomic defaults for the common
+   * "drop a message into a channel" case. Returns the created entry id.
+   *
+   * Defaults: `type: "message"`, `fromAgentId: null`,
+   * `fromDisplayName: "system"`, empty metadata.
+   */
+  async post(
+    channelId: string,
+    content: string,
+    options?: {
+      type?: ChannelEntryType;
+      fromAgentId?: string | null;
+      fromDisplayName?: string;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<string> {
+    const entry = await this.postEntry(channelId, {
+      type: options?.type ?? "message",
+      fromAgentId: options?.fromAgentId ?? null,
+      fromDisplayName: options?.fromDisplayName ?? "system",
+      content,
+      metadata: options?.metadata ?? {}
+    });
+    return entry.entryId;
   }
 
   async readFeed(channelId: string, limit?: number): Promise<ChannelEntry[]> {
@@ -378,4 +405,21 @@ export class ChannelStore {
       return [];
     }
   }
+}
+
+/**
+ * Serialize non-string metadata values to JSON strings so existing readers
+ * (Rust `crates/harness-data` and `gui/src/types.ts`, which both type
+ * metadata as `Record<string, string>`) continue to deserialize the feed
+ * without changes. `null` and `undefined` are dropped. Strings pass through.
+ */
+function normalizeMetadata(
+  metadata: Record<string, unknown>
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    if (value === undefined || value === null) continue;
+    out[key] = typeof value === "string" ? value : JSON.stringify(value);
+  }
+  return out;
 }

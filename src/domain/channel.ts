@@ -14,6 +14,7 @@ export type ChannelRefType = z.infer<typeof ChannelRefTypeSchema>;
 export const ChannelEntryTypeSchema = z.enum([
   "message",
   "status_update",
+  "event",
   "decision",
   "artifact",
   "agent_joined",
@@ -67,7 +68,14 @@ export interface ChannelEntry {
   fromAgentId: string | null;
   fromDisplayName: string | null;
   content: string;
-  metadata: Record<string, string>;
+  /**
+   * Free-form metadata for the entry. Callers may pass any JSON-serializable
+   * values; the channel store serializes non-string values to JSON strings on
+   * write so downstream Rust readers (`crates/harness-data`) and the GUI
+   * (`gui/src/types.ts`), which type metadata as `Record<string, string>`,
+   * continue to deserialize the feed without changes.
+   */
+  metadata: Record<string, unknown>;
   createdAt: string;
 }
 
