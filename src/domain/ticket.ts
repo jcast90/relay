@@ -75,9 +75,20 @@ export interface TicketLedgerEntry {
   startedAt: string | null;
   completedAt: string | null;
   updatedAt: string;
+  /**
+   * ID of the orchestrator run that produced this entry; null when the
+   * ticket was created directly via chat rather than run decomposition.
+   * Set at `initializeTicketLedger` and not rewritten afterward — `upsert`
+   * replaces the full entry, so downstream stages that stamp a new runId
+   * must do so by re-initializing, not by patching this field in place.
+   */
+  runId: string | null;
 }
 
-export function initializeTicketLedger(tickets: TicketDefinition[]): TicketLedgerEntry[] {
+export function initializeTicketLedger(
+  tickets: TicketDefinition[],
+  runId: string | null = null
+): TicketLedgerEntry[] {
   const now = new Date().toISOString();
 
   return tickets.map((ticket) => ({
@@ -95,7 +106,8 @@ export function initializeTicketLedger(tickets: TicketDefinition[]): TicketLedge
     attempt: 0,
     startedAt: null,
     completedAt: null,
-    updatedAt: now
+    updatedAt: now,
+    runId
   }));
 }
 

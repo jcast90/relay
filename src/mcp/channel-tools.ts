@@ -1,5 +1,6 @@
 import { getAgentName } from "../domain/agent-names.js";
 import { ChannelStore } from "../channels/channel-store.js";
+import { resolveBoardTickets } from "../channels/board-resolver.js";
 import { LocalArtifactStore } from "../execution/artifact-store.js";
 import {
   getGlobalRoot,
@@ -174,22 +175,23 @@ export async function callChannelTool(
 
     case "channel_task_board": {
       const channelId = String(args.channelId ?? "");
-      const runLinks = await store.readRunLinks(channelId);
-      const board: Record<string, Array<{ ticketId: string; title: string; runId: string }>> = {};
+      const board: Record<string, Array<{ ticketId: string; title: string; runId: string | null }>> = {};
 
-      for (const link of runLinks) {
-        const artifactStore = buildArtifactStoreForWorkspace(link.workspaceId);
-        const tickets = await artifactStore.readTicketLedger(link.runId);
-        if (!tickets) continue;
+      const tickets = await resolveBoardTickets(store, channelId, async (
+        workspaceId,
+        runId
+      ) => {
+        const artifactStore = buildArtifactStoreForWorkspace(workspaceId);
+        return artifactStore.readTicketLedger(runId);
+      });
 
-        for (const ticket of tickets) {
-          if (!board[ticket.status]) board[ticket.status] = [];
-          board[ticket.status].push({
-            ticketId: ticket.ticketId,
-            title: ticket.title,
-            runId: link.runId
-          });
-        }
+      for (const { entry, runId } of tickets) {
+        if (!board[entry.status]) board[entry.status] = [];
+        board[entry.status].push({
+          ticketId: entry.ticketId,
+          title: entry.title,
+          runId
+        });
       }
 
       return { channelId, board };

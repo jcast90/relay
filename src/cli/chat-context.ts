@@ -31,12 +31,20 @@ export function buildSystemPrompt(input: {
     `Decisions dir: \`${decisionsDir}/\`\n\n` +
     `IMPORTANT: When asked about tickets, always READ \`${ticketsPath}\` first. ` +
     `Do not guess or say tickets don't exist without checking the file.\n\n` +
-    `When creating tickets, write them to \`${ticketsPath}\` as a JSON object with a \`tickets\` array. ` +
-    `Each ticket: {"ticketId": "T-1", "title": "...", "specialty": "...", "status": "pending", ` +
-    `"dependsOn": [], "assignedAgentId": null, "assignedAgentName": null, "verification": "...", "attempt": 0}\n\n` +
-    `Status values: \`pending\` | \`blocked\` | \`executing\` | \`completed\` | \`failed\`\n` +
-    `When starting a ticket set \`executing\`, when done set \`completed\`/\`failed\`. ` +
-    `Always read-modify-write the whole file.\n\n` +
+    `This file is the unified board shared by chat and orchestrator runs. ` +
+    `When creating tickets, write to \`${ticketsPath}\` as JSON: ` +
+    `\`{"updatedAt": "<ISO-8601>", "tickets": [<TicketLedgerEntry>...]}\`. ` +
+    `Each ticket must use the full TicketLedgerEntry shape: ` +
+    `\`{"ticketId": "T-1", "title": "...", "specialty": "general"|"ui"|"business_logic"|"api_crud"|"devops"|"testing", ` +
+    `"status": "pending"|"blocked"|"ready"|"executing"|"verifying"|"retry"|"completed"|"failed", ` +
+    `"dependsOn": [], "assignedAgentId": null, "assignedAgentName": null, "crosslinkSessionId": null, ` +
+    `"verification": "pending"|"running"|"passed"|"failed_recoverable"|"failed_terminal", ` +
+    `"lastClassification": null, "chosenNextAction": null, "attempt": 0, ` +
+    `"startedAt": null, "completedAt": null, "updatedAt": "<ISO-8601>", "runId": null}\`.\n\n` +
+    `Set \`runId\` to null for chat-created tickets; the orchestrator fills it for run-decomposed tickets. ` +
+    `When starting a ticket set \`status\` to \`executing\` and \`startedAt\` to now; ` +
+    `when done set \`completed\`/\`failed\` and populate \`completedAt\`. ` +
+    `Always read-modify-write the whole file and refresh \`updatedAt\` on every write.\n\n` +
     `Decisions: write as JSON files in \`${decisionsDir}/\` with ` +
     `decisionId, title, description, rationale, alternatives, decidedByName, createdAt.`
   );

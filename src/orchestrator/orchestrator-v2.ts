@@ -111,8 +111,14 @@ export class OrchestratorV2 {
           content: `Run started: ${featureRequest}`,
           metadata: { runId: run.id, state: run.state }
         });
-      } catch {
-        // Channel creation is non-critical — continue without it
+      } catch (err) {
+        // Channel creation is non-critical — continue without it, but don't
+        // swallow silently. A logged warning lets operators see why a run
+        // has no channel without having to trace through the code.
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[orchestrator] channel creation failed (runId=${run.id}): ${message}`
+        );
       }
     }
 
@@ -210,12 +216,18 @@ export class OrchestratorV2 {
     });
 
     run.ticketPlan = ticketPlan;
-    run.ticketLedger = initializeTicketLedger(ticketPlan.tickets);
+    run.ticketLedger = initializeTicketLedger(ticketPlan.tickets, run.id);
 
     await this.artifactStore.saveTicketLedger({
       runId: run.id,
       ticketLedger: run.ticketLedger
     });
+
+    // Channel board is the live, unified ticket view across chat + orchestrator.
+    // Per-run ticket-ledger.json remains as an immutable decomposition snapshot.
+    // Log-and-continue on failure: a filesystem blip on the channel board must
+    // not abort the run after planning and ledger persistence have succeeded.
+    await this.mirrorToChannelBoard(run);
 
     // Step 6: Approval gate or direct ticket execution
     if (tierNeedsApproval(classification.tier)) {
@@ -257,7 +269,8 @@ export class OrchestratorV2 {
       this.verificationRunner,
       this.registry,
       (r, req) => this.dispatch(r, req),
-      (r, type, phaseId, details) => this.recordEvent(r, type, phaseId, details)
+      (r, type, phaseId, details) => this.recordEvent(r, type, phaseId, details),
+      { channelStore: this.channelStore }
     );
 
     const poller = this.startPoller(run, scheduler);
@@ -280,13 +293,15 @@ export class OrchestratorV2 {
     await this.persistRunIndex(run);
 
     if (run.channelId && this.channelStore) {
-      await this.channelStore.postEntry(run.channelId, {
-        type: "run_completed",
-        fromAgentId: null,
-        fromDisplayName: "Orchestrator",
-        content: `Run completed: ${run.state}`,
-        metadata: { runId: run.id, state: run.state }
-      }).catch(() => {});
+      await this.channelStore
+        .postEntry(run.channelId, {
+          type: "run_completed",
+          fromAgentId: null,
+          fromDisplayName: "Orchestrator",
+          content: `Run completed: ${run.state}`,
+          metadata: { runId: run.id, state: run.state }
+        })
+        .catch((err: unknown) => this.warnChannelPostFailed(run, err));
     }
 
     return run;
@@ -314,8 +329,11 @@ export class OrchestratorV2 {
           content: `Run started (trivial): ${featureRequest}`,
           metadata: { runId: run.id, state: run.state }
         });
-      } catch {
-        // non-critical
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[orchestrator] trivial channel setup failed (runId=${run.id}): ${message}`
+        );
       }
     }
 
@@ -324,7 +342,10 @@ export class OrchestratorV2 {
 
     const ticketPlan = buildTicketPlanFromPhases(trivialPlan, classification);
     run.ticketPlan = ticketPlan;
-    run.ticketLedger = initializeTicketLedger(ticketPlan.tickets);
+    run.ticketLedger = initializeTicketLedger(ticketPlan.tickets, run.id);
+
+    // Same log-and-continue policy as the regular decomposition path.
+    await this.mirrorToChannelBoard(run);
 
     // Fast-track: plan generated, then straight to tickets
     await this.transition(run, "PlanGenerated", "phase_00");
@@ -341,7 +362,8 @@ export class OrchestratorV2 {
       this.verificationRunner,
       this.registry,
       (r, req) => this.dispatch(r, req),
-      (r, type, phaseId, details) => this.recordEvent(r, type, phaseId, details)
+      (r, type, phaseId, details) => this.recordEvent(r, type, phaseId, details),
+      { channelStore: this.channelStore }
     );
 
     const poller = this.startPoller(run, scheduler);
@@ -356,13 +378,15 @@ export class OrchestratorV2 {
     await this.persistRunIndex(run);
 
     if (run.channelId && this.channelStore) {
-      await this.channelStore.postEntry(run.channelId, {
-        type: "run_completed",
-        fromAgentId: null,
-        fromDisplayName: "Orchestrator",
-        content: `Run completed: ${run.state}`,
-        metadata: { runId: run.id, state: run.state }
-      }).catch(() => {});
+      await this.channelStore
+        .postEntry(run.channelId, {
+          type: "run_completed",
+          fromAgentId: null,
+          fromDisplayName: "Orchestrator",
+          content: `Run completed: ${run.state}`,
+          metadata: { runId: run.id, state: run.state }
+        })
+        .catch((err: unknown) => this.warnChannelPostFailed(run, err));
     }
 
     return run;
@@ -377,7 +401,11 @@ export class OrchestratorV2 {
       const poller = this.pollerFactory({ run, scheduler });
       poller?.start();
       return poller;
-    } catch {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[orchestrator] poller start failed (runId=${run.id}): ${message}`
+      );
       return null;
     }
   }
@@ -400,13 +428,15 @@ export class OrchestratorV2 {
       });
 
       if (run.channelId && this.channelStore) {
-        this.channelStore.postEntry(run.channelId, {
-          type: "message",
-          fromAgentId: agent.id,
-          fromDisplayName: agent.name,
-          content: `Dispatched for ${input.kind}: ${input.title}`,
-          metadata: { attempt: String(attempt) }
-        }).catch(() => {});
+        this.channelStore
+          .postEntry(run.channelId, {
+            type: "message",
+            fromAgentId: agent.id,
+            fromDisplayName: agent.name,
+            content: `Dispatched for ${input.kind}: ${input.title}`,
+            metadata: { attempt: String(attempt) }
+          })
+          .catch((err: unknown) => this.warnChannelPostFailed(run, err));
       }
 
       try {
@@ -471,13 +501,15 @@ export class OrchestratorV2 {
     await this.persistRunIndex(run);
 
     if (run.channelId && this.channelStore) {
-      this.channelStore.postEntry(run.channelId, {
-        type: "status_update",
-        fromAgentId: null,
-        fromDisplayName: "Orchestrator",
-        content: `${eventType} → ${run.state}`,
-        metadata: { runId: run.id, state: run.state, event: eventType }
-      }).catch(() => {});
+      this.channelStore
+        .postEntry(run.channelId, {
+          type: "status_update",
+          fromAgentId: null,
+          fromDisplayName: "Orchestrator",
+          content: `${eventType} → ${run.state}`,
+          metadata: { runId: run.id, state: run.state, event: eventType }
+        })
+        .catch((err: unknown) => this.warnChannelPostFailed(run, err));
     }
   }
 
@@ -495,7 +527,12 @@ export class OrchestratorV2 {
     };
 
     run.events.push(event);
-    this.artifactStore.appendEvent(run.id, event).catch(() => {});
+    this.artifactStore.appendEvent(run.id, event).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[orchestrator] appendEvent failed (runId=${run.id} type=${type}): ${message}`
+      );
+    });
   }
 
   private recordEvidence(run: HarnessRun, record: EvidenceRecord): void {
@@ -519,6 +556,30 @@ export class OrchestratorV2 {
       }
     });
     await this.artifactStore.saveRunSnapshot(run);
+  }
+
+  /**
+   * Mirror the run's current ticket ledger onto the channel's unified board.
+   * Best-effort but logged: a mirror failure must not abort the run (the
+   * per-run ledger is already persisted), but it also must not be silent.
+   */
+  private async mirrorToChannelBoard(run: HarnessRun): Promise<void> {
+    if (!run.channelId || !this.channelStore) return;
+    try {
+      await this.channelStore.upsertChannelTickets(run.channelId, run.ticketLedger);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[orchestrator] channel board mirror failed (runId=${run.id} channelId=${run.channelId}): ${message}`
+      );
+    }
+  }
+
+  private warnChannelPostFailed(run: HarnessRun, err: unknown): void {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[orchestrator] channel post failed (runId=${run.id} channelId=${run.channelId}): ${message}`
+    );
   }
 }
 

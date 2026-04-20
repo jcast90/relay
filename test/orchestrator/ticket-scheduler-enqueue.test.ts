@@ -17,6 +17,7 @@ import {
   parseTicketPlan,
   type TicketDefinition
 } from "../../src/domain/ticket.js";
+import { ChannelStore } from "../../src/channels/channel-store.js";
 import { LocalArtifactStore } from "../../src/execution/artifact-store.js";
 import { VerificationRunner } from "../../src/execution/verification-runner.js";
 import { TicketScheduler } from "../../src/orchestrator/ticket-scheduler.js";
@@ -95,6 +96,7 @@ interface BuildSchedulerOptions {
     req: Omit<WorkRequest, "runId">
   ) => Promise<AgentResult>;
   onRecordEvent?: (event: RecordedEvent) => void;
+  channelStore?: ChannelStore;
 }
 
 /**
@@ -157,7 +159,7 @@ async function buildScheduler(
       events.push(event);
       options.onRecordEvent?.(event);
     },
-    { maxConcurrency: 2 }
+    { maxConcurrency: 2, channelStore: options.channelStore }
   );
 
   return { scheduler, dispatched, events, artifactStore };
@@ -350,6 +352,103 @@ describe("TicketScheduler.enqueue", () => {
       await scheduler.enqueue(run, ticket("t_after"));
       const after = run.ticketLedger.find((t) => t.ticketId === "t_after");
       expect(after?.status).toBe("completed");
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
+describe("TicketScheduler channel board mirror", () => {
+  it("mirrors every persistTicketLedger to the channel board", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "ts-mirror-"));
+    try {
+      const channelStore = new ChannelStore(join(tmp, "channels"));
+      const channel = await channelStore.createChannel({
+        name: "#mirror",
+        description: "mirror test"
+      });
+
+      const run = buildRun(tmp, [ticket("t_a"), ticket("t_b")]);
+      run.channelId = channel.channelId;
+
+      const { scheduler } = await buildScheduler(tmp, { channelStore });
+      const ok = await scheduler.executeAll(run);
+      expect(ok).toBe(true);
+
+      const boardTickets = await channelStore.readChannelTickets(channel.channelId);
+      expect(boardTickets).toHaveLength(2);
+      const byId = new Map(boardTickets.map((t) => [t.ticketId, t]));
+      expect(byId.get("t_a")?.status).toBe("completed");
+      expect(byId.get("t_b")?.status).toBe("completed");
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("keeps the scheduler loop alive when the mirror throws", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "ts-mirror-fail-"));
+    const warnCalls: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnCalls.push(args.map((a) => String(a)).join(" "));
+    };
+
+    try {
+      const channelStore = new ChannelStore(join(tmp, "channels"));
+      const channel = await channelStore.createChannel({
+        name: "#mirror-fail",
+        description: "mirror failure test"
+      });
+      channelStore.upsertChannelTickets = async () => {
+        throw new Error("simulated mirror failure");
+      };
+
+      const run = buildRun(tmp, [ticket("t_a")]);
+      run.channelId = channel.channelId;
+
+      const { scheduler, events } = await buildScheduler(tmp, { channelStore });
+      const ok = await scheduler.executeAll(run);
+
+      expect(ok).toBe(true);
+      const entry = run.ticketLedger.find((t) => t.ticketId === "t_a");
+      expect(entry?.status).toBe("completed");
+
+      const mirrorWarn = warnCalls.find((w) =>
+        w.includes("[scheduler] channel board mirror failed")
+      );
+      const mirrorEvent = events.find(
+        (e) => e.phaseId === "__channel_mirror__"
+      );
+      expect(mirrorWarn || mirrorEvent).toBeTruthy();
+    } finally {
+      console.warn = originalWarn;
+      await rm(tmp, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("serializes concurrent upserts on the same channel (no lost updates)", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "ts-mirror-concurrent-"));
+    try {
+      const channelStore = new ChannelStore(join(tmp, "channels"));
+      const channel = await channelStore.createChannel({
+        name: "#concurrent",
+        description: "concurrency test"
+      });
+
+      // Two disjoint upserts fired at once. If upsert read-modified-wrote
+      // without a mutex, one would clobber the other (both read empty, both
+      // write their single ticket). With the mutex, both survive.
+      const [a] = initializeTicketLedger([ticket("t_a")], "run-a");
+      const [b] = initializeTicketLedger([ticket("t_b")], "run-b");
+
+      await Promise.all([
+        channelStore.upsertChannelTickets(channel.channelId, [a]),
+        channelStore.upsertChannelTickets(channel.channelId, [b])
+      ]);
+
+      const board = await channelStore.readChannelTickets(channel.channelId);
+      const ids = board.map((t) => t.ticketId).sort();
+      expect(ids).toEqual(["t_a", "t_b"]);
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }

@@ -12,6 +12,7 @@ import {
   initializeTicketLedger
 } from "../domain/ticket.js";
 import type { ArtifactStore } from "../execution/artifact-store.js";
+import type { ChannelStore } from "../channels/channel-store.js";
 import type { VerificationRunner } from "../execution/verification-runner.js";
 import { selectVerificationCommands } from "../execution/verification-runner.js";
 import {
@@ -23,9 +24,16 @@ import {
 
 export interface TicketSchedulerOptions {
   maxConcurrency: number;
+  /**
+   * Optional ChannelStore. When present, scheduler mirrors ticket status
+   * changes to the channel's unified ticket board. Living in options (not a
+   * positional ctor arg) prevents the "positional-after-optional" foot-gun
+   * where a caller supplying options silently drops the store.
+   */
+  channelStore?: ChannelStore;
 }
 
-const DEFAULT_OPTIONS: TicketSchedulerOptions = {
+const DEFAULT_OPTIONS: Required<Pick<TicketSchedulerOptions, "maxConcurrency">> = {
   maxConcurrency: 3
 };
 
@@ -38,7 +46,7 @@ type RaceResult =
   | { ticketId: "__wake__"; success: false; wake: true };
 
 export class TicketScheduler {
-  private readonly options: TicketSchedulerOptions;
+  private readonly options: { maxConcurrency: number };
 
   /** The run that the active `executeAll` is driving, if any. */
   private activeRun: HarnessRun | null = null;
@@ -48,6 +56,8 @@ export class TicketScheduler {
 
   /** Tail of queued single-ticket executions after `executeAll` resolved. */
   private enqueueTail: Promise<void> = Promise.resolve();
+
+  private readonly channelStore: ChannelStore | undefined;
 
   constructor(
     private readonly repoRoot: string,
@@ -67,6 +77,7 @@ export class TicketScheduler {
     options?: Partial<TicketSchedulerOptions>
   ) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
+    this.channelStore = options?.channelStore;
   }
 
   async executeAll(run: HarnessRun): Promise<boolean> {
@@ -520,5 +531,33 @@ export class TicketScheduler {
       runId: run.id,
       ticketLedger: run.ticketLedger
     });
+
+    // Mirror status changes onto the channel's unified ticket board so chat
+    // and orchestrator tickets share a single live view. The per-run ledger
+    // above is the immutable decomposition snapshot and is already written.
+    //
+    // The mirror is best-effort — a mirror failure must not halt the
+    // scheduler loop — but it is NEVER silent. We log and record a run
+    // event so operators can see drift between the per-run ledger and the
+    // channel board without debugging the filesystem.
+    if (run.channelId && this.channelStore) {
+      try {
+        await this.channelStore.upsertChannelTickets(run.channelId, run.ticketLedger);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[scheduler] channel board mirror failed (runId=${run.id} channelId=${run.channelId}): ${message}`
+        );
+        try {
+          this.recordEvent(run, "TicketFailed", "__channel_mirror__", {
+            runId: run.id,
+            channelId: run.channelId,
+            error: message
+          });
+        } catch {
+          // recordEvent itself must never break the scheduler loop.
+        }
+      }
+    }
   }
 }

@@ -35,6 +35,7 @@ import { Orchestrator } from "./orchestrator/orchestrator.js";
 import { OrchestratorV2 } from "./orchestrator/orchestrator-v2.js";
 import { ScriptedInvoker } from "./simulation/scripted-invoker.js";
 import { ChannelStore } from "./channels/channel-store.js";
+import { resolveBoardTickets } from "./channels/board-resolver.js";
 import {
   createPrWatcherFactory,
   getActiveWatcher
@@ -857,30 +858,31 @@ async function printTaskBoard(channelId: string, args: string[] = []): Promise<v
     return;
   }
 
-  const runLinks = await store.readRunLinks(channelId);
-
-  if (runLinks.length === 0) {
-    console.log("No runs linked to this channel.");
-    return;
-  }
-
+  // Delegates to resolveBoardTickets so CLI + MCP tool + GUI all read the
+  // channel board through the same unified-then-fallback policy.
   const board: Record<string, Array<{ ticketId: string; title: string }>> = {};
-
-  for (const link of runLinks) {
+  const resolved = await resolveBoardTickets(store, channelId, async (
+    workspaceId,
+    runId
+  ) => {
     const wsStore = new LocalArtifactStore(
-      `${getGlobalRoot()}/workspaces/${link.workspaceId}/artifacts`
+      `${getGlobalRoot()}/workspaces/${workspaceId}/artifacts`
     );
-    const tickets = await wsStore.readTicketLedger(link.runId);
-    if (!tickets) continue;
+    return wsStore.readTicketLedger(runId);
+  });
 
-    for (const ticket of tickets) {
-      if (!board[ticket.status]) board[ticket.status] = [];
-      board[ticket.status].push({ ticketId: ticket.ticketId, title: ticket.title });
-    }
+  for (const { entry } of resolved) {
+    if (!board[entry.status]) board[entry.status] = [];
+    board[entry.status].push({ ticketId: entry.ticketId, title: entry.title });
   }
 
   if (args.includes("--json")) {
     jsonOut(board);
+    return;
+  }
+
+  if (Object.keys(board).length === 0) {
+    console.log("No tickets on this channel.");
     return;
   }
 

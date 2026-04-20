@@ -16,6 +16,17 @@ import {
   type RepoAssignment
 } from "../domain/channel.js";
 import { buildDecisionId, type Decision } from "../domain/decision.js";
+import type { TicketLedgerEntry } from "../domain/ticket.js";
+
+// Per-channel serialization so concurrent upsertChannelTickets calls for the
+// same channel don't race on read-modify-write. Keyed by channelId; the value
+// is a tail promise callers queue behind. Entries self-cleanup when no one is
+// queued. In-process only — cross-process coordination comes with T-101.
+const channelTicketLocks: Map<string, Promise<void>> = new Map();
+
+// Monotonic suffix so two concurrent writers in the same process never
+// collide on the tmp file used by writeChannelTickets.
+let channelTicketsTmpCounter = 0;
 
 export class ChannelStore {
   private readonly channelsDir: string;
@@ -336,6 +347,152 @@ export class ChannelStore {
       return JSON.parse(raw) as ChannelRunLink[];
     } catch {
       return [];
+    }
+  }
+
+  // --- Ticket board (channel-scoped, unified across chat + orchestrator) ---
+
+  /**
+   * Read the unified ticket board for a channel. Returns `[]` only when the
+   * file legitimately does not exist yet (ENOENT). Any other error — parse
+   * failure, permission denied, malformed JSON — is rethrown so callers
+   * don't silently overwrite real data via `upsertChannelTickets`.
+   */
+  async readChannelTickets(channelId: string): Promise<TicketLedgerEntry[]> {
+    const path = join(this.channelsDir, channelId, "tickets.json");
+    let content: string;
+
+    try {
+      content = await readFile(path, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return [];
+      }
+      throw new Error(
+        `Failed to read channel ticket board at ${path}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+
+    try {
+      const raw = JSON.parse(content) as { tickets?: TicketLedgerEntry[] };
+      const tickets = raw?.tickets;
+      if (tickets !== undefined && !Array.isArray(tickets)) {
+        throw new Error(`tickets field is not an array`);
+      }
+      return tickets ?? [];
+    } catch (err) {
+      throw new Error(
+        `Corrupt channel ticket board at ${path}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+  }
+
+  /**
+   * Replace the full ticket list on the channel board. Write is atomic via
+   * tmp-file + rename, so readers never observe a partial file even on
+   * crash. Callers that only want to add/update a subset should use
+   * `upsertChannelTickets` — this method is primarily for seeders and
+   * full-board rewrites.
+   */
+  async writeChannelTickets(
+    channelId: string,
+    tickets: TicketLedgerEntry[]
+  ): Promise<void> {
+    const channelDir = join(this.channelsDir, channelId);
+    await mkdir(channelDir, { recursive: true });
+
+    const path = join(channelDir, "tickets.json");
+    // Include a monotonic suffix alongside the PID so two concurrent writes
+    // in the same process don't collide on the tmp file.
+    const tmpPath = `${path}.tmp.${process.pid}.${channelTicketsTmpCounter++}`;
+
+    await writeFile(
+      tmpPath,
+      JSON.stringify(
+        {
+          updatedAt: new Date().toISOString(),
+          tickets
+        },
+        null,
+        2
+      )
+    );
+    await rename(tmpPath, path);
+  }
+
+  /**
+   * Merge `incoming` into the existing channel board by `ticketId`. Entries
+   * already present are replaced wholesale by the incoming version (so the
+   * caller owns the full shape, not just a patch). New ticketIds are
+   * appended in the order they appear in `incoming`. Existing entries
+   * absent from `incoming` are preserved unchanged.
+   *
+   * Concurrent calls for the same channel are serialized through an
+   * in-memory per-channel mutex so a read-modify-write cycle cannot lose
+   * updates when multiple schedulers (or a scheduler + chat session) write
+   * at once. The mutex is in-process only; cross-process coordination is
+   * deferred to the HarnessStore migration (T-101).
+   */
+  async upsertChannelTickets(
+    channelId: string,
+    incoming: TicketLedgerEntry[]
+  ): Promise<TicketLedgerEntry[]> {
+    return this.withChannelLock(channelId, async () => {
+      const existing = await this.readChannelTickets(channelId);
+      const byId = new Map(existing.map((t) => [t.ticketId, t]));
+
+      for (const entry of incoming) {
+        byId.set(entry.ticketId, entry);
+      }
+
+      const merged: TicketLedgerEntry[] = [];
+      const seen = new Set<string>();
+
+      for (const entry of existing) {
+        const current = byId.get(entry.ticketId);
+        if (current) {
+          merged.push(current);
+          seen.add(entry.ticketId);
+        }
+      }
+
+      for (const entry of incoming) {
+        if (!seen.has(entry.ticketId)) {
+          merged.push(entry);
+          seen.add(entry.ticketId);
+        }
+      }
+
+      await this.writeChannelTickets(channelId, merged);
+      return merged;
+    });
+  }
+
+  private async withChannelLock<T>(
+    channelId: string,
+    fn: () => Promise<T>
+  ): Promise<T> {
+    const prev = channelTicketLocks.get(channelId) ?? Promise.resolve();
+    let resolveCurrent!: () => void;
+    const current = new Promise<void>((resolve) => {
+      resolveCurrent = resolve;
+    });
+    const next = prev.then(() => current);
+    channelTicketLocks.set(channelId, next);
+
+    try {
+      await prev;
+      return await fn();
+    } finally {
+      resolveCurrent();
+      // If nobody queued behind us, clean up so the map doesn't grow unbounded.
+      if (channelTicketLocks.get(channelId) === next) {
+        channelTicketLocks.delete(channelId);
+      }
     }
   }
 
