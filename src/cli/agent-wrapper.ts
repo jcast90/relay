@@ -52,25 +52,49 @@ const HARNESS_SYSTEM_PROMPT = [
   "If you need information from another repo, use crosslink_discover to find the right session, then crosslink_send to ask."
 ].join("\n");
 
+/**
+ * Auto-approve is enabled when RELAY_AUTO_APPROVE=1 OR the user passed
+ * --auto-approve / --yolo. Reads from env so children inherit.
+ */
+export function isAutoApproveEnabled(args: string[] = []): boolean {
+  if (args.includes("--auto-approve") || args.includes("--yolo")) return true;
+  const env = process.env.RELAY_AUTO_APPROVE;
+  return env === "1" || env === "true" || env === "yes";
+}
+
+/**
+ * Strip our own auto-approve flags so they don't get passed through to the
+ * underlying CLI (which wouldn't recognise them).
+ */
+export function stripAutoApproveFlags(args: string[]): string[] {
+  return args.filter((arg) => arg !== "--auto-approve" && arg !== "--yolo");
+}
+
 export function buildClaudeLaunchArgs(input: {
   userArgs: string[];
   mcpConfigPath: string;
+  autoApprove?: boolean;
 }): string[] {
-  return [
+  const base = [
     "--mcp-config",
     input.mcpConfigPath,
     "--append-system-prompt",
-    HARNESS_SYSTEM_PROMPT,
-    ...input.userArgs
+    HARNESS_SYSTEM_PROMPT
   ];
+  if (input.autoApprove) {
+    // Claude Code's flag for unattended runs. No per-tool prompts.
+    base.push("--dangerously-skip-permissions");
+  }
+  return [...base, ...input.userArgs];
 }
 
 export function buildCodexLaunchArgs(input: {
   userArgs: string[];
   cwd: string;
   cliEntrypoint: string;
+  autoApprove?: boolean;
 }): string[] {
-  return [
+  const base = [
     "-c",
     `mcp_servers.relay.command=${tomlString(process.execPath)}`,
     "-c",
@@ -81,9 +105,14 @@ export function buildCodexLaunchArgs(input: {
       input.cwd
     ])}`,
     "-c",
-    `mcp_servers.relay.env.AGENT_HARNESS_PROVIDER=${tomlString("codex")}`,
-    ...input.userArgs
+    `mcp_servers.relay.env.AGENT_HARNESS_PROVIDER=${tomlString("codex")}`
   ];
+  if (input.autoApprove) {
+    // Codex CLI's unattended mode. If your codex version rejects this flag,
+    // drop auto-approve or set --approval-policy never manually.
+    base.push("--full-auto");
+  }
+  return [...base, ...input.userArgs];
 }
 
 function tomlString(value: string): string {
