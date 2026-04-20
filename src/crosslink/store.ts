@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile, readdir, unlink, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { homedir } from "node:os";
 
+import { getRelayDir } from "../cli/paths.js";
 import {
   buildCrosslinkId,
   CrosslinkSessionSchema,
@@ -21,7 +21,7 @@ export class CrosslinkStore {
   private readonly mailboxesDir: string;
 
   constructor(rootDir?: string) {
-    this.rootDir = rootDir ?? join(homedir(), ".agent-harness", "crosslink");
+    this.rootDir = rootDir ?? join(getRelayDir(), "crosslink");
     this.sessionsDir = join(this.rootDir, "sessions");
     this.mailboxesDir = join(this.rootDir, "mailboxes");
   }

@@ -109,7 +109,7 @@ async function handleMessage(
             tools: {}
           },
           serverInfo: {
-            name: "agent-harness",
+            name: "relay",
             version: "0.1.0"
           }
         }
@@ -126,7 +126,7 @@ async function handleMessage(
             ...getChannelToolDefinitions(),
             {
               name: "harness_status",
-              description: "Get Agent Harness workspace status and recent runs.",
+              description: "Get Relay workspace status and recent runs.",
               inputSchema: {
                 type: "object",
                 additionalProperties: false,

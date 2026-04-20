@@ -15,7 +15,7 @@ export async function ensureClaudeMcpConfig(input: {
   const path = join(input.paths.rootDir, "claude.mcp.json");
   const config = {
     mcpServers: {
-      agent_harness: {
+      relay: {
         command: process.execPath,
         args: [
           input.cliEntrypoint,
@@ -39,7 +39,7 @@ export async function ensureClaudeMcpConfig(input: {
 }
 
 const HARNESS_SYSTEM_PROMPT = [
-  "Agent Harness MCP is attached as server agent_harness. Use it to inspect workspace status, recent runs, phase ledgers, and artifacts before deciding how to proceed.",
+  "Relay MCP is attached as server relay. Use it to inspect workspace status, recent runs, phase ledgers, and artifacts before deciding how to proceed.",
   "",
   "CROSSLINK: You have cross-session collaboration tools. Other agent sessions in different repos may be running simultaneously.",
   "- crosslink_discover: Find other active sessions and their repos/capabilities.",
@@ -72,16 +72,16 @@ export function buildCodexLaunchArgs(input: {
 }): string[] {
   return [
     "-c",
-    `mcp_servers.agent_harness.command=${tomlString(process.execPath)}`,
+    `mcp_servers.relay.command=${tomlString(process.execPath)}`,
     "-c",
-    `mcp_servers.agent_harness.args=${tomlArray([
+    `mcp_servers.relay.args=${tomlArray([
       input.cliEntrypoint,
       "mcp-server",
       "--workspace",
       input.cwd
     ])}`,
     "-c",
-    `mcp_servers.agent_harness.env.AGENT_HARNESS_PROVIDER=${tomlString("codex")}`,
+    `mcp_servers.relay.env.AGENT_HARNESS_PROVIDER=${tomlString("codex")}`,
     ...input.userArgs
   ];
 }

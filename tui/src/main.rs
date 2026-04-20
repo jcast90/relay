@@ -21,12 +21,14 @@ use std::time::{Duration, Instant};
 
 use data::*;
 
-/// Resolve the agent-harness CLI binary path
+/// Resolve the Relay CLI binary path (env: RELAY_BIN or legacy AGENT_HARNESS_BIN; default "rly")
 fn cli_bin() -> String {
-    std::env::var("AGENT_HARNESS_BIN").unwrap_or_else(|_| "agent-harness".to_string())
+    std::env::var("RELAY_BIN")
+        .or_else(|_| std::env::var("AGENT_HARNESS_BIN"))
+        .unwrap_or_else(|_| "rly".to_string())
 }
 
-/// Call the agent-harness CLI with given args and parse JSON output.
+/// Call the Relay CLI with given args and parse JSON output.
 /// Returns None if the command fails or output isn't valid JSON.
 fn cli_json(args: &[&str]) -> Option<serde_json::Value> {
     let output = Command::new(cli_bin())

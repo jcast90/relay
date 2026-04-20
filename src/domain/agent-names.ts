@@ -1,7 +1,7 @@
 import { readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { homedir } from "node:os";
 
+import { getRelayDir } from "../cli/paths.js";
 import type { AgentProvider, AgentRole } from "./agent.js";
 
 export interface AgentNameEntry {
@@ -12,7 +12,7 @@ export interface AgentNameEntry {
   updatedAt: string;
 }
 
-const NAMES_PATH = join(homedir(), ".agent-harness", "agent-names.json");
+const namesPath = (): string => join(getRelayDir(), "agent-names.json");
 
 export async function setAgentName(
   agentId: string,
@@ -31,9 +31,9 @@ export async function setAgentName(
     entries.push(entry);
   }
 
-  const tmpPath = `${NAMES_PATH}.tmp.${process.pid}`;
+  const tmpPath = `${namesPath()}.tmp.${process.pid}`;
   await writeFile(tmpPath, JSON.stringify(entries, null, 2));
-  await rename(tmpPath, NAMES_PATH);
+  await rename(tmpPath, namesPath());
 
   return entry;
 }
@@ -45,7 +45,7 @@ export async function getAgentName(agentId: string): Promise<string> {
 
 export async function listAgentNames(): Promise<AgentNameEntry[]> {
   try {
-    return JSON.parse(await readFile(NAMES_PATH, "utf8")) as AgentNameEntry[];
+    return JSON.parse(await readFile(namesPath(), "utf8")) as AgentNameEntry[];
   } catch {
     return [];
   }

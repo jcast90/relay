@@ -80,7 +80,9 @@ struct CliResult {
 }
 
 fn cli_run(args: &[&str]) -> CliResult {
-    let bin = std::env::var("AGENT_HARNESS_BIN").unwrap_or_else(|_| "agent-harness".to_string());
+    let bin = std::env::var("RELAY_BIN")
+        .or_else(|_| std::env::var("AGENT_HARNESS_BIN"))
+        .unwrap_or_else(|_| "rly".to_string());
     match Command::new(bin)
         .args(args)
         .stdout(Stdio::piped())
@@ -106,14 +108,14 @@ fn cli_json(args: &[&str]) -> Result<serde_json::Value, String> {
     let result = cli_run(args);
     if !result.success {
         return Err(format!(
-            "agent-harness {} failed: {}",
+            "rly {} failed: {}",
             args.join(" "),
             result.stderr.trim()
         ));
     }
     serde_json::from_str(result.stdout.trim()).map_err(|e| {
         format!(
-            "invalid JSON from agent-harness {}: {} (output: {})",
+            "invalid JSON from rly {}: {} (output: {})",
             args.join(" "),
             e,
             result.stdout

@@ -544,7 +544,7 @@ export class Orchestrator {
         phaseLedgerPath: run.phaseLedgerPath,
         artifactsRoot: this.artifactsDir
         ? `${this.artifactsDir}/${run.id}`
-        : `${this.repoRoot}/.agent-harness/artifacts/${run.id}`
+        : `${this.repoRoot}/.relay/artifacts/${run.id}`
       }
     });
     await this.artifactStore.saveRunSnapshot(run);

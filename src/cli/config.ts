@@ -2,16 +2,18 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
+import { getRelayDir } from "./paths.js";
+
 export interface HarnessGlobalConfig {
   /** Directories to scan for git repos (e.g. ["~/projects", "~/turingon/Dev"]) */
   projectDirs: string[];
 }
 
-const GLOBAL_ROOT = join(homedir(), ".agent-harness");
-const CONFIG_PATH = join(GLOBAL_ROOT, "config.json");
+const globalRoot = (): string => getRelayDir();
+const configPath = (): string => join(globalRoot(), "config.json");
 
 export function getConfigPath(): string {
-  return CONFIG_PATH;
+  return configPath();
 }
 
 function expandHome(p: string): string {
@@ -23,7 +25,7 @@ function expandHome(p: string): string {
 
 export async function readConfig(): Promise<HarnessGlobalConfig> {
   try {
-    const raw = JSON.parse(await readFile(CONFIG_PATH, "utf8")) as Partial<HarnessGlobalConfig>;
+    const raw = JSON.parse(await readFile(configPath(), "utf8")) as Partial<HarnessGlobalConfig>;
     return {
       projectDirs: Array.isArray(raw.projectDirs)
         ? raw.projectDirs.map(expandHome)
@@ -35,10 +37,10 @@ export async function readConfig(): Promise<HarnessGlobalConfig> {
 }
 
 export async function writeConfig(config: HarnessGlobalConfig): Promise<void> {
-  await mkdir(GLOBAL_ROOT, { recursive: true });
-  const tmpPath = `${CONFIG_PATH}.tmp.${process.pid}`;
+  await mkdir(globalRoot(), { recursive: true });
+  const tmpPath = `${configPath()}.tmp.${process.pid}`;
   await writeFile(tmpPath, JSON.stringify(config, null, 2));
-  await rename(tmpPath, CONFIG_PATH);
+  await rename(tmpPath, configPath());
 }
 
 export async function addProjectDir(dir: string): Promise<HarnessGlobalConfig> {

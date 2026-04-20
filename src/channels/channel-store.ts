@@ -1,7 +1,7 @@
 import { appendFile, mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { homedir } from "node:os";
 
+import { getRelayDir } from "../cli/paths.js";
 import { getAgentName } from "../domain/agent-names.js";
 import {
   buildChannelId,
@@ -17,13 +17,11 @@ import {
 } from "../domain/channel.js";
 import { buildDecisionId, type Decision } from "../domain/decision.js";
 
-const CHANNELS_DIR = join(homedir(), ".agent-harness", "channels");
-
 export class ChannelStore {
   private readonly channelsDir: string;
 
   constructor(channelsDir?: string) {
-    this.channelsDir = channelsDir ?? CHANNELS_DIR;
+    this.channelsDir = channelsDir ?? join(getRelayDir(), "channels");
   }
 
   // --- Channel CRUD ---

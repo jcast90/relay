@@ -1,11 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
 
 import { ChannelStore } from "../channels/channel-store.js";
+import { getRelayDir } from "./paths.js";
 import { SessionStore } from "./session-store.js";
-
-const HARNESS_DIR = join(homedir(), ".agent-harness");
 
 export function buildSystemPrompt(input: {
   channelId: string;
@@ -23,7 +21,7 @@ export function buildSystemPrompt(input: {
     );
   }
 
-  const channelDir = join(HARNESS_DIR, "channels", input.channelId);
+  const channelDir = join(getRelayDir(), "channels", input.channelId);
   const ticketsPath = join(channelDir, "tickets.json");
   const decisionsDir = join(channelDir, "decisions");
 
@@ -112,7 +110,7 @@ export async function resolveChannelRefs(input: {
       }
 
       // Include tickets if they exist
-      const ticketsPath = join(HARNESS_DIR, "channels", channel.channelId, "tickets.json");
+      const ticketsPath = join(getRelayDir(), "channels", channel.channelId, "tickets.json");
 
       if (existsSync(ticketsPath)) {
         try {
@@ -139,19 +137,16 @@ export async function resolveChannelRefs(input: {
 }
 
 export function findMcpConfig(repoPath?: string): string | null {
-  if (repoPath) {
-    const path = join(repoPath, ".agent-harness", "claude.mcp.json");
+  // Prefer the new .relay/ directory; fall back to legacy .agent-harness/
+  // so existing checkouts keep working until the user migrates.
+  const candidates = ["relay", "agent-harness"];
+  const roots = [repoPath, process.cwd()].filter((r): r is string => Boolean(r));
 
-    if (existsSync(path)) {
-      return path;
+  for (const root of roots) {
+    for (const dirName of candidates) {
+      const candidate = join(root, `.${dirName}`, "claude.mcp.json");
+      if (existsSync(candidate)) return candidate;
     }
-  }
-
-  // Fallback: check cwd
-  const cwdPath = join(process.cwd(), ".agent-harness", "claude.mcp.json");
-
-  if (existsSync(cwdPath)) {
-    return cwdPath;
   }
 
   return null;
