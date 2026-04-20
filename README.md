@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="gui/src-tauri/icons/icon.svg" alt="Relay" width="96" height="96"/>
+</p>
+
 # Relay
 
 Local-first orchestration for phase-driven coding with Claude and Codex adapters. Classifies requests by complexity, decomposes work into parallelizable tickets, and executes them with verification loops.
