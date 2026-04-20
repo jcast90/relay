@@ -30,6 +30,8 @@ import {
 } from "./cli/workspace-registry.js";
 import { addProjectDir, readConfig, removeProjectDir } from "./cli/config.js";
 import { LocalArtifactStore } from "./execution/artifact-store.js";
+import { buildHarnessStore } from "./storage/factory.js";
+import type { HarnessStore } from "./storage/store.js";
 import { startMcpServer } from "./mcp/server.js";
 import { VerificationRunner } from "./execution/verification-runner.js";
 import { Orchestrator } from "./orchestrator/orchestrator.js";
@@ -424,6 +426,14 @@ export async function main(): Promise<void> {
       `- ${event.createdAt} ${event.phaseId} ${event.type} ${JSON.stringify(event.details)}`
     );
   }
+}
+
+// One store per process. Handlers migrating off direct `fs/promises` (T-101+)
+// will call `getHarnessStore()`; nothing wires it yet.
+let cachedStore: HarnessStore | null = null;
+export function getHarnessStore(): HarnessStore {
+  if (!cachedStore) cachedStore = buildHarnessStore();
+  return cachedStore;
 }
 
 async function printChannels(args: string[] = []): Promise<void> {
