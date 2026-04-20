@@ -71,9 +71,11 @@ export interface ChannelEntry {
   /**
    * Free-form metadata for the entry. Callers may pass any JSON-serializable
    * values; the channel store serializes non-string values to JSON strings on
-   * write so downstream Rust readers (`crates/harness-data`) and the GUI
-   * (`gui/src/types.ts`), which type metadata as `Record<string, string>`,
-   * continue to deserialize the feed without changes.
+   * write (tagged with an `__ah_meta_json::` prefix) so downstream Rust
+   * readers (`crates/harness-data`) and the GUI (`gui/src/types.ts`), which
+   * type metadata as `Record<string, string>`, continue to deserialize the
+   * feed without changes. TypeScript callers see the original types round-
+   * tripped back on read via `denormalizeMetadata`.
    */
   metadata: Record<string, unknown>;
   createdAt: string;

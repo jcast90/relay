@@ -20,10 +20,26 @@
 // subsequent callers.
 let chain: Promise<void> = Promise.resolve();
 
+// Tracks whether the mutex is currently held by an in-flight `fn`. This is a
+// synchronous indicator used to detect a reentrant (recursive) call from
+// inside an `fn` already holding the mutex. Without this, a reentrant caller
+// would enqueue behind its own outer call's chain promise and deadlock, since
+// that promise only resolves when the outer `fn` returns.
+let held = false;
+
 export async function withEnvOverride<T>(
   overrides: Record<string, string | undefined>,
   fn: () => T | Promise<T>,
 ): Promise<T> {
+  // Fail fast on recursion. We throw *before* touching the chain so the outer
+  // call's mutex state stays intact — once the outer `fn` returns normally,
+  // subsequent unrelated callers queued behind it still run as usual.
+  if (held) {
+    throw new Error(
+      "withEnvOverride: recursive call detected — plugin factories must not reenter",
+    );
+  }
+
   const prior = chain;
   let release!: () => void;
   chain = new Promise<void>((resolve) => {
@@ -36,6 +52,7 @@ export async function withEnvOverride<T>(
   const saved: Record<string, string | undefined> = {};
   for (const key of savedKeys) saved[key] = process.env[key];
 
+  held = true;
   try {
     for (const key of savedKeys) {
       const value = overrides[key];
@@ -49,6 +66,7 @@ export async function withEnvOverride<T>(
       if (previous === undefined) delete process.env[key];
       else process.env[key] = previous;
     }
+    held = false;
     release();
   }
 }

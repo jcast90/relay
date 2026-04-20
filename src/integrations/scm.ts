@@ -111,6 +111,12 @@ export function wrapScm(scm: SCM, project: HarnessProject): HarnessScm {
     number: pr.number,
     url: pr.url,
     branch: pr.branch,
+    // `title` and `isDraft` are stub fields. The AO github plugin does not
+    // read them in the methods the harness calls today (`getCISummary`,
+    // `getReviewDecision`, `getPendingComments`, `enrichSessionsPRBatch`),
+    // so the placeholders are safe. If a future AO version starts consulting
+    // `isDraft` (e.g. to skip drafts in batch enrichment) or `title` (e.g.
+    // for logging), we'll need to plumb real values through `HarnessPR`.
     title: "",
     owner: project.owner,
     repo: project.name,

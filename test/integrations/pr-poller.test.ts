@@ -164,6 +164,97 @@ describe("PrPoller", () => {
     }
   });
 
+  it("concurrent tick short-circuits while the first is in-flight", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pr-poller-concurrent-"));
+    const store = new ChannelStore(dir);
+    try {
+      const channel = await store.createChannel({ name: "#pr-concurrent", description: "" });
+      const enqueueFollowUp = vi.fn<(req: FollowUpRequest) => Promise<string>>(
+        async () => "followup-id"
+      );
+      const scheduler: FollowUpDispatcher = { enqueueFollowUp };
+
+      // Held resolver so the first enrichBatch call stays pending until we let it go.
+      let releaseFirst: (value: Map<string, EnrichedPR>) => void = () => {};
+      const firstPending = new Promise<Map<string, EnrichedPR>>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const enrichBatch = vi.fn<(prs: unknown) => Promise<Map<string, EnrichedPR>>>(
+        () => firstPending
+      );
+      const scm = {
+        detectPR: vi.fn(),
+        getCiSummary: vi.fn(),
+        getReviewDecision: vi.fn(),
+        getPendingComments: vi.fn(),
+        enrichBatch
+      } as unknown as HarnessScm;
+
+      const poller = new PrPoller({ scm, channelStore: store, scheduler });
+      poller.track(makeTracked(channel.channelId));
+
+      // Kick off the first tick but do not await it — it is parked inside enrichBatch.
+      const firstTick = poller.tick();
+      // Concurrent tick should see `running` is true and short-circuit immediately.
+      await poller.tick();
+
+      expect(enrichBatch).toHaveBeenCalledTimes(1);
+
+      // Release the first tick and ensure it settles cleanly.
+      releaseFirst(new Map([["acme/widgets#42", seed()]]));
+      await expect(firstTick).resolves.toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("start sets up an interval that fires ticks; stop clears it and is idempotent", async () => {
+    vi.useFakeTimers();
+    const dir = await mkdtemp(join(tmpdir(), "pr-poller-timer-"));
+    const store = new ChannelStore(dir);
+    try {
+      const channel = await store.createChannel({ name: "#pr-timer", description: "" });
+      const enqueueFollowUp = vi.fn<(req: FollowUpRequest) => Promise<string>>(
+        async () => "followup-id"
+      );
+      const scheduler: FollowUpDispatcher = { enqueueFollowUp };
+
+      const enrichBatch = vi.fn<(prs: unknown) => Promise<Map<string, EnrichedPR>>>(
+        async () => new Map([["acme/widgets#42", seed()]])
+      );
+      const scm = {
+        detectPR: vi.fn(),
+        getCiSummary: vi.fn(),
+        getReviewDecision: vi.fn(),
+        getPendingComments: vi.fn(),
+        enrichBatch
+      } as unknown as HarnessScm;
+
+      const intervalMs = 1_000;
+      const poller = new PrPoller({ scm, channelStore: store, scheduler, intervalMs });
+      poller.track(makeTracked(channel.channelId));
+
+      poller.start();
+
+      // Advance past three interval boundaries; each fires a tick.
+      await vi.advanceTimersByTimeAsync(intervalMs * 3);
+      expect(enrichBatch.mock.calls.length).toBeGreaterThanOrEqual(1);
+
+      poller.stop();
+      enrichBatch.mockClear();
+
+      // No further ticks should fire after stop, even across many intervals.
+      await vi.advanceTimersByTimeAsync(intervalMs * 5);
+      expect(enrichBatch).not.toHaveBeenCalled();
+
+      // Idempotent stop.
+      expect(() => poller.stop()).not.toThrow();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+      vi.useRealTimers();
+    }
+  });
+
   it("untracks the PR when prState transitions to merged", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pr-poller-merge-"));
     const store = new ChannelStore(dir);

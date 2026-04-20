@@ -50,10 +50,11 @@ describe("HarnessChannelNotifier", () => {
       expect(entry.metadata.sessionId).toBe("sess-1");
       expect(entry.metadata.projectId).toBe("proj-1");
       expect(entry.metadata.timestamp).toBe("2026-04-20T12:00:00.000Z");
-      // event.data is preserved as a JSON-serialized string so existing
-      // Rust/GUI readers (typed Record<string, string>) keep working.
-      expect(typeof entry.metadata.data).toBe("string");
-      expect(JSON.parse(entry.metadata.data as string)).toEqual(data);
+      // event.data is tagged+serialized on write so downstream Rust/GUI
+      // readers (typed Record<string, string>) keep seeing string metadata;
+      // TS callers get the original object back after the symmetric
+      // denormalization performed in readFeed.
+      expect(entry.metadata.data).toEqual(data);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
