@@ -5,10 +5,12 @@ import { promisify } from "node:util";
 
 import { getRelayDir } from "../../cli/paths.js";
 import type {
+  DestroyResult,
   RepoRef,
   SandboxProvider,
   SandboxRef
 } from "../sandbox.js";
+export type { DestroyResult } from "../sandbox.js";
 
 // argv-based runner (no shell) keeps repo paths safe from shell expansion.
 const runGitChild = promisify(execFile);
@@ -17,6 +19,14 @@ export interface RunGitResult {
   stdout: string;
   stderr: string;
   code: number;
+  /**
+   * Set when the spawn itself fails (e.g. `git` isn't on PATH) rather than git
+   * exiting non-zero. Callers can distinguish "git not found" (spawnCode
+   * `ENOENT`) from "git exited 128" (plain `code: 128`). Preserved as a string
+   * because Node's spawn errors surface string codes (ENOENT, EACCES, …),
+   * not numeric ones.
+   */
+  spawnCode?: string;
 }
 
 /**
@@ -63,6 +73,33 @@ const DIRTY_STDERR_FRAGMENTS = [
   "use --force to delete it"
 ];
 
+/**
+ * Reject path segments that could escape the sandbox base dir via traversal
+ * (`..`), collapse to the parent (`.`), pierce a directory boundary (`/`,
+ * `\`), trip the kernel's null-byte guard, or carry whitespace that could
+ * confuse downstream argv handling.
+ *
+ * Intentionally duplicated (with a narrower `kind` type) from
+ * {@link ../../storage/file-store.ts} — see the PR review: a tiny local copy
+ * is preferable to extracting a shared helper during a review-response commit.
+ */
+function assertSafeSegment(
+  segment: string,
+  kind: "runId" | "ticketId"
+): void {
+  if (
+    segment === "" ||
+    segment === "." ||
+    segment === ".." ||
+    segment.includes("/") ||
+    segment.includes("\\") ||
+    segment.includes("\0") ||
+    /\s/.test(segment)
+  ) {
+    throw new Error(`Unsafe path segment in ${kind}: ${segment}`);
+  }
+}
+
 const defaultRunGit: RunGit = async (args, cwd) => {
   try {
     const { stdout, stderr } = await runGitChild("git", args, { cwd });
@@ -73,6 +110,18 @@ const defaultRunGit: RunGit = async (args, cwd) => {
       stderr?: string;
       code?: number | string;
     };
+    // Spawn-level errors (git missing, permission denied, …) surface as
+    // string codes on the thrown error. Preserve them separately from the
+    // process exit code so callers can distinguish "git not installed"
+    // (spawnCode=ENOENT) from "git exited non-zero" (code=128).
+    if (typeof e.code === "string") {
+      return {
+        stdout: e.stdout ?? "",
+        stderr: e.stderr ?? String(err),
+        code: 1,
+        spawnCode: e.code
+      };
+    }
     return {
       stdout: e.stdout ?? "",
       stderr: e.stderr ?? String(err),
@@ -115,6 +164,17 @@ export class GitWorktreeSandboxProvider implements SandboxProvider {
     base: string,
     options?: CreateOptions
   ): Promise<SandboxRef> {
+    if (!options) {
+      throw new Error(
+        "GitWorktreeSandboxProvider.create requires { runId, ticketId }"
+      );
+    }
+    // Validate BEFORE the non-null coerce in requireIds — an empty string
+    // should surface as "Unsafe path segment" (not as the lower-priority
+    // "requires { runId, ticketId }" message) so callers get a uniform
+    // signal for path-injection attempts regardless of the bad value.
+    assertSafeSegment(options.runId ?? "", "runId");
+    assertSafeSegment(options.ticketId ?? "", "ticketId");
     const { runId, ticketId } = requireIds(options);
 
     const sandboxPath = join(this.baseDir, `run-${runId}`, ticketId);
@@ -123,6 +183,17 @@ export class GitWorktreeSandboxProvider implements SandboxProvider {
 
     await mkdir(dirname(sandboxPath), { recursive: true });
 
+    // A pre-existing target path almost always means a resumed run or crash
+    // recovery — conditions T-203 is meant to handle. Fail loudly with a
+    // distinguishable error instead of letting `git worktree add` return a
+    // generic "directory already exists" that's harder for callers to reason
+    // about.
+    if (await pathExists(sandboxPath)) {
+      throw new Error(
+        `Sandbox path ${sandboxPath} already exists (runId=${runId}, ticketId=${ticketId}); T-203 recovery should handle resume`
+      );
+    }
+
     const result = await this.runGit(
       ["worktree", "add", "-b", branch, sandboxPath, base],
       repo.root
@@ -130,7 +201,7 @@ export class GitWorktreeSandboxProvider implements SandboxProvider {
 
     if (result.code !== 0) {
       throw new Error(
-        `git worktree add failed for ${branch} at ${sandboxPath}: ${result.stderr.trim() || "unknown error"}`
+        `git worktree add failed for ${branch} at ${sandboxPath} (exit ${result.code}): ${result.stderr.trim() || "unknown error"}${result.stdout ? ` | stdout: ${result.stdout.trim()}` : ""}${result.spawnCode ? ` | spawnCode: ${result.spawnCode}` : ""}`
       );
     }
 
@@ -142,11 +213,35 @@ export class GitWorktreeSandboxProvider implements SandboxProvider {
       branch
     };
 
-    await writeFile(
-      join(sandboxPath, ".relay-state.json"),
-      `${JSON.stringify(state, null, 2)}\n`,
-      "utf8"
-    );
+    try {
+      await writeFile(
+        join(sandboxPath, ".relay-state.json"),
+        `${JSON.stringify(state, null, 2)}\n`,
+        "utf8"
+      );
+    } catch (err) {
+      // The worktree exists on disk without its stamp — an orphan that T-203
+      // can't identify. Best-effort roll back the `git worktree add`, then
+      // rethrow with context so the caller sees both failures.
+      // eslint-disable-next-line no-console
+      console.debug(
+        `[git-worktree] state-file write failed at ${sandboxPath}; attempting rollback`
+      );
+      const rollback = await this.runGit(
+        ["worktree", "remove", "--force", sandboxPath],
+        repo.root
+      );
+      if (rollback.code !== 0) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `[git-worktree] rollback failed for ${sandboxPath} (exit ${rollback.code}): ${rollback.stderr.trim() || "unknown error"}`
+        );
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Failed to write .relay-state.json at ${sandboxPath}: ${message}`
+      );
+    }
 
     this.ownerRepo.set(id, repo.root);
 
@@ -158,34 +253,57 @@ export class GitWorktreeSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * Remove a worktree. Idempotent: a missing path is a silent no-op.
+   * Remove a worktree. Idempotent: a missing path resolves to
+   * `{ kind: "missing" }`.
    *
-   * When `git worktree remove` reports uncommitted changes, the worktree is
-   * preserved (we do NOT add `--force` implicitly). This lets T-203 crash
-   * recovery inspect stale sandboxes without destroying unflushed work.
-   * Pass `{ force: true }` to force deletion.
+   * When `git worktree remove` reports uncommitted changes — matched against
+   * {@link DIRTY_STDERR_FRAGMENTS} (currently:
+   * "contains modified or untracked files", "is dirty", "has modifications",
+   * "use --force to delete it") — the worktree is preserved and the call
+   * resolves with `{ kind: "preserved", reason: "dirty" }`. We do NOT add
+   * `--force` implicitly: doing so would destroy uncommitted agent output
+   * that a T-203 recovery sweep is expected to salvage. Pass
+   * `{ force: true }` to override.
    */
-  async destroy(ref: SandboxRef, opts: DestroyOptions = {}): Promise<void> {
+  async destroy(
+    ref: SandboxRef,
+    opts: DestroyOptions = {}
+  ): Promise<DestroyResult> {
     if (ref.workdir.kind !== "local") {
-      return;
+      return { kind: "missing" };
+    }
+
+    // Validate the ids embedded in the ref before we act on them — a ref
+    // fabricated with `ticketId="../escape"` must not steer us to a path
+    // outside `baseDir`.
+    const runIdFromRef = ref.meta?.runId;
+    const ticketIdFromRef = ref.meta?.ticketId;
+    if (runIdFromRef !== undefined) assertSafeSegment(runIdFromRef, "runId");
+    if (ticketIdFromRef !== undefined) {
+      assertSafeSegment(ticketIdFromRef, "ticketId");
     }
 
     const path = ref.workdir.path;
 
     if (!(await pathExists(path))) {
       // Missing path — nothing to remove. Logged at debug only so normal
-      // re-entrancy (retry / resume) doesn't spam the console.
+      // re-entrancy (retry / resume) doesn't spam the console. TODO: swap
+      // for a project-wide logger once one exists; `console.debug` is
+      // intentional and temporary.
       // eslint-disable-next-line no-console
-      console.debug?.(`[git-worktree] destroy: path ${path} missing, no-op`);
-      return;
+      console.debug(`[git-worktree] destroy: path ${path} missing, no-op`);
+      return { kind: "missing" };
     }
 
     const cwd = this.ownerRepo.get(ref.id) ?? ref.meta?.repoRoot;
     if (!cwd) {
-      // Without the origin repo we cannot run `git worktree remove`. This
-      // should only happen on a ref from a different provider instance; leave
-      // the worktree in place for manual / T-203 cleanup.
-      return;
+      // Without the origin repo we cannot run `git worktree remove`. Rather
+      // than silently returning (which looks like success), surface the
+      // problem so callers can either pass `ref.meta.repoRoot` or use the
+      // same provider instance that created the ref.
+      throw new Error(
+        `Cannot destroy sandbox ${ref.id}: owner repo unknown and ref.meta.repoRoot is missing`
+      );
     }
 
     const args = ["worktree", "remove"];
@@ -196,17 +314,17 @@ export class GitWorktreeSandboxProvider implements SandboxProvider {
 
     if (result.code === 0) {
       this.ownerRepo.delete(ref.id);
-      return;
+      return { kind: "removed" };
     }
 
     if (!opts.force && isDirtyWorktreeError(result.stderr)) {
       // Preserve on-disk state so recovery tooling (T-203) can inspect the
       // dirty worktree and decide manually. This is the key safety property.
-      return;
+      return { kind: "preserved", reason: "dirty", stderr: result.stderr };
     }
 
     throw new Error(
-      `git worktree remove failed for ${path}: ${result.stderr.trim() || "unknown error"}`
+      `git worktree remove failed for ${path} (exit ${result.code}): ${result.stderr.trim() || "unknown error"}${result.stdout ? ` | stdout: ${result.stdout.trim()}` : ""}${result.spawnCode ? ` | spawnCode: ${result.spawnCode}` : ""}`
     );
   }
 }
@@ -229,7 +347,8 @@ async function pathExists(path: string): Promise<boolean> {
   try {
     await stat(path);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw err;
   }
 }
