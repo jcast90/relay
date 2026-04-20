@@ -107,6 +107,9 @@ button.primary { background: var(--accent-dim); border-color: var(--accent); }
 }
 
 .content { flex: 1; overflow-y: auto; padding: 12px 16px; min-height: 0; }
+/* Board tab manages its own per-column scroll, so the outer container must
+   not itself overflow — otherwise the columns stretch to natural height. */
+.content.board-content { overflow-y: hidden; display: flex; flex-direction: column; }
 
 .feed-entry {
   margin-bottom: 12px;
@@ -177,8 +180,16 @@ button.primary { background: var(--accent-dim); border-color: var(--accent); }
 
 .board-columns {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 12px;
+  height: 100%;
+  min-height: 0;
+  align-items: stretch;
+}
+.board-column {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 .board-column h4 {
   font-size: 11px;
@@ -186,6 +197,13 @@ button.primary { background: var(--accent-dim); border-color: var(--accent); }
   letter-spacing: 0.06em;
   color: var(--text-dim);
   margin: 0 0 8px;
+  flex-shrink: 0;
+}
+.board-column-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 .ticket {
   background: var(--bg-alt);
@@ -195,7 +213,76 @@ button.primary { background: var(--accent-dim); border-color: var(--accent); }
   margin-bottom: 6px;
   font-size: 12px;
 }
+.ticket.clickable {
+  cursor: pointer;
+  transition: border-color 80ms ease, background 80ms ease;
+}
+.ticket.clickable:hover {
+  border-color: var(--accent);
+  background: var(--bg);
+}
+.ticket.clickable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .ticket .ticket-meta { color: var(--text-muted); font-size: 10px; margin-top: 4px; }
+
+/* Ticket detail modal */
+.ticket-modal {
+  width: 520px;
+}
+.ticket-modal .detail-row {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 13px;
+}
+.ticket-modal .detail-row-block {
+  display: block;
+}
+.ticket-modal .detail-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+.ticket-modal code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  background: var(--bg);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.ticket-modal .dep-list {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ticket-modal .dep-list li {
+  padding: 6px 8px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+}
+.ticket-modal .dep-status {
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ticket-modal .dep-title {
+  margin-top: 4px;
+  color: var(--text-muted);
+}
 
 .decision {
   margin-bottom: 16px;

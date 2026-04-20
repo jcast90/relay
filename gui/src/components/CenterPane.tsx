@@ -137,7 +137,7 @@ export function CenterPane({
         />
       )}
       {tab === "board" && (
-        <div className="content">
+        <div className="content board-content">
           <BoardView tickets={tickets} />
         </div>
       )}
@@ -381,35 +381,155 @@ function parseAliasPrefix(
   return { alias: candidate, body: match[2] };
 }
 
+// Canonical ticket statuses + display labels. "pending" shows as "Backlog"
+// because that's what a kanban board reader expects.
+const BOARD_COLUMNS: Array<{ status: string; label: string }> = [
+  { status: "pending", label: "Backlog" },
+  { status: "ready", label: "Ready" },
+  { status: "executing", label: "Executing" },
+  { status: "verifying", label: "Verifying" },
+  { status: "retry", label: "Retry" },
+  { status: "blocked", label: "Blocked" },
+  { status: "completed", label: "Completed" },
+  { status: "failed", label: "Failed" },
+];
+
 function BoardView({ tickets }: { tickets: TicketLedgerEntry[] }) {
+  const [selected, setSelected] = useState<TicketLedgerEntry | null>(null);
+
   if (tickets.length === 0)
     return <div className="empty">No tickets in this channel</div>;
-  const cols = ["pending", "ready", "in_progress", "completed", "blocked"];
-  const grouped = Object.fromEntries(
-    cols.map((c) => [c, [] as TicketLedgerEntry[]]),
-  ) as Record<string, TicketLedgerEntry[]>;
+
+  const grouped: Record<string, TicketLedgerEntry[]> = {};
   for (const t of tickets) {
-    const key = grouped[t.status] ? t.status : "pending";
-    grouped[key].push(t);
+    const key = BOARD_COLUMNS.some((c) => c.status === t.status)
+      ? t.status
+      : "pending";
+    (grouped[key] ||= []).push(t);
   }
+  const visible = BOARD_COLUMNS.filter(
+    (c) => (grouped[c.status]?.length ?? 0) > 0,
+  );
+
   return (
-    <div className="board-columns">
-      {cols.map((c) => (
-        <div key={c} className="board-column">
-          <h4>
-            {c} ({grouped[c].length})
-          </h4>
-          {grouped[c].map((t) => (
-            <div key={t.ticketId} className="ticket">
-              <div>{t.title}</div>
-              <div className="ticket-meta">
-                {t.specialty} · attempt {t.attempt}
-                {t.assignedAgentName ? ` · ${t.assignedAgentName}` : ""}
-              </div>
+    <>
+      <div className="board-columns">
+        {visible.map(({ status, label }) => (
+          <div key={status} className="board-column">
+            <h4>
+              {label} ({grouped[status].length})
+            </h4>
+            <div className="board-column-body">
+              {grouped[status].map((t) => (
+                <div
+                  key={t.ticketId}
+                  className="ticket clickable"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setSelected(t)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setSelected(t);
+                    }
+                  }}
+                >
+                  <div>{t.title}</div>
+                  <div className="ticket-meta">
+                    {t.specialty} · attempt {t.attempt}
+                    {t.assignedAgentName ? ` · ${t.assignedAgentName}` : ""}
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
+          </div>
+        ))}
+      </div>
+      {selected && (
+        <TicketDetailModal
+          ticket={selected}
+          tickets={tickets}
+          onClose={() => setSelected(null)}
+        />
+      )}
+    </>
+  );
+}
+
+function TicketDetailModal({
+  ticket,
+  tickets,
+  onClose,
+}: {
+  ticket: TicketLedgerEntry;
+  tickets: TicketLedgerEntry[];
+  onClose: () => void;
+}) {
+  const deps = ticket.dependsOn.map((depId) => {
+    const found = tickets.find((x) => x.ticketId === depId);
+    return {
+      id: depId,
+      title: found?.title ?? "(not in this channel's ledger)",
+      status: found?.status ?? "?",
+    };
+  });
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal ticket-modal"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="modal-header">{ticket.title}</div>
+        <div className="modal-body">
+          <div className="detail-row">
+            <span className="detail-label">ID</span>
+            <code>{ticket.ticketId}</code>
+          </div>
+          <div className="detail-row">
+            <span className="detail-label">Status</span>
+            <span>{ticket.status}</span>
+          </div>
+          <div className="detail-row">
+            <span className="detail-label">Specialty</span>
+            <span>{ticket.specialty}</span>
+          </div>
+          <div className="detail-row">
+            <span className="detail-label">Verification</span>
+            <span>{ticket.verification}</span>
+          </div>
+          <div className="detail-row">
+            <span className="detail-label">Attempt</span>
+            <span>{ticket.attempt}</span>
+          </div>
+          {ticket.assignedAgentName && (
+            <div className="detail-row">
+              <span className="detail-label">Assigned</span>
+              <span>{ticket.assignedAgentName}</span>
+            </div>
+          )}
+          {deps.length > 0 && (
+            <div className="detail-row detail-row-block">
+              <span className="detail-label">
+                Depends on ({deps.length})
+              </span>
+              <ul className="dep-list">
+                {deps.map((d) => (
+                  <li key={d.id}>
+                    <code>{d.id}</code>{" "}
+                    <span className="dep-status">{d.status}</span>
+                    <div className="dep-title">{d.title}</div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
-      ))}
+        <div className="modal-footer">
+          <button type="button" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
