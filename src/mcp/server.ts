@@ -8,6 +8,7 @@ import { getHarnessWorkspacePaths, readWorkspaceSummary } from "../cli/workspace
 import { buildWorkspaceId } from "../cli/workspace-registry.js";
 import { CrosslinkStore } from "../crosslink/store.js";
 import { ChannelStore } from "../channels/channel-store.js";
+import { getHarnessStore } from "../storage/factory.js";
 import {
   callChannelTool,
   getChannelToolDefinitions,
@@ -41,7 +42,7 @@ export async function startMcpServer(workspaceRoot: string): Promise<void> {
     sessionId: null,
     store: crosslinkStore
   };
-  const channelStore = new ChannelStore();
+  const channelStore = new ChannelStore(undefined, getHarnessStore());
   const channelState: ChannelToolState = {
     sessionId: null,
     channelStore
@@ -354,7 +355,7 @@ async function callTool(
       return { runId, decision: "rejected", feedback, path };
     }
     case "project_create": {
-      const channelStore = new ChannelStore();
+      const channelStore = new ChannelStore(undefined, getHarnessStore());
       const workspaceId = buildWorkspaceId(workspaceRoot);
       const name = String(args.name ?? "");
       const description = String(args.description ?? name);

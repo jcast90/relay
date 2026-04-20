@@ -17,22 +17,64 @@ import {
 } from "../domain/channel.js";
 import { buildDecisionId, type Decision } from "../domain/decision.js";
 import type { TicketLedgerEntry } from "../domain/ticket.js";
+import { buildHarnessStore } from "../storage/factory.js";
+import { STORE_NS } from "../storage/namespaces.js";
+import type { HarnessStore } from "../storage/store.js";
 
 // Per-channel serialization so concurrent upsertChannelTickets calls for the
 // same channel don't race on read-modify-write. Keyed by channelId; the value
 // is a tail promise callers queue behind. Entries self-cleanup when no one is
-// queued. In-process only — cross-process coordination comes with T-101.
+// queued. In-process only; cross-process coordination for multi-writer
+// deployments (multiple schedulers) comes with the Postgres-backed
+// HarnessStore in T-402 — the per-upsert coordination record written through
+// `this.store.mutate` below is the hook that enables it.
 const channelTicketLocks: Map<string, Promise<void>> = new Map();
 
 // Monotonic suffix so two concurrent writers in the same process never
 // collide on the tmp file used by writeChannelTickets.
 let channelTicketsTmpCounter = 0;
 
+/**
+ * Ticket-board coordination record stored on the `HarnessStore` at
+ * `(channel-tickets, <channelId>)`. The ticket data itself continues to live
+ * in `channels/<channelId>/tickets.json` for Rust/GUI compatibility — this
+ * doc only tracks the last mutation so `store.mutate` can serve as a
+ * cross-process mutex when the backing store supports it (Postgres advisory
+ * locks in T-402). Unused when the operation is never called, which keeps
+ * pure-read callers (Rust, TUI) from ever materializing it.
+ */
+interface TicketLockRecord {
+  updatedAt: string;
+  count: number;
+}
+
 export class ChannelStore {
   private readonly channelsDir: string;
+  private readonly store: HarnessStore;
 
-  constructor(channelsDir?: string) {
+  /**
+   * @param channelsDir Directory for on-disk channel files. Defaults to
+   *   `~/.relay/channels` to preserve the layout the Rust crate
+   *   `harness-data` and the Tauri GUI read from directly. Overriding this
+   *   is only meaningful for tests — changing the default would break the
+   *   Rust/GUI reader.
+   * @param store `HarnessStore` used for operations that have migrated off
+   *   direct filesystem access. Defaults to `buildHarnessStore()` so callers
+   *   that don't inject one pick up the process-wide singleton semantics
+   *   through the factory. Tests substitute a `FakeHarnessStore` here.
+   *
+   * NOTE: most operations on this class still write directly to
+   * `channelsDir` because the Rust/GUI reader expects the plural-`channels`
+   * layout (`channels/<id>.json`, `channels/<id>/feed.jsonl`,
+   * `channels/<id>/tickets.json`, `channels/<id>/decisions/*.json`,
+   * `channels/<id>/runs.json`). FileHarnessStore's default namespace layout
+   * is `<root>/<ns>/<id>.json` which does not match, so migrating those
+   * paths would silently break the desktop app. T-101a tracks aligning the
+   * Rust side; until then, only coordination primitives (mutex) migrate.
+   */
+  constructor(channelsDir?: string, store?: HarnessStore) {
     this.channelsDir = channelsDir ?? join(getRelayDir(), "channels");
+    this.store = store ?? buildHarnessStore();
   }
 
   // --- Channel CRUD ---
@@ -434,14 +476,28 @@ export class ChannelStore {
    * Concurrent calls for the same channel are serialized through an
    * in-memory per-channel mutex so a read-modify-write cycle cannot lose
    * updates when multiple schedulers (or a scheduler + chat session) write
-   * at once. The mutex is in-process only; cross-process coordination is
-   * deferred to the HarnessStore migration (T-101).
+   * at once. The mutex is in-process only.
+   *
+   * After each successful merge, a small coordination record is written to
+   * the injected `HarnessStore` at `(channel-tickets, <channelId>)`. When
+   * the backing store is Postgres (T-402) this record lives under a
+   * cross-process advisory-lock-capable key, so multi-process schedulers
+   * can layer `store.mutate` on top for cross-process coordination without
+   * the ChannelStore itself owning that logic. FileHarnessStore's version
+   * is a plain JSON file at `<root>/channel-tickets/<id>.json` — harmless
+   * to the Rust/GUI reader (which only traverses `channels/`), and it
+   * doubles as an audit trail of upsert activity.
+   *
+   * Why not use `store.mutate` as the mutex directly? Its callback is
+   * synchronous (`(prev) => T`) so awaiting the `channels/<id>/tickets.json`
+   * read-modify-write inside it isn't possible without changing the
+   * HarnessStore contract — out of scope for T-101.
    */
   async upsertChannelTickets(
     channelId: string,
     incoming: TicketLedgerEntry[]
   ): Promise<TicketLedgerEntry[]> {
-    return this.withChannelLock(channelId, async () => {
+    const merged = await this.withChannelLock(channelId, async () => {
       const existing = await this.readChannelTickets(channelId);
       const byId = new Map(existing.map((t) => [t.ticketId, t]));
 
@@ -449,27 +505,43 @@ export class ChannelStore {
         byId.set(entry.ticketId, entry);
       }
 
-      const merged: TicketLedgerEntry[] = [];
+      const out: TicketLedgerEntry[] = [];
       const seen = new Set<string>();
 
       for (const entry of existing) {
         const current = byId.get(entry.ticketId);
         if (current) {
-          merged.push(current);
+          out.push(current);
           seen.add(entry.ticketId);
         }
       }
 
       for (const entry of incoming) {
         if (!seen.has(entry.ticketId)) {
-          merged.push(entry);
+          out.push(entry);
           seen.add(entry.ticketId);
         }
       }
 
-      await this.writeChannelTickets(channelId, merged);
-      return merged;
+      await this.writeChannelTickets(channelId, out);
+      return out;
     });
+
+    // Persist the coordination record through the HarnessStore. Uses
+    // `mutate` to keep semantics consistent across backends: on Postgres
+    // this executes under `pg_advisory_xact_lock`, on FileHarnessStore it
+    // serializes through the in-process key-lock. Purely advisory —
+    // nothing reads this record today; T-402 consumers layer on top.
+    await this.store.mutate<TicketLockRecord>(
+      STORE_NS.channelTickets,
+      channelId,
+      () => ({
+        updatedAt: new Date().toISOString(),
+        count: merged.length
+      })
+    );
+
+    return merged;
   }
 
   private async withChannelLock<T>(

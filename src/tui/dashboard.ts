@@ -1,4 +1,5 @@
 import { ChannelStore } from "../channels/channel-store.js";
+import { getHarnessStore } from "../storage/factory.js";
 import { listAgentNames } from "../domain/agent-names.js";
 import type { Channel, ChannelEntry } from "../domain/channel.js";
 import type { TicketLedgerEntry } from "../domain/ticket.js";
@@ -44,7 +45,7 @@ interface DashboardState {
 }
 
 export async function startDashboard(): Promise<void> {
-  const channelStore = new ChannelStore();
+  const channelStore = new ChannelStore(undefined, getHarnessStore());
 
   const state: DashboardState = {
     channels: [],

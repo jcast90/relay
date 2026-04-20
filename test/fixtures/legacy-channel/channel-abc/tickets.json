@@ -1,0 +1,41 @@
+{
+  "updatedAt": "2025-01-01T12:10:00.000Z",
+  "tickets": [
+    {
+      "ticketId": "ticket-legacy-1",
+      "title": "Implement auth middleware",
+      "specialty": "api_crud",
+      "status": "executing",
+      "dependsOn": [],
+      "assignedAgentId": "planner-claude",
+      "assignedAgentName": "Claude (Planner)",
+      "crosslinkSessionId": null,
+      "verification": "pending",
+      "lastClassification": null,
+      "chosenNextAction": null,
+      "attempt": 0,
+      "startedAt": "2025-01-01T12:10:00.000Z",
+      "completedAt": null,
+      "updatedAt": "2025-01-01T12:10:00.000Z",
+      "runId": "run-legacy-1"
+    },
+    {
+      "ticketId": "ticket-legacy-2",
+      "title": "Wire login UI",
+      "specialty": "ui",
+      "status": "ready",
+      "dependsOn": ["ticket-legacy-1"],
+      "assignedAgentId": null,
+      "assignedAgentName": null,
+      "crosslinkSessionId": null,
+      "verification": "pending",
+      "lastClassification": null,
+      "chosenNextAction": null,
+      "attempt": 0,
+      "startedAt": null,
+      "completedAt": null,
+      "updatedAt": "2025-01-01T12:10:00.000Z",
+      "runId": "run-legacy-1"
+    }
+  ]
+}

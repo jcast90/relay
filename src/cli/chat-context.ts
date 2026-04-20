@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { ChannelStore } from "../channels/channel-store.js";
+import { getHarnessStore } from "../storage/factory.js";
 import { getRelayDir } from "./paths.js";
 import { SessionStore } from "./session-store.js";
 
@@ -118,7 +119,7 @@ export async function resolveChannelRefs(input: {
   message: string;
   currentChannelId: string;
 }): Promise<{ resolved: string; refs: string[] }> {
-  const channelStore = new ChannelStore();
+  const channelStore = new ChannelStore(undefined, getHarnessStore());
   const sessionStore = new SessionStore();
   const channels = await channelStore.listChannels("active");
   const contextBlocks: string[] = [];

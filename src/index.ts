@@ -30,8 +30,7 @@ import {
 } from "./cli/workspace-registry.js";
 import { addProjectDir, readConfig, removeProjectDir } from "./cli/config.js";
 import { LocalArtifactStore } from "./execution/artifact-store.js";
-import { buildHarnessStore } from "./storage/factory.js";
-import type { HarnessStore } from "./storage/store.js";
+import { getHarnessStore } from "./storage/factory.js";
 import { startMcpServer } from "./mcp/server.js";
 import { VerificationRunner } from "./execution/verification-runner.js";
 import { Orchestrator } from "./orchestrator/orchestrator.js";
@@ -279,7 +278,7 @@ export async function main(): Promise<void> {
       );
       run = await orchestrator.run(featureRequest, runId);
     } else {
-      const channelStore = new ChannelStore();
+      const channelStore = new ChannelStore(undefined, getHarnessStore());
       const orchestratorV2 = new OrchestratorV2(
         registry,
         cwd,
@@ -428,28 +427,18 @@ export async function main(): Promise<void> {
   }
 }
 
-// One store per process. Handlers migrating off direct `fs/promises` (T-101+)
-// will call `getHarnessStore()`; nothing wires it yet.
-//
-// Module-level singleton rather than DI: legacy handlers still instantiate
-// their own stores directly, and a module-level cache keeps them from forking
-// behavior against a separately-constructed instance. Downstream constructors
-// (T-101+) take `HarnessStore` as a ctor arg for test substitution, so the
-// singleton is only a default entry point — not a hard dependency.
-let cachedStore: HarnessStore | null = null;
-export function getHarnessStore(): HarnessStore {
-  if (!cachedStore) cachedStore = buildHarnessStore();
-  return cachedStore;
-}
+// `getHarnessStore` is re-exported from the factory so legacy call sites can
+// continue to import it from this module.
+export { getHarnessStore };
 
 async function printChannels(args: string[] = []): Promise<void> {
   if (args.includes("--json")) {
-    const store = new ChannelStore();
+    const store = new ChannelStore(undefined, getHarnessStore());
     const channels = await store.listChannels("active");
     jsonOut(channels);
     return;
   }
-  const store = new ChannelStore();
+  const store = new ChannelStore(undefined, getHarnessStore());
   const channels = await store.listChannels();
 
   if (channels.length === 0) {
@@ -470,7 +459,7 @@ async function printChannels(args: string[] = []): Promise<void> {
 
 async function handleChannelCommand(args: string[]): Promise<void> {
   const sub = args[0];
-  const store = new ChannelStore();
+  const store = new ChannelStore(undefined, getHarnessStore());
 
   if (sub === "create") {
     const name = args[1];
@@ -819,7 +808,7 @@ async function resolvePrFromInput(
  * one in-flight run. Returns null when no channels exist.
  */
 async function resolveDefaultChannelId(): Promise<string | null> {
-  const store = new ChannelStore();
+  const store = new ChannelStore(undefined, getHarnessStore());
   const channels = await store.listChannels("active");
   return channels[0]?.channelId ?? null;
 }
@@ -878,7 +867,7 @@ async function printTaskBoard(channelId: string, args: string[] = []): Promise<v
     return;
   }
 
-  const store = new ChannelStore();
+  const store = new ChannelStore(undefined, getHarnessStore());
   const channel = await store.getChannel(channelId);
 
   if (!channel) {
@@ -931,7 +920,7 @@ async function printDecisions(channelId: string, args: string[] = []): Promise<v
     return;
   }
 
-  const store = new ChannelStore();
+  const store = new ChannelStore(undefined, getHarnessStore());
   const channel = await store.getChannel(channelId);
 
   if (!channel) {

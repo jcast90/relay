@@ -1,0 +1,14 @@
+{
+  "decisionId": "decision-legacy-1",
+  "channelId": "channel-abc",
+  "runId": "run-legacy-1",
+  "ticketId": null,
+  "title": "Use JWT for session tokens",
+  "description": "Pick JWT over session cookies for the v1 auth rollout.",
+  "rationale": "Stateless and already familiar to the team.",
+  "alternatives": ["session cookies", "opaque server-side tokens"],
+  "decidedBy": "planner-claude",
+  "decidedByName": "Claude (Planner)",
+  "linkedArtifacts": [],
+  "createdAt": "2025-01-01T12:08:00.000Z"
+}

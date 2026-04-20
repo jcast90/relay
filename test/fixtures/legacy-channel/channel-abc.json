@@ -1,0 +1,22 @@
+{
+  "channelId": "channel-abc",
+  "name": "#legacy-feature",
+  "description": "Pre-migration channel fixture — exercises the Rust-compat layout.",
+  "status": "active",
+  "workspaceIds": ["ws-legacy-1"],
+  "members": [
+    {
+      "agentId": "planner-claude",
+      "displayName": "Claude (Planner)",
+      "role": "planner",
+      "provider": "claude",
+      "status": "active",
+      "sessionId": null,
+      "joinedAt": "2025-01-01T12:00:00.000Z"
+    }
+  ],
+  "pinnedRefs": [],
+  "repoAssignments": [],
+  "createdAt": "2025-01-01T12:00:00.000Z",
+  "updatedAt": "2025-01-01T12:00:00.000Z"
+}
