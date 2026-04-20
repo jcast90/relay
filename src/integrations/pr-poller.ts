@@ -83,6 +83,25 @@ export class PrPoller {
     this.tracked.delete(ticketId);
   }
 
+  /**
+   * Read-only snapshot of tracked PRs and their last-seen enriched state.
+   * Used by the `pr-status` CLI command to render a table without reaching
+   * into the private `tracked` map.
+   */
+  listTracked(): ReadonlyArray<{
+    ticketId: string;
+    pr: TrackedPr["pr"];
+    repo: TrackedPr["repo"];
+    last: EnrichedPR | null;
+  }> {
+    return Array.from(this.tracked.values()).map((state) => ({
+      ticketId: state.entry.ticketId,
+      pr: state.entry.pr,
+      repo: state.entry.repo,
+      last: state.last,
+    }));
+  }
+
   start(): void {
     if (this.timer) return;
     this.timer = setInterval(() => {

@@ -31,6 +31,11 @@ import { Orchestrator } from "./orchestrator/orchestrator.js";
 import { OrchestratorV2 } from "./orchestrator/orchestrator-v2.js";
 import { ScriptedInvoker } from "./simulation/scripted-invoker.js";
 import { ChannelStore } from "./channels/channel-store.js";
+import {
+  createPrWatcherFactory,
+  getActiveWatcher
+} from "./cli/pr-watcher-factory.js";
+import type { HarnessPR } from "./integrations/scm.js";
 import { handleCrosslinkCommand } from "./crosslink/cli.js";
 import { startDashboard } from "./tui/dashboard.js";
 import { SessionStore } from "./cli/session-store.js";
@@ -149,6 +154,16 @@ export async function main(): Promise<void> {
     return;
   }
 
+  if (command === "pr-watch") {
+    await handlePrWatchCommand(args);
+    return;
+  }
+
+  if (command === "pr-status") {
+    await handlePrStatusCommand(args);
+    return;
+  }
+
   if (command === "mcp-server") {
     await startMcpServer(resolveWorkspaceRoot(cwd, args));
     return;
@@ -248,6 +263,15 @@ export async function main(): Promise<void> {
         workspace.paths.artifactsDir,
         channelStore,
         workspace.status.workspaceId
+      );
+      // Auto-attach the PR watcher. Factory is a no-op when GITHUB_TOKEN is
+      // missing or the repo isn't a GitHub remote, so this is safe to always
+      // call — it never blocks the run.
+      orchestratorV2.attachPoller(
+        createPrWatcherFactory({
+          channelStore,
+          repoRoot: cwd
+        })
       );
       run = await orchestratorV2.run(featureRequest, runId);
     }
@@ -584,6 +608,153 @@ async function handleChannelCommand(args: string[]): Promise<void> {
       console.log(`  [${entry.type}] ${from}: ${entry.content.slice(0, 120)}`);
     }
   }
+}
+
+/**
+ * `agent-harness pr-watch <pr-url-or-number>` — track a PR explicitly.
+ * Requires an active watcher built by a running orchestrator; the CLI itself
+ * doesn't hold a long-lived process, so in practice this command is most
+ * useful inside the `dashboard` / TUI subprocess or when embedded via MCP.
+ */
+async function handlePrWatchCommand(args: string[]): Promise<void> {
+  const input = args[0];
+  const ticketId = parseNamedArg(args, "--ticket") ?? `manual-${Date.now()}`;
+  const channelId = parseNamedArg(args, "--channel");
+
+  if (!input) {
+    console.error("Usage: agent-harness pr-watch <pr-url-or-number> [--ticket <id>] [--channel <id>]");
+    process.exitCode = 1;
+    return;
+  }
+
+  const watcher = getActiveWatcher();
+  if (!watcher) {
+    console.error(
+      "No active PR watcher. A watcher only exists while an orchestrator run is in progress and GITHUB_TOKEN is set."
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const resolvedChannelId = channelId ?? (await resolveDefaultChannelId());
+  if (!resolvedChannelId) {
+    console.error("No channel to associate with — pass --channel <id>.");
+    process.exitCode = 1;
+    return;
+  }
+
+  const pr = await resolvePrFromInput(input, watcher.repo, watcher.scm);
+  if (!pr) {
+    console.error(`Could not resolve PR from "${input}". Provide a full GitHub URL or a PR number.`);
+    process.exitCode = 1;
+    return;
+  }
+
+  watcher.track({
+    ticketId,
+    channelId: resolvedChannelId,
+    pr,
+    repo: watcher.repo
+  });
+
+  console.log(`Tracking ${watcher.repo.owner}/${watcher.repo.name}#${pr.number} (ticket: ${ticketId})`);
+}
+
+/**
+ * `agent-harness pr-status` — table of currently tracked PRs. No active
+ * watcher means no in-flight run — we print a single explanatory line rather
+ * than exiting with an error so scripts can poll without special-casing.
+ */
+async function handlePrStatusCommand(args: string[] = []): Promise<void> {
+  const watcher = getActiveWatcher();
+
+  if (!watcher) {
+    if (args.includes("--json")) {
+      jsonOut([]);
+    } else {
+      console.log("No active PR watcher (no running orchestrator, or GITHUB_TOKEN is unset).");
+    }
+    return;
+  }
+
+  const tracked = watcher.listTracked();
+
+  if (args.includes("--json")) {
+    jsonOut(tracked);
+    return;
+  }
+
+  if (tracked.length === 0) {
+    console.log("No PRs currently tracked.");
+    return;
+  }
+
+  console.log(`Tracked PRs (${tracked.length}):`);
+  console.log("  TICKET             PR                                   STATE     CI        REVIEW");
+
+  for (const t of tracked) {
+    const label = `${t.repo.owner}/${t.repo.name}#${t.pr.number}`;
+    const state = t.last?.prState ?? "-";
+    const ci = t.last?.ci ?? "-";
+    const review = t.last?.review ?? "-";
+    console.log(
+      `  ${t.ticketId.padEnd(18)} ${label.padEnd(36)} ${state.padEnd(9)} ${ci.padEnd(9)} ${review}`
+    );
+  }
+}
+
+/**
+ * Accept either a full GitHub PR URL or a bare number. Bare numbers require
+ * the watcher to know the repo; detectPR won't work for numbers, so we parse
+ * the URL ourselves or synthesize a minimal `HarnessPR` for numbers.
+ *
+ * For URL mode we still want the branch, so we ask the SCM to resolve the
+ * ref. AO's SCM doesn't expose a `getPR(number)` today, so we fall back to a
+ * best-effort `detectPR(branch)` if the caller provides `--branch`; otherwise
+ * we stash an empty branch. Empty-branch tracking still surfaces CI/review
+ * transitions via `enrichBatch`, which is what the poller consumes.
+ */
+async function resolvePrFromInput(
+  input: string,
+  repo: { owner: string; name: string },
+  _scm: { detectPR: (branch: string, repo: { owner: string; name: string }) => Promise<HarnessPR | null> }
+): Promise<HarnessPR | null> {
+  const trimmed = input.trim();
+  // https://github.com/owner/name/pull/123
+  const urlMatch = trimmed.match(
+    /^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+?)\/pull\/(\d+)(?:[/?#].*)?$/i
+  );
+  if (urlMatch) {
+    const number = Number(urlMatch[3]);
+    return {
+      number,
+      url: `https://github.com/${urlMatch[1]}/${urlMatch[2]}/pull/${number}`,
+      branch: ""
+    };
+  }
+
+  const numMatch = trimmed.match(/^#?(\d+)$/);
+  if (numMatch) {
+    const number = Number(numMatch[1]);
+    return {
+      number,
+      url: `https://github.com/${repo.owner}/${repo.name}/pull/${number}`,
+      branch: ""
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Find a channel to attach the tracked PR to. Prefers the most recently
+ * updated active channel — this covers the common case of one CLI user with
+ * one in-flight run. Returns null when no channels exist.
+ */
+async function resolveDefaultChannelId(): Promise<string | null> {
+  const store = new ChannelStore();
+  const channels = await store.listChannels("active");
+  return channels[0]?.channelId ?? null;
 }
 
 async function printRunningTasks(args: string[] = []): Promise<void> {
