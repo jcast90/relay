@@ -1,8 +1,8 @@
 /**
  * Central namespace constants for `HarnessStore`. Referencing these rather
- * than inline string literals lets the Postgres impl (T-402) map each ns to
- * a dedicated table without a mass string-find across callers, and keeps
- * typos from silently partitioning data.
+ * than inline string literals lets the Postgres impl map each ns to a
+ * dedicated table (or filter on `ns`) without a mass string-find across
+ * callers, and keeps typos from silently partitioning data.
  */
 
 export const STORE_NS = {

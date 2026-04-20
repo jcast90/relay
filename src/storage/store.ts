@@ -9,10 +9,10 @@
  *   - mutate: atomic read-modify-write for counters and indexes
  *
  * Callers use `watch` to observe downstream changes; the file impl polls,
- * the Postgres impl (T-402) will use `LISTEN/NOTIFY`. Semantics are
- * deliberately weak — at-least-once delivery, may coalesce, no ordering
- * guarantees across namespaces — so implementations can diverge on strategy
- * without breaking callers.
+ * the Postgres impl uses `LISTEN/NOTIFY`. Semantics are deliberately weak —
+ * at-least-once delivery, may coalesce, no ordering guarantees across
+ * namespaces — so implementations can diverge on strategy without breaking
+ * callers.
  */
 
 export interface BlobRef {
@@ -122,10 +122,10 @@ export interface HarnessStore {
    * `putDoc`. Serialized per (ns, id) within a single process — concurrent
    * `mutate` calls against the same key queue on a shared Promise-chain
    * mutex, so no caller's update is lost. `fn` may throw; the lock is
-   * released and the error propagates to the caller. Single-process only:
-   * cross-process coordination is out of scope (use `PgHarnessStore`
-   * when it lands in T-402). Throws `Unsafe path segment` for unsafe
-   * `ns` or `id`.
+   * released and the error propagates to the caller. Implementations may
+   * extend this to cross-process coordination (the Postgres impl uses a
+   * transaction-scoped advisory lock keyed on the same `(ns, id)`).
+   * Throws `Unsafe path segment` for unsafe `ns` or `id`.
    */
   mutate<T>(ns: string, id: string, fn: (prev: T | null) => T): Promise<T>;
 
@@ -142,5 +142,3 @@ export interface HarnessStore {
   watch(ns: string, id: string): AsyncIterable<ChangeEvent>;
 }
 
-// TODO(T-402): second impl backed by Postgres (`PgHarnessStore`) for the
-// cloud/pod deployment path. Same interface, different durability + fanout.
