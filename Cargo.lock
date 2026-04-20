@@ -9,33 +9,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
-name = "agent-harness-gui"
-version = "0.1.0"
-dependencies = [
- "harness-data",
- "notify",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-shell",
-]
-
-[[package]]
-name = "agent-harness-tui"
-version = "0.1.0"
-dependencies = [
- "arboard",
- "chrono",
- "crossterm",
- "dirs",
- "harness-data",
- "ratatui",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3146,6 +3119,33 @@ name = "regex-syntax"
 version = "0.8.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
+
+[[package]]
+name = "relay-gui"
+version = "0.1.0"
+dependencies = [
+ "harness-data",
+ "notify",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-shell",
+]
+
+[[package]]
+name = "relay-tui"
+version = "0.1.0"
+dependencies = [
+ "arboard",
+ "chrono",
+ "crossterm",
+ "dirs",
+ "harness-data",
+ "ratatui",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "reqwest"
