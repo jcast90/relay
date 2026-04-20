@@ -3,8 +3,14 @@ import { getAgentName } from "../domain/agent-names.js";
 import { roleForWork } from "../domain/agent.js";
 import type { AgentRegistry } from "../agents/registry.js";
 import type { HarnessRun, RunEventType } from "../domain/run.js";
-import type { TicketDefinition, TicketLedgerEntry } from "../domain/ticket.js";
-import { getReadyTickets } from "../domain/ticket.js";
+import type {
+  TicketDefinition,
+  TicketLedgerEntry
+} from "../domain/ticket.js";
+import {
+  getReadyTickets,
+  initializeTicketLedger
+} from "../domain/ticket.js";
 import type { ArtifactStore } from "../execution/artifact-store.js";
 import type { VerificationRunner } from "../execution/verification-runner.js";
 import { selectVerificationCommands } from "../execution/verification-runner.js";
@@ -23,8 +29,25 @@ const DEFAULT_OPTIONS: TicketSchedulerOptions = {
   maxConcurrency: 3
 };
 
+// Sentinel marker returned by the wake-up channel — distinct from any real
+// ticket completion record so the scheduler loop can detect and ignore it.
+const WAKE_SENTINEL = { ticketId: "__wake__", success: false, wake: true } as const;
+
+type RaceResult =
+  | { ticketId: string; success: boolean; wake?: false }
+  | { ticketId: "__wake__"; success: false; wake: true };
+
 export class TicketScheduler {
   private readonly options: TicketSchedulerOptions;
+
+  /** The run that the active `executeAll` is driving, if any. */
+  private activeRun: HarnessRun | null = null;
+
+  /** Resolves the next time an in-flight `executeAll` loop should re-scan. */
+  private wakeResolve: (() => void) | null = null;
+
+  /** Tail of queued single-ticket executions after `executeAll` resolved. */
+  private enqueueTail: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly repoRoot: string,
@@ -47,7 +70,73 @@ export class TicketScheduler {
   }
 
   async executeAll(run: HarnessRun): Promise<boolean> {
-    const executing = new Map<string, Promise<{ ticketId: string; success: boolean }>>();
+    this.activeRun = run;
+    try {
+      return await this.drain(run);
+    } finally {
+      // Only clear the active-run marker if we are still the active session.
+      // (Defensive: `enqueue` never calls executeAll concurrently.)
+      if (this.activeRun === run) {
+        this.activeRun = null;
+        this.wakeResolve = null;
+      }
+    }
+  }
+
+  /**
+   * Append a ticket to the run's ledger and make sure it will be executed.
+   *
+   * Semantics:
+   *  - Appends the ticket to `run.ticketPlan.tickets` and a matching entry to
+   *    `run.ticketLedger` so persisted snapshots see it.
+   *  - If an `executeAll` loop is currently driving this run, wake it so the
+   *    new ticket is picked up on the next iteration.
+   *  - Otherwise, spawn a fresh drain for just the new ticket. Concurrent
+   *    `enqueue` calls in this mode are serialized behind a tail promise so
+   *    we never run two drains for the same run at once.
+   *
+   * The concurrency cap from `TicketSchedulerOptions` is always respected —
+   * the drain loop is the single place tickets transition to `executing`.
+   */
+  async enqueue(run: HarnessRun, ticket: TicketDefinition): Promise<void> {
+    this.appendTicketToRun(run, ticket);
+
+    if (this.activeRun === run) {
+      // Loop is alive — poke it so the next iteration re-scans the ledger.
+      this.wake();
+      return;
+    }
+
+    // No active loop. Serialize fresh drains so we don't start a second one
+    // while an earlier enqueue is still working.
+    const next = this.enqueueTail.then(async () => {
+      // If somebody started a real executeAll between scheduling and now,
+      // the ticket is already in the ledger and that loop will see it.
+      if (this.activeRun === run) {
+        this.wake();
+        return;
+      }
+      this.activeRun = run;
+      try {
+        await this.drain(run);
+      } finally {
+        if (this.activeRun === run) {
+          this.activeRun = null;
+          this.wakeResolve = null;
+        }
+      }
+    });
+
+    // Keep the chain alive even if one drain throws, so future enqueues still run.
+    this.enqueueTail = next.catch(() => {
+      /* swallow — failures are recorded on the ledger entry itself */
+    });
+
+    await next;
+  }
+
+  private async drain(run: HarnessRun): Promise<boolean> {
+    const executing = new Map<string, Promise<RaceResult>>();
 
     while (true) {
       const allCompleted = run.ticketLedger.every(
@@ -92,18 +181,32 @@ export class TicketScheduler {
         });
 
         const promise = this.executeTicket(run, ticketDef).then(
-          (success) => ({ ticketId: ticket.ticketId, success }),
-          () => ({ ticketId: ticket.ticketId, success: false })
+          (success): RaceResult => ({ ticketId: ticket.ticketId, success }),
+          (): RaceResult => ({ ticketId: ticket.ticketId, success: false })
         );
 
         executing.set(ticket.ticketId, promise);
       }
 
       if (executing.size === 0) {
+        // No in-flight work and nothing ready to dispatch. Preserve the
+        // original contract: signal failure so the caller knows the drain
+        // ended without completing every ticket. Fresh `enqueue` calls after
+        // this point spawn their own drain via the enqueueTail chain.
         return false;
       }
 
-      const completed = await Promise.race(executing.values());
+      const wakePromise = this.makeWakePromise();
+      const completed = await Promise.race<RaceResult>([
+        ...executing.values(),
+        wakePromise
+      ]);
+
+      if ("wake" in completed && completed.wake) {
+        // Wake signal fired — re-scan the ledger for newly appended work.
+        continue;
+      }
+
       executing.delete(completed.ticketId);
 
       if (completed.success) {
@@ -127,6 +230,41 @@ export class TicketScheduler {
       }
 
       await this.persistTicketLedger(run);
+    }
+  }
+
+  /**
+   * Build a promise that resolves when `wake()` is called. Each iteration of
+   * the drain loop consumes one and replaces it, so a wake signal only fires
+   * the next Promise.race — never a stale one.
+   */
+  private makeWakePromise(): Promise<RaceResult> {
+    return new Promise<RaceResult>((resolve) => {
+      this.wakeResolve = () => {
+        this.wakeResolve = null;
+        resolve(WAKE_SENTINEL);
+      };
+    });
+  }
+
+  private wake(): void {
+    const resolver = this.wakeResolve;
+    this.wakeResolve = null;
+    resolver?.();
+  }
+
+  private appendTicketToRun(run: HarnessRun, ticket: TicketDefinition): void {
+    // Don't double-append. Idempotency keeps retries from accidentally cloning
+    // a ticket onto the ledger twice.
+    if (run.ticketLedger.some((t) => t.ticketId === ticket.id)) {
+      return;
+    }
+
+    const [entry] = initializeTicketLedger([ticket]);
+    run.ticketLedger.push(entry);
+
+    if (run.ticketPlan) {
+      run.ticketPlan.tickets.push(ticket);
     }
   }
 

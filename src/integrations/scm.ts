@@ -13,6 +13,8 @@ import type {
 } from "@aoagents/ao-core";
 import { create as createGithubScm } from "@aoagents/ao-plugin-scm-github";
 
+import { withEnvOverride } from "./plugin-env-mutex.js";
+
 /** Narrow PR shape the harness operates on. */
 export interface HarnessPR {
   number: number;
@@ -66,20 +68,39 @@ export interface HarnessScm {
  * Build a configured AO `SCM` instance. The returned value is intentionally
  * typed as `SCM` so callers can pass it to `wrapScm`; callers outside this
  * module should not depend on any method beyond what `HarnessScm` exposes.
+ *
+ * Overloads:
+ *  - No-token call: synchronous. The github plugin reads `GITHUB_TOKEN` via
+ *    the `gh` CLI at command time, not at construction time, so no overlay
+ *    is needed when the caller has already exported the env var.
+ *  - With-token call: routes through the shared env-mutex so concurrent
+ *    builds with different tokens can't observe each other's values.
  */
+export function createScm(kind: "github"): SCM;
+export function createScm(
+  kind: "github",
+  opts: { token?: undefined },
+): SCM;
+export function createScm(
+  kind: "github",
+  opts: { token: string },
+): Promise<SCM>;
 export function createScm(
   kind: "github",
   opts: { token?: string } = {},
-): SCM {
+): SCM | Promise<SCM> {
   if (kind !== "github") {
     throw new Error(`createScm: unsupported kind "${kind as string}"`);
   }
-  const token = opts.token ?? process.env.GITHUB_TOKEN;
-  if (token && !process.env.GITHUB_TOKEN) {
-    // The github plugin shells out to `gh`, which reads GITHUB_TOKEN from env.
-    process.env.GITHUB_TOKEN = token;
+  if (opts.token === undefined) {
+    return createGithubScm();
   }
-  return createGithubScm();
+  // The github plugin shells out to `gh`, which reads GITHUB_TOKEN from env.
+  // Serialize overlays so two concurrent calls with different tokens can't
+  // race through the env.
+  return withEnvOverride({ GITHUB_TOKEN: opts.token }, () =>
+    createGithubScm(),
+  );
 }
 
 /** Produce the narrow facade from a raw AO `SCM`. */

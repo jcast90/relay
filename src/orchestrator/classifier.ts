@@ -138,7 +138,7 @@ async function tryResolveTrackerIssue(
   if (!identifier) return null;
 
   try {
-    const tracker = createTracker(kind);
+    const tracker = await createTracker(kind);
     const project = buildProjectConfig(repoRoot, featureRequest, kind);
     return await resolveIssue(tracker, identifier, project);
   } catch (err) {

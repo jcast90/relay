@@ -24,7 +24,27 @@ import { decomposePlanToTickets, buildTicketPlanFromPhases } from "./ticket-deco
 import { checkApproval } from "./approval-gate.js";
 import { TicketScheduler } from "./ticket-scheduler.js";
 
+/**
+ * Anything the orchestrator can hook into for follow-up enqueueing (PR poller,
+ * review watcher, etc.). Must expose a `stop()` the orchestrator can call when
+ * the run finalizes. Kept as a structural type so the orchestrator does not
+ * depend on `@aoagents/*` — callers build and attach pollers from the CLI.
+ */
+export interface PollerHandle {
+  start(): void;
+  stop(): void;
+}
+
+/** Factory supplied by callers that want a poller built per-run. */
+export type PollerFactory = (input: {
+  run: HarnessRun;
+  scheduler: TicketScheduler;
+}) => PollerHandle | null;
+
 export class OrchestratorV2 {
+  /** Optional poller factory registered via `attachPoller`. */
+  private pollerFactory: PollerFactory | null = null;
+
   constructor(
     private readonly registry: AgentRegistry,
     private readonly repoRoot: string,
@@ -34,6 +54,20 @@ export class OrchestratorV2 {
     private readonly channelStore?: ChannelStore,
     private readonly workspaceId?: string
   ) {}
+
+  /**
+   * Register a factory that builds a poller (typically a `PrPoller` wired to
+   * a `SchedulerFollowUpDispatcher`) once a scheduler exists for the run.
+   *
+   * Chosen over baking SCM/tracker construction into the orchestrator because
+   * the poller needs a `HarnessProject`, a `GITHUB_TOKEN` (optional), and SCM
+   * plugin wiring — none of which belong in orchestrator-v2's core contract.
+   * The CLI/startup path owns env + project config and is the right place to
+   * skip this when `GITHUB_TOKEN` is missing.
+   */
+  attachPoller(factory: PollerFactory): void {
+    this.pollerFactory = factory;
+  }
 
   async run(featureRequest: string, runId?: string): Promise<HarnessRun> {
     const now = new Date().toISOString();
@@ -226,7 +260,14 @@ export class OrchestratorV2 {
       (r, type, phaseId, details) => this.recordEvent(r, type, phaseId, details)
     );
 
-    const allTicketsSucceeded = await scheduler.executeAll(run);
+    const poller = this.startPoller(run, scheduler);
+
+    let allTicketsSucceeded = false;
+    try {
+      allTicketsSucceeded = await scheduler.executeAll(run);
+    } finally {
+      poller?.stop();
+    }
 
     if (allTicketsSucceeded) {
       this.recordEvent(run, "AllTicketsComplete", "phase_00", {
@@ -303,7 +344,12 @@ export class OrchestratorV2 {
       (r, type, phaseId, details) => this.recordEvent(r, type, phaseId, details)
     );
 
-    await scheduler.executeAll(run);
+    const poller = this.startPoller(run, scheduler);
+    try {
+      await scheduler.executeAll(run);
+    } finally {
+      poller?.stop();
+    }
 
     run.completedAt = new Date().toISOString();
     run.updatedAt = run.completedAt;
@@ -320,6 +366,20 @@ export class OrchestratorV2 {
     }
 
     return run;
+  }
+
+  private startPoller(
+    run: HarnessRun,
+    scheduler: TicketScheduler
+  ): PollerHandle | null {
+    if (!this.pollerFactory) return null;
+    try {
+      const poller = this.pollerFactory({ run, scheduler });
+      poller?.start();
+      return poller;
+    } catch {
+      return null;
+    }
   }
 
   private async dispatch(

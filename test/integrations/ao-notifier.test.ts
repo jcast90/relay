@@ -23,7 +23,7 @@ function buildEvent(overrides: Record<string, unknown> = {}) {
 }
 
 describe("HarnessChannelNotifier", () => {
-  it("notify posts a status_update entry with event metadata", async () => {
+  it("notify posts an event entry with event metadata and preserves event.data", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ao-notif-"));
     const store = new ChannelStore(dir);
     try {
@@ -33,12 +33,13 @@ describe("HarnessChannelNotifier", () => {
         defaultChannelId: channel.channelId
       });
 
-      await notifier.notify(buildEvent());
+      const data = { prNumber: 42, reviewer: "alice", labels: ["urgent", "bug"] };
+      await notifier.notify(buildEvent({ data }));
 
       const feed = await store.readFeed(channel.channelId);
       expect(feed).toHaveLength(1);
       const entry = feed[0];
-      expect(entry.type).toBe("status_update");
+      expect(entry.type).toBe("event");
       expect(entry.fromDisplayName).toBe("orchestrator");
       expect(entry.content).toContain("[pr.updated]");
       expect(entry.content).toContain("session=sess-1");
@@ -49,6 +50,10 @@ describe("HarnessChannelNotifier", () => {
       expect(entry.metadata.sessionId).toBe("sess-1");
       expect(entry.metadata.projectId).toBe("proj-1");
       expect(entry.metadata.timestamp).toBe("2026-04-20T12:00:00.000Z");
+      // event.data is preserved as a JSON-serialized string so existing
+      // Rust/GUI readers (typed Record<string, string>) keep working.
+      expect(typeof entry.metadata.data).toBe("string");
+      expect(JSON.parse(entry.metadata.data as string)).toEqual(data);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
