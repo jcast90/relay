@@ -1047,6 +1047,28 @@ function parseNamedArg(args: string[], name: string): string | undefined {
   return idx >= 0 && idx + 1 < args.length ? args[idx + 1] : undefined;
 }
 
+/**
+ * Extract positional arguments: strip `--flag` entries AND the values that
+ * follow them, unless the next entry is itself a flag (boolean flag case).
+ * Replaces the naive `args.filter(a => !a.startsWith("--"))` pattern, which
+ * leaked flag values (channel ids, session ids, role) into content fields —
+ * visible in chat history as "ch-... sess-... user <message>".
+ */
+function extractPositionals(args: string[]): string[] {
+  const result: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith("--")) {
+      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+        i++;
+      }
+      continue;
+    }
+    result.push(arg);
+  }
+  return result;
+}
+
 async function handleSessionCommand(args: string[]): Promise<void> {
   const sub = args[0];
   const store = new SessionStore();
@@ -1117,7 +1139,7 @@ async function handleSessionCommand(args: string[]): Promise<void> {
     const sessionId = parseNamedArg(args, "--session");
     const role = parseNamedArg(args, "--role") ?? "user";
     const alias = parseNamedArg(args, "--alias") ?? null;
-    const content = args.filter((a) => !a.startsWith("--")).slice(1).join(" ");
+    const content = extractPositionals(args).slice(1).join(" ");
 
     if (!channelId || !sessionId || !content) {
       console.error("Usage: rly session append --channel <id> --session <id> --role <role> [--alias <name>] <content>");
@@ -1141,7 +1163,7 @@ async function handleSessionCommand(args: string[]): Promise<void> {
     const sessionId = parseNamedArg(args, "--session");
     const role = parseNamedArg(args, "--role") ?? "assistant";
     const alias = parseNamedArg(args, "--alias") ?? null;
-    const content = args.filter((a) => !a.startsWith("--")).slice(1).join(" ");
+    const content = extractPositionals(args).slice(1).join(" ");
 
     if (!channelId || !sessionId || !content) {
       console.error("Usage: rly session update-last --channel <id> --session <id> <content>");
@@ -1220,7 +1242,7 @@ async function handleChatCommand(
 
   if (sub === "resolve-refs") {
     const channelId = parseNamedArg(args, "--channel");
-    const message = args.filter((a) => !a.startsWith("--")).slice(1).join(" ");
+    const message = extractPositionals(args).slice(1).join(" ");
 
     if (!channelId || !message) {
       console.error("Usage: rly chat resolve-refs --channel <id> <message>");

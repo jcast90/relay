@@ -1,9 +1,59 @@
-import { existsSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { ChannelStore } from "../channels/channel-store.js";
 import { getRelayDir } from "./paths.js";
 import { SessionStore } from "./session-store.js";
+
+/**
+ * Best-effort repo context: git remote + branch + top-level tree + README
+ * head. Returns an empty string when anything fails so we never block chat
+ * startup on a git hiccup (repo deleted, not a git repo, etc.).
+ */
+function collectRepoContext(repoPath: string): string {
+  const lines: string[] = [];
+  const tryGit = (args: string[]): string | null => {
+    try {
+      return execFileSync("git", ["-C", repoPath, ...args], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 2000
+      }).trim();
+    } catch {
+      return null;
+    }
+  };
+
+  const remote = tryGit(["remote", "get-url", "origin"]);
+  if (remote) lines.push(`Git remote: ${remote}`);
+  const branch = tryGit(["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (branch) lines.push(`Current branch: ${branch}`);
+
+  try {
+    const entries = readdirSync(repoPath, { withFileTypes: true })
+      .filter((e) => !e.name.startsWith("."))
+      .slice(0, 20)
+      .map((e) => (e.isDirectory() ? `${e.name}/` : e.name))
+      .join(" ");
+    if (entries) lines.push(`Top-level entries: ${entries}`);
+  } catch {
+    /* skip */
+  }
+
+  const readme = ["README.md", "README", "Readme.md", "readme.md"]
+    .map((name) => join(repoPath, name))
+    .find((p) => existsSync(p));
+  if (readme) {
+    try {
+      const head = readFileSync(readme, "utf8").split("\n").slice(0, 10).join("\n").trim();
+      if (head) lines.push(`README head:\n${head}`);
+    } catch {
+      /* skip */
+    }
+  }
+  return lines.length > 0 ? lines.join("\n") : "";
+}
 
 export function buildSystemPrompt(input: {
   channelId: string;
@@ -19,6 +69,18 @@ export function buildSystemPrompt(input: {
       `Your working directory is already set to this repo — do NOT search for it elsewhere. ` +
       `All file operations should be relative to this directory.`
     );
+    const repoContext = collectRepoContext(input.repoPath);
+    if (repoContext) {
+      parts.push(
+        "\nRepo context (read at session start — may be stale after long runs):\n" +
+          repoContext
+      );
+    }
+  } else if (input.repoPath) {
+    const repoContext = collectRepoContext(input.repoPath);
+    if (repoContext) {
+      parts.push("Current repo context:\n" + repoContext);
+    }
   }
 
   const channelDir = join(getRelayDir(), "channels", input.channelId);

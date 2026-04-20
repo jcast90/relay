@@ -357,9 +357,44 @@ button.primary { background: var(--accent-dim); border-color: var(--accent); }
   font-size: 11px;
   color: var(--text-dim);
   font-style: italic;
-  margin-bottom: 6px;
+  margin: 4px 0 8px;
   border-left: 2px solid var(--activity);
-  padding-left: 8px;
+  padding: 4px 8px;
+  background: rgba(250, 179, 135, 0.04);
+  border-radius: 0 3px 3px 0;
+}
+.stream-activity-line {
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stream-activity-empty {
+  color: var(--text-muted);
+}
+.feed-entry.streaming {
+  border: 1px solid var(--accent-dim);
+  border-radius: 4px;
+  padding: 8px 10px;
+  background: rgba(116, 199, 236, 0.04);
+}
+.stream-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-dim);
+  font-size: 11px;
+}
+.stream-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: stream-pulse 1.2s ease-in-out infinite;
+}
+@keyframes stream-pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.85); }
+  50%      { opacity: 1;   transform: scale(1.1); }
 }
 
 /* Sessions panel */
