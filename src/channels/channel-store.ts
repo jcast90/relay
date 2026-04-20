@@ -12,7 +12,8 @@ import {
   type ChannelMember,
   type ChannelRef,
   type ChannelRunLink,
-  type ChannelStatus
+  type ChannelStatus,
+  type RepoAssignment
 } from "../domain/channel.js";
 import { buildDecisionId, type Decision } from "../domain/decision.js";
 
@@ -31,6 +32,7 @@ export class ChannelStore {
     name: string;
     description: string;
     workspaceIds?: string[];
+    repoAssignments?: RepoAssignment[];
   }): Promise<Channel> {
     await mkdir(this.channelsDir, { recursive: true });
 
@@ -43,6 +45,7 @@ export class ChannelStore {
       workspaceIds: input.workspaceIds ?? [],
       members: [],
       pinnedRefs: [],
+      repoAssignments: input.repoAssignments,
       createdAt: now,
       updatedAt: now
     };
@@ -85,12 +88,12 @@ export class ChannelStore {
       }
     }
 
-    return channels.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return channels.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
   }
 
   async updateChannel(
     channelId: string,
-    patch: Partial<Pick<Channel, "name" | "description" | "status" | "workspaceIds">>
+    patch: Partial<Pick<Channel, "name" | "description" | "status" | "workspaceIds" | "repoAssignments">>
   ): Promise<Channel | null> {
     const channel = await this.getChannel(channelId);
     if (!channel) return null;

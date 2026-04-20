@@ -1,14 +1,10 @@
 [package]
-name = "agent-harness-tui"
+name = "harness-data"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ratatui = "0.29"
-crossterm = "0.28"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6"
 chrono = "0.4"
-arboard = "3"
-harness-data = { path = "../crates/harness-data" }

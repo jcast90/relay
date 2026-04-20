@@ -3,3 +3,8 @@ coverage
 dist
 .agent-harness
 tui/target/
+target/
+gui/dist/
+gui/src-tauri/target/
+gui/src-tauri/gen/
+gui/tsconfig.tsbuildinfo

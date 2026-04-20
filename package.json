@@ -19,6 +19,8 @@
     "up": "tsx src/cli.ts up",
     "tui": "tsx src/cli.ts tui",
     "tui:build": "cd tui && cargo build --release",
+    "gui:dev": "cd gui && pnpm tauri dev",
+    "gui:build": "cd gui && pnpm tauri build",
     "prepare": "pnpm build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
