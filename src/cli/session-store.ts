@@ -1,20 +1,18 @@
 import { appendFile, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { homedir } from "node:os";
 
 import {
   buildSessionId,
   type ChatSession,
   type PersistedChatMessage
 } from "../domain/session.js";
-
-const CHANNELS_DIR = join(homedir(), ".agent-harness", "channels");
+import { getRelayDir } from "./paths.js";
 
 export class SessionStore {
   private readonly channelsDir: string;
 
   constructor(channelsDir?: string) {
-    this.channelsDir = channelsDir ?? CHANNELS_DIR;
+    this.channelsDir = channelsDir ?? join(getRelayDir(), "channels");
   }
 
   private sessionsDir(channelId: string): string {

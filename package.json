@@ -1,9 +1,10 @@
 {
-  "name": "agent-harness",
+  "name": "relay",
   "version": "0.1.0",
   "private": false,
   "type": "module",
   "bin": {
+    "rly": "dist/cli.js",
     "agent-harness": "dist/cli.js"
   },
   "files": [

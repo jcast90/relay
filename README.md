@@ -1,19 +1,22 @@
-# Agent Harness
+# Relay
 
 Local-first orchestration for phase-driven coding with Claude and Codex adapters. Classifies requests by complexity, decomposes work into parallelizable tickets, and executes them with verification loops.
+
+CLI: `rly` (the legacy `agent-harness` command is kept as an alias so existing scripts keep working).
 
 ## Install
 
 ### One command (recommended)
 
 ```bash
-cd /path/to/agent-harness
 ./install.sh
 ```
 
 Add `--with-tui` or `--with-gui` to also build the Rust dashboards. Use `--skip-link` to avoid `pnpm link --global` (useful in CI or on shared machines).
 
-The installer checks prereqs (`node >=20`, `pnpm`, `git`, plus `cargo` if you asked for TUI/GUI), runs `pnpm install && pnpm build`, links the `agent-harness` binary on your `$PATH`, and scaffolds `~/.agent-harness/config.env.template`. It's safe to re-run.
+The installer checks prereqs (`node >=20`, `pnpm`, `git`, plus `cargo` if you asked for TUI/GUI), runs `pnpm install && pnpm build`, links the `rly` binary on your `$PATH`, and scaffolds `~/.relay/config.env.template`. It's safe to re-run.
+
+If you've previously installed the tool under the `agent-harness` name, the installer auto-migrates `~/.agent-harness/` → `~/.relay/` and leaves a back-compat symlink at the old path.
 
 ### Manual
 
@@ -23,28 +26,28 @@ pnpm install && pnpm build && pnpm link --global
 
 ## Getting started
 
-1. **Register a repo.** From inside any repo you want the harness to manage:
+1. **Register a repo.** From inside any repo you want Relay to manage:
 
    ```bash
-   agent-harness up
+   rly up
    ```
 
-   This writes the repo into `~/.agent-harness/workspace-registry.json`.
+   This writes the repo into `~/.relay/workspace-registry.json`.
 
 2. **Set your tokens.** Copy the template and fill it in:
 
    ```bash
-   cp ~/.agent-harness/config.env.template ~/.agent-harness/config.env
-   # edit ~/.agent-harness/config.env
-   source ~/.agent-harness/config.env
+   cp ~/.relay/config.env.template ~/.relay/config.env
+   # edit ~/.relay/config.env
+   source ~/.relay/config.env
    ```
 
-   `GITHUB_TOKEN` unlocks GitHub issue ingestion and the PR watcher. `LINEAR_API_KEY` unlocks Linear issue ingestion. `HARNESS_LIVE=1` switches from the scripted demo to real Claude/Codex adapters. Add `source ~/.agent-harness/config.env` to your `~/.zshrc` so every shell picks it up.
+   `GITHUB_TOKEN` unlocks GitHub issue ingestion and the PR watcher. `LINEAR_API_KEY` unlocks Linear issue ingestion. `HARNESS_LIVE=1` switches from the scripted demo to real Claude/Codex adapters. Add `source ~/.relay/config.env` to your `~/.zshrc` so every shell picks it up.
 
 3. **Sanity check.**
 
    ```bash
-   agent-harness doctor
+   rly doctor
    ```
 
    Verifies workspace paths, MCP wiring, and token presence.
@@ -52,22 +55,22 @@ pnpm install && pnpm build && pnpm link --global
 4. **Launch a session.**
 
    ```bash
-   agent-harness claude    # or: agent-harness codex
+   rly claude    # or: rly codex
    ```
 
-   These wrap your normal CLI and attach the harness MCP server.
+   These wrap your normal CLI and attach the Relay MCP server.
 
 ### End-to-end workflow
 
-Once tokens are set and a session is running, paste a GitHub or Linear issue URL (or a bare Linear key like `ABC-123`) to the agent. The harness:
+Once tokens are set and a session is running, paste a GitHub or Linear issue URL (or a bare Linear key like `ABC-123`) to the agent. Relay:
 
 1. Pulls the issue (title, body, labels, branch hint) via the tracker integration.
 2. Classifies it into a complexity tier and generates a plan.
 3. Decomposes the plan into parallelizable tickets and executes them.
-4. Opens PRs via the SCM integration and tracks them — when `GITHUB_TOKEN` is set the PR watcher polls CI / review state every 30s and posts updates into the ticket's channel.
+4. Opens PRs via the SCM integration and tracks them — when `GITHUB_TOKEN` is set the PR watcher polls CI / review state every 30s and posts updates into the ticket's channel. CI failures and change-requested reviews turn into real follow-up tickets via the scheduler.
 5. Surfaces live state in the dashboards.
 
-The **TUI** (`agent-harness tui`, built with `--with-tui`) and **GUI** (built with `--with-gui`) are optional dashboards over the same `~/.agent-harness/` data — every operation they show is also available via CLI (`status`, `running`, `board`, `channels`, `decisions`, `list-runs`, …).
+The **TUI** (`rly tui`, built with `--with-tui`) and **GUI** (built with `--with-gui`) are optional dashboards over the same `~/.relay/` data — every operation they show is also available via CLI (`status`, `running`, `board`, `channels`, `decisions`, `list-runs`, …).
 
 ## How it works
 
@@ -93,22 +96,24 @@ The **TUI** (`agent-harness tui`, built with `--with-tui`) and **GUI** (built wi
 
 | Command | Description |
 |---------|-------------|
-| `agent-harness up` | Register repo in global workspace |
-| `agent-harness status` | Workspace paths and recent runs |
-| `agent-harness list-runs` | Recent persisted runs |
-| `agent-harness list-workspaces` | All registered workspaces |
-| `agent-harness claude` | Launch Claude with harness MCP attached |
-| `agent-harness codex` | Launch Codex with harness MCP attached |
-| `agent-harness channels` | List channels |
-| `agent-harness channel create <name>` | Create a channel |
-| `agent-harness channel <id>` | Show channel details + feed |
-| `agent-harness running` | Active tasks across all workspaces |
-| `agent-harness board <channelId>` | Task board (tickets by status) |
-| `agent-harness decisions <channelId>` | Decision history |
-| `agent-harness doctor` | Workspace + MCP diagnostics |
-| `agent-harness crosslink status` | Active agent sessions |
-| `agent-harness pr-watch <url-or-#>` | Track a PR in the active watcher |
-| `agent-harness pr-status` | List PRs currently tracked by the watcher |
+| `rly up` | Register repo in global workspace |
+| `rly status` | Workspace paths and recent runs |
+| `rly list-runs` | Recent persisted runs |
+| `rly list-workspaces` | All registered workspaces |
+| `rly claude` | Launch Claude with Relay MCP attached |
+| `rly codex` | Launch Codex with Relay MCP attached |
+| `rly channels` | List channels |
+| `rly channel create <name>` | Create a channel |
+| `rly channel <id>` | Show channel details + feed |
+| `rly running` | Active tasks across all workspaces |
+| `rly board <channelId>` | Task board (tickets by status) |
+| `rly decisions <channelId>` | Decision history |
+| `rly doctor` | Workspace + MCP diagnostics |
+| `rly crosslink status` | Active agent sessions |
+| `rly pr-watch <url-or-#>` | Track a PR in the active watcher |
+| `rly pr-status` | List PRs currently tracked by the watcher |
+
+`agent-harness <cmd>` is accepted as a legacy alias for `rly <cmd>` — both binaries are shipped so existing scripts don't break.
 
 ## MCP tools (15)
 
@@ -120,10 +125,10 @@ The **TUI** (`agent-harness tui`, built with `--with-tui`) and **GUI** (built wi
 
 ## Architecture
 
-All data lives at `~/.agent-harness/`:
+All data lives at `~/.relay/` (older installs at `~/.agent-harness/` are auto-migrated):
 
 ```
-~/.agent-harness/
+~/.relay/
   workspace-registry.json
   workspaces/<repo-hash>/
     artifacts/
@@ -160,15 +165,15 @@ pnpm gui:dev      # launch dev window (Vite + Tauri)
 pnpm gui:build    # produce a release .app/.dmg
 ```
 
-The Rust backend in `gui/src-tauri/` shares `crates/harness-data` with the TUI, so both read the same `~/.agent-harness/` files.
+The Rust backend in `gui/src-tauri/` shares `crates/harness-data` with the TUI, so both read the same `~/.relay/` files.
 
 ## Tracker & PR integrations
 
-Harness consumes Composio's [`@aoagents/ao-core`](https://www.npmjs.com/package/@aoagents/ao-core) plugin packages for issue-tracker and SCM integrations. No plugin from their stack runs harness itself — we import only the leaf adapters.
+Relay consumes Composio's [`@aoagents/ao-core`](https://www.npmjs.com/package/@aoagents/ao-core) plugin packages for issue-tracker and SCM integrations. No plugin from their stack runs Relay itself — we import only the leaf adapters.
 
 ### Issue-URL ingestion
 
-If the first argument to the classifier is a GitHub or Linear issue URL (or a bare Linear key like `ABC-123`), the harness fetches the full issue (title, body, labels, branch hint) and feeds it into classification. Classifier output carries an optional `suggestedBranch` so downstream ticket creation can match the tracker's native branch name.
+If the first argument to the classifier is a GitHub or Linear issue URL (or a bare Linear key like `ABC-123`), Relay fetches the full issue (title, body, labels, branch hint) and feeds it into classification. Classifier output carries an optional `suggestedBranch` so downstream ticket creation can match the tracker's native branch name.
 
 Tokens are read from the environment:
 
@@ -177,14 +182,14 @@ Tokens are read from the environment:
 
 ### PR watcher
 
-`src/integrations/pr-poller.ts` polls all tracked PRs via `enrichSessionsPRBatch` (30s by default). State transitions (CI pass→fail, review pending→changes_requested, PR merged/closed) post `status_update` entries into the ticket's channel. CI failures and change-request reviews emit a `FollowUpRequest` through an injected `FollowUpDispatcher`; wiring that dispatcher into the scheduler so it creates real follow-up tickets is the next piece of work.
+`src/integrations/pr-poller.ts` polls all tracked PRs via `enrichSessionsPRBatch` (30s by default). State transitions (CI pass→fail, review pending→changes_requested, PR merged/closed) post entries into the ticket's channel. CI failures and change-request reviews turn into real follow-up tickets via the scheduler's dynamic `enqueue` surface.
 
 ### AO-compatible notifier
 
-`src/channels/ao-notifier.ts` exports `HarnessChannelNotifier` implementing AO's `Notifier` interface on top of the channel store. If you ever run Composio's `ao` orchestrator, harness can be plugged in as its notifier without a rewrite.
+`src/channels/ao-notifier.ts` exports `HarnessChannelNotifier` implementing AO's `Notifier` interface on top of the channel store. If you ever run Composio's `ao` orchestrator, Relay can be plugged in as its notifier without a rewrite.
 
 ## Flags
 
 - `HARNESS_LIVE=1` — use real Claude/Codex adapters instead of scripted simulation
 - `--sequential` — use v1 sequential orchestrator instead of v2 ticket-based
-- `--no-harness-mcp` — launch Claude/Codex without attaching the harness MCP server
+- `--no-harness-mcp` — launch Claude/Codex without attaching the Relay MCP server

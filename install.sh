@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — one-command installer for agent-harness
+# install.sh — one-command installer for Relay (CLI: rly)
 #
 # Usage:
 #   ./install.sh                  # default: install deps, build, link globally
@@ -48,10 +48,8 @@ die()  { printf '\033[1;31mxx\033[0m  %s\n' "$*" >&2; exit 1; }
 
 # Compare semver-ish strings. Returns 0 iff $1 >= $2.
 version_ge() {
-  # Strip leading v
   local a="${1#v}"
   local b="${2#v}"
-  # Use sort -V if available, else awk fallback.
   if printf '%s\n%s\n' "$b" "$a" | sort -V -c >/dev/null 2>&1; then
     return 0
   fi
@@ -102,13 +100,13 @@ pnpm build
 
 # ---------- global link ----------
 if [ "$SKIP_LINK" -eq 0 ]; then
-  log "Linking agent-harness globally (pnpm link --global)"
+  log "Linking Relay globally (pnpm link --global) — exposes 'rly' and legacy 'agent-harness'"
   if ! pnpm link --global; then
     warn "pnpm link --global failed — this is usually a PNPM_HOME or permissions issue."
     warn "Try one of:"
     warn "  sudo pnpm link --global"
     warn "  export PNPM_HOME=\"\$HOME/.local/share/pnpm\" && export PATH=\"\$PNPM_HOME:\$PATH\" && pnpm link --global"
-    warn "Continuing — you can still invoke the CLI via: pnpm exec agent-harness <cmd>"
+    warn "Continuing — you can still invoke the CLI via: pnpm exec rly <cmd>"
   fi
 else
   log "Skipping global link (--skip-link)"
@@ -126,18 +124,27 @@ if [ "$WITH_GUI" -eq 1 ]; then
 fi
 
 # ---------- config scaffold ----------
-HARNESS_DIR="${HOME}/.agent-harness"
-mkdir -p "$HARNESS_DIR"
+RELAY_DIR="${HOME}/.relay"
+LEGACY_DIR="${HOME}/.agent-harness"
 
-TEMPLATE="${HARNESS_DIR}/config.env.template"
+# Auto-migrate: if legacy dir exists and the new one doesn't, rename + back-compat symlink.
+if [ ! -d "$RELAY_DIR" ] && [ -d "$LEGACY_DIR" ]; then
+  log "Migrating ${LEGACY_DIR} -> ${RELAY_DIR} (a back-compat symlink will stay at the old path)"
+  mv "$LEGACY_DIR" "$RELAY_DIR"
+  ln -s "$RELAY_DIR" "$LEGACY_DIR" || warn "Could not create back-compat symlink at ${LEGACY_DIR}; continuing."
+fi
+
+mkdir -p "$RELAY_DIR"
+
+TEMPLATE="${RELAY_DIR}/config.env.template"
 log "Writing config template -> ${TEMPLATE}"
 cat > "$TEMPLATE" <<'ENVEOF'
-# agent-harness config
+# Relay config
 #
-# Copy this file to ~/.agent-harness/config.env and fill in tokens.
+# Copy this file to ~/.relay/config.env and fill in tokens.
 # Then either:
-#   source ~/.agent-harness/config.env
-# or add that line to your ~/.zshrc or ~/.bashrc so every shell picks it up.
+#   source ~/.relay/config.env
+# or add that line to your ~/.zshrc / ~/.bashrc so every shell picks it up.
 
 # GitHub personal access token — enables issue ingestion + PR watcher.
 # Scopes: repo (private repos) or public_repo (public only).
@@ -151,7 +158,7 @@ cat > "$TEMPLATE" <<'ENVEOF'
 # export HARNESS_LIVE=1
 ENVEOF
 
-CONFIG="${HARNESS_DIR}/config.env"
+CONFIG="${RELAY_DIR}/config.env"
 if [ ! -f "$CONFIG" ]; then
   log "No existing config.env found — leaving template only (copy it over when ready)"
 else
@@ -162,22 +169,22 @@ fi
 BOX_LINE='────────────────────────────────────────────────────────────────────────'
 echo
 echo "┌${BOX_LINE}┐"
-printf "│ %-70s │\n" "agent-harness installed"
+printf "│ %-70s │\n" "Relay installed (CLI: rly — legacy alias: agent-harness)"
 echo "├${BOX_LINE}┤"
 printf "│ %-70s │\n" "Next steps:"
 printf "│ %-70s │\n" ""
-printf "│ %-70s │\n" "1. cp ~/.agent-harness/config.env.template ~/.agent-harness/config.env"
+printf "│ %-70s │\n" "1. cp ~/.relay/config.env.template ~/.relay/config.env"
 printf "│ %-70s │\n" "   Fill in GITHUB_TOKEN / LINEAR_API_KEY, then:"
-printf "│ %-70s │\n" "   source ~/.agent-harness/config.env"
+printf "│ %-70s │\n" "   source ~/.relay/config.env"
 printf "│ %-70s │\n" "   (or add that line to ~/.zshrc)"
 printf "│ %-70s │\n" ""
-printf "│ %-70s │\n" "2. cd to any repo you want the harness to manage and run:"
-printf "│ %-70s │\n" "   agent-harness up"
+printf "│ %-70s │\n" "2. cd to any repo you want Relay to manage and run:"
+printf "│ %-70s │\n" "   rly up"
 printf "│ %-70s │\n" ""
 printf "│ %-70s │\n" "3. Sanity-check your setup:"
-printf "│ %-70s │\n" "   agent-harness doctor"
+printf "│ %-70s │\n" "   rly doctor"
 printf "│ %-70s │\n" ""
 printf "│ %-70s │\n" "4. Start a session:"
-printf "│ %-70s │\n" "   agent-harness claude    # or: agent-harness codex"
+printf "│ %-70s │\n" "   rly claude    # or: rly codex"
 echo "└${BOX_LINE}┘"
 echo

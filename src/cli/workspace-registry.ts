@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { homedir } from "node:os";
+
+import { getRelayDir } from "./paths.js";
 
 export interface WorkspaceRegistryEntry {
   workspaceId: string;
@@ -15,15 +16,15 @@ export interface WorkspaceRegistry {
   workspaces: WorkspaceRegistryEntry[];
 }
 
-const GLOBAL_ROOT = join(homedir(), ".agent-harness");
-const REGISTRY_PATH = join(GLOBAL_ROOT, "workspace-registry.json");
+const globalRoot = (): string => getRelayDir();
+const registryPath = (): string => join(globalRoot(), "workspace-registry.json");
 
 export function getGlobalRoot(): string {
-  return GLOBAL_ROOT;
+  return globalRoot();
 }
 
 export function getRegistryPath(): string {
-  return REGISTRY_PATH;
+  return registryPath();
 }
 
 export function buildWorkspaceId(repoPath: string): string {
@@ -33,12 +34,12 @@ export function buildWorkspaceId(repoPath: string): string {
 }
 
 export function getWorkspaceDir(workspaceId: string): string {
-  return join(GLOBAL_ROOT, "workspaces", workspaceId);
+  return join(globalRoot(), "workspaces", workspaceId);
 }
 
 export async function readRegistry(): Promise<WorkspaceRegistry> {
   try {
-    const raw = JSON.parse(await readFile(REGISTRY_PATH, "utf8")) as WorkspaceRegistry;
+    const raw = JSON.parse(await readFile(registryPath(), "utf8")) as WorkspaceRegistry;
     return {
       updatedAt: raw.updatedAt ?? new Date().toISOString(),
       workspaces: Array.isArray(raw.workspaces) ? raw.workspaces : []
@@ -49,10 +50,10 @@ export async function readRegistry(): Promise<WorkspaceRegistry> {
 }
 
 export async function writeRegistry(registry: WorkspaceRegistry): Promise<void> {
-  await mkdir(GLOBAL_ROOT, { recursive: true });
-  const tmpPath = `${REGISTRY_PATH}.tmp.${process.pid}`;
+  await mkdir(globalRoot(), { recursive: true });
+  const tmpPath = `${registryPath()}.tmp.${process.pid}`;
   await writeFile(tmpPath, JSON.stringify(registry, null, 2));
-  await rename(tmpPath, REGISTRY_PATH);
+  await rename(tmpPath, registryPath());
 }
 
 export async function registerWorkspace(repoPath: string): Promise<WorkspaceRegistryEntry> {

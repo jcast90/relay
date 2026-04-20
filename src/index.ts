@@ -111,7 +111,7 @@ export async function main(): Promise<void> {
   }
 
   if (command === "tui") {
-    const tuiBinary = fileURLToPath(new URL("../tui/target/release/agent-harness-tui", import.meta.url));
+    const tuiBinary = fileURLToPath(new URL("../tui/target/release/relay-tui", import.meta.url));
     // Resolve claude binary path so the TUI subprocess can find it
     const claudeBin = process.env.CLAUDE_BIN ?? "claude";
     const exitCode = await launchInteractiveCommand({
@@ -214,8 +214,8 @@ export async function main(): Promise<void> {
   const featureRequest = args.filter((a) => !a.startsWith("--")).join(" ").trim();
 
   if (!featureRequest) {
-    console.error("Usage: agent-harness run <feature request>");
-    console.error("  Example: agent-harness run \"Add user authentication with OAuth2\"");
+    console.error("Usage: rly run <feature request>");
+    console.error("  Example: rly run \"Add user authentication with OAuth2\"");
     process.exitCode = 1;
     return;
   }
@@ -414,7 +414,7 @@ async function printChannels(args: string[] = []): Promise<void> {
   const channels = await store.listChannels();
 
   if (channels.length === 0) {
-    console.log("No channels. Create one with: agent-harness channel create <name>");
+    console.log("No channels. Create one with: rly channel create <name>");
     return;
   }
 
@@ -436,7 +436,7 @@ async function handleChannelCommand(args: string[]): Promise<void> {
   if (sub === "create") {
     const name = args[1];
     if (!name) {
-      console.error("Usage: agent-harness channel create <name> [description] [--repos alias:wsId:path,...]");
+      console.error("Usage: rly channel create <name> [description] [--repos alias:wsId:path,...]");
       process.exitCode = 1;
       return;
     }
@@ -466,7 +466,7 @@ async function handleChannelCommand(args: string[]): Promise<void> {
   if (sub === "archive") {
     const channelId = args[1];
     if (!channelId) {
-      console.error("Usage: agent-harness channel archive <channelId>");
+      console.error("Usage: rly channel archive <channelId>");
       process.exitCode = 1;
       return;
     }
@@ -487,7 +487,7 @@ async function handleChannelCommand(args: string[]): Promise<void> {
   if (sub === "update") {
     const channelId = args[1];
     if (!channelId) {
-      console.error("Usage: agent-harness channel update <channelId> --repos alias:wsId:path,...");
+      console.error("Usage: rly channel update <channelId> --repos alias:wsId:path,...");
       process.exitCode = 1;
       return;
     }
@@ -520,7 +520,7 @@ async function handleChannelCommand(args: string[]): Promise<void> {
     const limit = Number(parseNamedArg(args, "--limit") ?? "50");
 
     if (!channelId) {
-      console.error("Usage: agent-harness channel feed <channelId> [--limit N]");
+      console.error("Usage: rly channel feed <channelId> [--limit N]");
       process.exitCode = 1;
       return;
     }
@@ -549,7 +549,7 @@ async function handleChannelCommand(args: string[]): Promise<void> {
     const entryType = parseNamedArg(args, "--type") ?? "message";
 
     if (!channelId || !content) {
-      console.error("Usage: agent-harness channel post <channelId> <content> [--from <name>] [--type <type>]");
+      console.error("Usage: rly channel post <channelId> <content> [--from <name>] [--type <type>]");
       process.exitCode = 1;
       return;
     }
@@ -567,7 +567,7 @@ async function handleChannelCommand(args: string[]): Promise<void> {
   }
 
   if (!sub) {
-    console.error("Usage: agent-harness channel <channelId|create|archive|update|feed|post>");
+    console.error("Usage: rly channel <channelId|create|archive|update|feed|post>");
     process.exitCode = 1;
     return;
   }
@@ -611,7 +611,7 @@ async function handleChannelCommand(args: string[]): Promise<void> {
 }
 
 /**
- * `agent-harness pr-watch <pr-url-or-number>` — track a PR explicitly.
+ * `rly pr-watch <pr-url-or-number>` — track a PR explicitly.
  * Requires an active watcher built by a running orchestrator; the CLI itself
  * doesn't hold a long-lived process, so in practice this command is most
  * useful inside the `dashboard` / TUI subprocess or when embedded via MCP.
@@ -624,7 +624,7 @@ async function handlePrWatchCommand(args: string[]): Promise<void> {
 
   if (!input) {
     console.error(
-      "Usage: agent-harness pr-watch <pr-url-or-number> [--ticket <id>] [--channel <id>] [--branch <branch>]"
+      "Usage: rly pr-watch <pr-url-or-number> [--ticket <id>] [--channel <id>] [--branch <branch>]"
     );
     process.exitCode = 1;
     return;
@@ -676,7 +676,7 @@ async function handlePrWatchCommand(args: string[]): Promise<void> {
 }
 
 /**
- * `agent-harness pr-status` — table of currently tracked PRs. No active
+ * `rly pr-status` — table of currently tracked PRs. No active
  * watcher means no in-flight run — we print a single explanatory line rather
  * than exiting with an error so scripts can poll without special-casing.
  */
@@ -834,7 +834,7 @@ async function printRunningTasks(args: string[] = []): Promise<void> {
 
 async function printTaskBoard(channelId: string, args: string[] = []): Promise<void> {
   if (!channelId) {
-    console.error("Usage: agent-harness board <channelId>");
+    console.error("Usage: rly board <channelId>");
     process.exitCode = 1;
     return;
   }
@@ -886,7 +886,7 @@ async function printTaskBoard(channelId: string, args: string[] = []): Promise<v
 
 async function printDecisions(channelId: string, args: string[] = []): Promise<void> {
   if (!channelId) {
-    console.error("Usage: agent-harness decisions <channelId>");
+    console.error("Usage: rly decisions <channelId>");
     process.exitCode = 1;
     return;
   }
@@ -937,7 +937,7 @@ async function printWorkspaces(args: string[] = []): Promise<void> {
   console.log("");
 
   if (workspaces.length === 0) {
-    console.log("No workspaces registered. Run `agent-harness up` in a repo to register it.");
+    console.log("No workspaces registered. Run `rly up` in a repo to register it.");
     return;
   }
 
@@ -958,7 +958,7 @@ async function handleConfigCommand(args: string[]): Promise<void> {
   if (subcommand === "add-project-dir") {
     const dir = args[1];
     if (!dir) {
-      console.error("Usage: agent-harness config add-project-dir <path>");
+      console.error("Usage: rly config add-project-dir <path>");
       process.exitCode = 1;
       return;
     }
@@ -971,7 +971,7 @@ async function handleConfigCommand(args: string[]): Promise<void> {
   if (subcommand === "remove-project-dir") {
     const dir = args[1];
     if (!dir) {
-      console.error("Usage: agent-harness config remove-project-dir <path>");
+      console.error("Usage: rly config remove-project-dir <path>");
       process.exitCode = 1;
       return;
     }
@@ -989,7 +989,7 @@ async function handleConfigCommand(args: string[]): Promise<void> {
   if (config.projectDirs.length === 0) {
     console.log("  Project directories: (none)");
     console.log("");
-    console.log("  Add directories with: agent-harness config add-project-dir ~/projects");
+    console.log("  Add directories with: rly config add-project-dir ~/projects");
   } else {
     console.log("  Project directories:");
     for (const dir of config.projectDirs) {
@@ -1016,7 +1016,7 @@ async function handleSessionCommand(args: string[]): Promise<void> {
     const title = parseNamedArg(args, "--title") ?? "New conversation";
 
     if (!channelId) {
-      console.error("Usage: agent-harness session create --channel <id> [--title <text>]");
+      console.error("Usage: rly session create --channel <id> [--title <text>]");
       process.exitCode = 1;
       return;
     }
@@ -1030,7 +1030,7 @@ async function handleSessionCommand(args: string[]): Promise<void> {
     const channelId = parseNamedArg(args, "--channel");
 
     if (!channelId) {
-      console.error("Usage: agent-harness session list --channel <id>");
+      console.error("Usage: rly session list --channel <id>");
       process.exitCode = 1;
       return;
     }
@@ -1045,7 +1045,7 @@ async function handleSessionCommand(args: string[]): Promise<void> {
     const sessionId = parseNamedArg(args, "--session");
 
     if (!channelId || !sessionId) {
-      console.error("Usage: agent-harness session get --channel <id> --session <id>");
+      console.error("Usage: rly session get --channel <id> --session <id>");
       process.exitCode = 1;
       return;
     }
@@ -1062,7 +1062,7 @@ async function handleSessionCommand(args: string[]): Promise<void> {
     const sid = parseNamedArg(args, "--sid");
 
     if (!channelId || !sessionId || !alias || !sid) {
-      console.error("Usage: agent-harness session update-claude-sid --channel <id> --session <id> --alias <name> --sid <claude_sid>");
+      console.error("Usage: rly session update-claude-sid --channel <id> --session <id> --alias <name> --sid <claude_sid>");
       process.exitCode = 1;
       return;
     }
@@ -1080,7 +1080,7 @@ async function handleSessionCommand(args: string[]): Promise<void> {
     const content = args.filter((a) => !a.startsWith("--")).slice(1).join(" ");
 
     if (!channelId || !sessionId || !content) {
-      console.error("Usage: agent-harness session append --channel <id> --session <id> --role <role> [--alias <name>] <content>");
+      console.error("Usage: rly session append --channel <id> --session <id> --role <role> [--alias <name>] <content>");
       process.exitCode = 1;
       return;
     }
@@ -1104,7 +1104,7 @@ async function handleSessionCommand(args: string[]): Promise<void> {
     const content = args.filter((a) => !a.startsWith("--")).slice(1).join(" ");
 
     if (!channelId || !sessionId || !content) {
-      console.error("Usage: agent-harness session update-last --channel <id> --session <id> <content>");
+      console.error("Usage: rly session update-last --channel <id> --session <id> <content>");
       process.exitCode = 1;
       return;
     }
@@ -1126,7 +1126,7 @@ async function handleSessionCommand(args: string[]): Promise<void> {
     const limit = Number(parseNamedArg(args, "--limit") ?? "500");
 
     if (!channelId || !sessionId) {
-      console.error("Usage: agent-harness session messages --channel <id> --session <id> [--limit N]");
+      console.error("Usage: rly session messages --channel <id> --session <id> [--limit N]");
       process.exitCode = 1;
       return;
     }
@@ -1141,7 +1141,7 @@ async function handleSessionCommand(args: string[]): Promise<void> {
     const sessionId = parseNamedArg(args, "--session");
 
     if (!channelId || !sessionId) {
-      console.error("Usage: agent-harness session delete --channel <id> --session <id>");
+      console.error("Usage: rly session delete --channel <id> --session <id>");
       process.exitCode = 1;
       return;
     }
@@ -1151,7 +1151,7 @@ async function handleSessionCommand(args: string[]): Promise<void> {
     return;
   }
 
-  console.error("Usage: agent-harness session <create|list|get|delete|update-claude-sid|append|update-last|messages>");
+  console.error("Usage: rly session <create|list|get|delete|update-claude-sid|append|update-last|messages>");
   process.exitCode = 1;
 }
 
@@ -1168,7 +1168,7 @@ async function handleChatCommand(
     const alias = parseNamedArg(args, "--alias");
 
     if (!channelId) {
-      console.error("Usage: agent-harness chat system-prompt --channel <id> [--repo <path>] [--alias <name>]");
+      console.error("Usage: rly chat system-prompt --channel <id> [--repo <path>] [--alias <name>]");
       process.exitCode = 1;
       return;
     }
@@ -1183,7 +1183,7 @@ async function handleChatCommand(
     const message = args.filter((a) => !a.startsWith("--")).slice(1).join(" ");
 
     if (!channelId || !message) {
-      console.error("Usage: agent-harness chat resolve-refs --channel <id> <message>");
+      console.error("Usage: rly chat resolve-refs --channel <id> <message>");
       process.exitCode = 1;
       return;
     }
@@ -1200,7 +1200,7 @@ async function handleChatCommand(
     return;
   }
 
-  console.error("Usage: agent-harness chat <system-prompt|resolve-refs|mcp-config>");
+  console.error("Usage: rly chat <system-prompt|resolve-refs|mcp-config>");
   process.exitCode = 1;
 }
 
@@ -1216,7 +1216,7 @@ async function printRunsIndex(
     return;
   }
 
-  const indexPath = `${cwd}/.agent-harness/artifacts/runs-index.json`;
+  const indexPath = `${cwd}/.relay/artifacts/runs-index.json`;
 
   console.log(`Runs index path: ${indexPath}`);
   console.log("");
@@ -1296,7 +1296,7 @@ async function inspectMcp(input: {
     });
     console.log(`Claude MCP config: ${claudeConfigPath}`);
     console.log(
-      `Codex MCP server: agent_harness -> ${cliEntrypoint} mcp-server --workspace ${input.cwd}`
+      `Codex MCP server: relay -> ${cliEntrypoint} mcp-server --workspace ${input.cwd}`
     );
     console.log("");
   }
@@ -1364,7 +1364,7 @@ async function printUpStatus(input: {
   const globalRoot = getGlobalRoot();
   const workspaces = await listRegisteredWorkspaces();
 
-  console.log("Agent Harness is ready.");
+  console.log("Relay is ready.");
   console.log(`Global root: ${globalRoot}`);
   console.log(`Workspace dir: ${input.paths.rootDir}`);
   console.log(`Artifacts dir: ${input.paths.artifactsDir}`);

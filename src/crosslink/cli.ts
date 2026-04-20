@@ -58,9 +58,10 @@ async function handleCheck(): Promise<void> {
   const sessions = await store.discoverSessions();
 
   // Find session for current terminal — match by most recent heartbeat
-  // In hook context, the AGENT_HARNESS_SESSION env is not set,
-  // so we pick the most recently active session.
-  const envSessionId = process.env.AGENT_HARNESS_SESSION;
+  // In hook context, RELAY_SESSION / AGENT_HARNESS_SESSION is not set,
+  // so we pick the most recently active session. The legacy env name is
+  // accepted for back-compat with existing shell configs.
+  const envSessionId = process.env.RELAY_SESSION ?? process.env.AGENT_HARNESS_SESSION;
   const session = envSessionId
     ? sessions.find((s) => s.sessionId === envSessionId)
     : sessions[0];
@@ -88,7 +89,7 @@ async function handleSend(args: string[]): Promise<void> {
   const message = args.slice(1).join(" ");
 
   if (!toSessionId || !message) {
-    console.error("Usage: agent-harness crosslink send <sessionId> <message>");
+    console.error("Usage: rly crosslink send <sessionId> <message>");
     process.exitCode = 1;
     return;
   }
@@ -118,7 +119,7 @@ async function handleClean(): Promise<void> {
 }
 
 function printHelp(): void {
-  console.log("Usage: agent-harness crosslink <subcommand>");
+  console.log("Usage: rly crosslink <subcommand>");
   console.log("");
   console.log("Subcommands:");
   console.log("  init     Generate hook scripts and print setup instructions");

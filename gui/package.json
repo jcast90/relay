@@ -1,5 +1,5 @@
 {
-  "name": "agent-harness-gui",
+  "name": "relay-gui",
   "version": "0.1.0",
   "private": true,
   "type": "module",

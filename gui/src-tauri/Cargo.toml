@@ -1,10 +1,10 @@
 [package]
-name = "agent-harness-gui"
+name = "relay-gui"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "agent_harness_gui_lib"
+name = "relay_gui_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

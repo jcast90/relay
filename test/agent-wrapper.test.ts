@@ -26,7 +26,7 @@ describe("agent wrapper", () => {
       });
       const config = JSON.parse(await readFile(configPath, "utf8")) as {
         mcpServers: {
-          agent_harness: {
+          relay: {
             command: string;
             args: string[];
             env: Record<string, string>;
@@ -35,17 +35,17 @@ describe("agent wrapper", () => {
       };
 
       expect(configPath).toContain("claude.mcp.json");
-      expect(config.mcpServers.agent_harness.command).toBe(process.execPath);
-      expect(config.mcpServers.agent_harness.args).toEqual([
+      expect(config.mcpServers.relay.command).toBe(process.execPath);
+      expect(config.mcpServers.relay.args).toEqual([
         "/tmp/agent-harness/dist/cli.js",
         "mcp-server",
         "--workspace",
         cwd
       ]);
-      expect(config.mcpServers.agent_harness.env.AGENT_HARNESS_HOME).toBe(
+      expect(config.mcpServers.relay.env.AGENT_HARNESS_HOME).toBe(
         paths.rootDir
       );
-      expect(config.mcpServers.agent_harness.env.AGENT_HARNESS_RUNS_INDEX).toBe(
+      expect(config.mcpServers.relay.env.AGENT_HARNESS_RUNS_INDEX).toBe(
         paths.runsIndexPath
       );
     } finally {
@@ -75,10 +75,10 @@ describe("agent wrapper", () => {
 
     expect(codexArgs).toContain("-c");
     expect(codexArgs).toContain(
-      `mcp_servers.agent_harness.command=${JSON.stringify(process.execPath)}`
+      `mcp_servers.relay.command=${JSON.stringify(process.execPath)}`
     );
     expect(codexArgs).toContain(
-      'mcp_servers.agent_harness.args=["/tmp/agent-harness/dist/cli.js","mcp-server","--workspace","/tmp/workspace"]'
+      'mcp_servers.relay.args=["/tmp/agent-harness/dist/cli.js","mcp-server","--workspace","/tmp/workspace"]'
     );
     expect(codexArgs.at(-1)).toBe("--help");
   });

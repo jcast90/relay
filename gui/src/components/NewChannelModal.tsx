@@ -90,7 +90,7 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
             <div className="modal-subhead">Repos</div>
             {repos.length === 0 && (
               <div className="empty">
-                No registered workspaces. Run `agent-harness up` in a repo first.
+                No registered workspaces. Run `rly up` in a repo first.
               </div>
             )}
             {repos.map((r, i) => (
