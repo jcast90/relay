@@ -207,5 +207,6 @@ Tokens are read from the environment:
 ## Flags
 
 - `HARNESS_LIVE=1` — use real Claude/Codex adapters instead of scripted simulation
+- `RELAY_AUTO_APPROVE=1` (or `--auto-approve` / `--yolo` on the CLI) — run fully unattended: Claude launches with `--dangerously-skip-permissions`, Codex with `--full-auto` + workspace-write sandbox + `--ask-for-approval never`, and internal scheduler-dispatched agents inherit. Required for multi-hour runs where you don't want permission prompts. Only use when you trust the tasks you're dispatching.
 - `--sequential` — use v1 sequential orchestrator instead of v2 ticket-based
 - `--no-harness-mcp` — launch Claude/Codex without attaching the Relay MCP server

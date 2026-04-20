@@ -90,6 +90,14 @@ export class CodexCliAgent extends CliAgentBase {
 
     await writeFile(schemaPath, JSON.stringify(agentResultJsonSchema, null, 2));
 
+    // When RELAY_AUTO_APPROVE is set, drop the read-only sandbox so the
+    // dispatched codex agent can actually make changes unattended. Stays
+    // read-only by default so nothing surprising happens on a casual run.
+    const autoApprove =
+      process.env.RELAY_AUTO_APPROVE === "1" ||
+      process.env.RELAY_AUTO_APPROVE === "true" ||
+      process.env.RELAY_AUTO_APPROVE === "yes";
+
     try {
       const args = [
         "exec",
@@ -97,12 +105,16 @@ export class CodexCliAgent extends CliAgentBase {
         this.cwd,
         "--skip-git-repo-check",
         "--sandbox",
-        "read-only",
+        autoApprove ? "workspace-write" : "read-only",
         "--output-schema",
         schemaPath,
         "-o",
         outputPath
       ];
+
+      if (autoApprove) {
+        args.push("--ask-for-approval", "never");
+      }
 
       if (this.model) {
         args.push("--model", this.model);
@@ -138,15 +150,27 @@ export class CodexCliAgent extends CliAgentBase {
 
 export class ClaudeCliAgent extends CliAgentBase {
   protected async invokeProvider(prompt: string): Promise<ParsedProviderResult> {
+    // When the user sets RELAY_AUTO_APPROVE=1 (or launched with --auto-approve
+    // / --yolo), internal dispatched agents run fully unattended. Otherwise
+    // we stay on the default permission mode and users will be prompted.
+    const autoApprove =
+      process.env.RELAY_AUTO_APPROVE === "1" ||
+      process.env.RELAY_AUTO_APPROVE === "true" ||
+      process.env.RELAY_AUTO_APPROVE === "yes";
+
     const args = [
       "-p",
       "--output-format",
       "json",
       "--json-schema",
-      JSON.stringify(agentResultJsonSchema),
-      "--permission-mode",
-      "default"
+      JSON.stringify(agentResultJsonSchema)
     ];
+
+    if (autoApprove) {
+      args.push("--dangerously-skip-permissions");
+    } else {
+      args.push("--permission-mode", "default");
+    }
 
     if (this.model) {
       args.push("--model", this.model);

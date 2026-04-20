@@ -9,6 +9,8 @@ import {
   buildCodexLaunchArgs,
   ensureClaudeMcpConfig,
   hasHarnessMcpOptOut,
+  isAutoApproveEnabled,
+  stripAutoApproveFlags,
   stripHarnessMcpOptOut
 } from "./cli/agent-wrapper.js";
 import { AgentRegistry } from "./agents/registry.js";
@@ -169,7 +171,8 @@ export async function main(): Promise<void> {
   if (command === "claude" || command === "codex" || command.startsWith("claude-") || command.startsWith("codex-")) {
     const cliEntrypoint = resolveCliEntrypoint();
     const attachHarnessMcp = !hasHarnessMcpOptOut(args);
-    const userArgs = stripHarnessMcpOptOut(args);
+    const autoApprove = isAutoApproveEnabled(args);
+    const userArgs = stripAutoApproveFlags(stripHarnessMcpOptOut(args));
 
     // For claude-* variants (e.g. claude-turingon), use the base binary
     // with CLAUDE_CONFIG_DIR set to ~/.claude-<variant>
@@ -188,7 +191,8 @@ export async function main(): Promise<void> {
           cwd,
           cliEntrypoint,
           userArgs,
-          workspace
+          workspace,
+          autoApprove
         })
       : userArgs;
     const exitCode = await launchInteractiveCommand({
@@ -199,7 +203,9 @@ export async function main(): Promise<void> {
         ...variantEnv,
         AGENT_HARNESS_HOME: workspace.paths.rootDir,
         AGENT_HARNESS_ARTIFACTS_DIR: workspace.paths.artifactsDir,
-        AGENT_HARNESS_RUNS_INDEX: workspace.paths.runsIndexPath
+        AGENT_HARNESS_RUNS_INDEX: workspace.paths.runsIndexPath,
+        // Propagate to children (dispatched agents) so they inherit.
+        ...(autoApprove ? { RELAY_AUTO_APPROVE: "1" } : {})
       }
     });
 
@@ -1307,7 +1313,10 @@ async function inspectMcp(input: {
             cwd: input.cwd,
             cliEntrypoint,
             userArgs: ["mcp", "list"],
-            workspace: input.workspace
+            workspace: input.workspace,
+            // `mcp list` is a probe, no approvals needed and no spawning of
+            // long-running agents. Skip auto-approve propagation here.
+            autoApprove: false
           })
         : ["mcp", "list"],
       cwd: input.cwd,
@@ -1417,6 +1426,7 @@ async function buildWrappedAgentLaunchArgs(input: {
   workspace: {
     paths: HarnessWorkspacePaths;
   };
+  autoApprove: boolean;
 }): Promise<string[]> {
   // claude-* variants use the same MCP config as claude
   if (input.command === "claude" || input.command.startsWith("claude-")) {
@@ -1426,14 +1436,16 @@ async function buildWrappedAgentLaunchArgs(input: {
         cwd: input.cwd,
         cliEntrypoint: input.cliEntrypoint,
         paths: input.workspace.paths
-      })
+      }),
+      autoApprove: input.autoApprove
     });
   }
 
   return buildCodexLaunchArgs({
     userArgs: input.userArgs,
     cwd: input.cwd,
-    cliEntrypoint: input.cliEntrypoint
+    cliEntrypoint: input.cliEntrypoint,
+    autoApprove: input.autoApprove
   });
 }
 

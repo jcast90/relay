@@ -182,7 +182,10 @@ button.primary { background: var(--accent-dim); border-color: var(--accent); }
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 12px;
-  height: 100%;
+  /* Fill the board-content flex track without `height: 100%`, which resolves
+     to auto inside a flex parent in some browsers and lets the columns grow
+     to natural content height. */
+  flex: 1 1 auto;
   min-height: 0;
   align-items: stretch;
 }
@@ -190,6 +193,9 @@ button.primary { background: var(--accent-dim); border-color: var(--accent); }
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* Without overflow hidden, the column's natural content height wins and
+     board-column-body's overflow-y has nothing to scroll against. */
+  overflow: hidden;
 }
 .board-column h4 {
   font-size: 11px;
