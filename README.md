@@ -112,6 +112,8 @@ The **TUI** (`rly tui`, built with `--with-tui`) and **GUI** (built with `--with
 | `rly crosslink status` | Active agent sessions |
 | `rly pr-watch <url-or-#>` | Track a PR in the active watcher |
 | `rly pr-status` | List PRs currently tracked by the watcher |
+| `rly tui` | Launch the ratatui dashboard (auto-builds on first run) |
+| `rly gui` | Launch the Tauri desktop app (auto-builds on first run; `--dev` for hot reload) |
 
 `agent-harness <cmd>` is accepted as a legacy alias for `rly <cmd>` — both binaries are shipped so existing scripts don't break.
 
@@ -160,12 +162,22 @@ All data lives at `~/.relay/` (older installs at `~/.agent-harness/` are auto-mi
 
 A Tauri desktop app under `gui/` mirrors the TUI's channel/board/decisions layout.
 
+Easiest way (from anywhere):
+
+```bash
+rly gui             # builds the release bundle on first run, then `open`s the .app
+rly gui --dev       # hot-reload Vite + Tauri dev window (keeps terminal attached)
+rly gui --rebuild   # force a rebuild even if the bundle already exists
+```
+
+Direct `pnpm` scripts (useful when hacking on the GUI from the repo):
+
 ```bash
 pnpm gui:dev      # launch dev window (Vite + Tauri)
 pnpm gui:build    # produce a release .app/.dmg
 ```
 
-The Rust backend in `gui/src-tauri/` shares `crates/harness-data` with the TUI, so both read the same `~/.relay/` files.
+The Rust backend in `gui/src-tauri/` shares `crates/harness-data` with the TUI, so both read the same `~/.relay/` files. Prereqs: `cargo` (rustup) and Xcode command-line tools on macOS.
 
 ## Tracker & PR integrations
 

@@ -12,6 +12,7 @@ import {
   stripHarnessMcpOptOut
 } from "./cli/agent-wrapper.js";
 import { AgentRegistry } from "./agents/registry.js";
+import { launchGui, launchTui, parseGuiFlags } from "./cli/launch-gui-tui.js";
 import { launchInteractiveCommand } from "./cli/launcher.js";
 import {
   ensureHarnessWorkspace,
@@ -111,16 +112,12 @@ export async function main(): Promise<void> {
   }
 
   if (command === "tui") {
-    const tuiBinary = fileURLToPath(new URL("../tui/target/release/relay-tui", import.meta.url));
-    // Resolve claude binary path so the TUI subprocess can find it
-    const claudeBin = process.env.CLAUDE_BIN ?? "claude";
-    const exitCode = await launchInteractiveCommand({
-      command: tuiBinary,
-      args: [],
-      cwd,
-      env: { CLAUDE_BIN: claudeBin }
-    });
-    process.exitCode = exitCode;
+    process.exitCode = await launchTui(cwd);
+    return;
+  }
+
+  if (command === "gui") {
+    process.exitCode = await launchGui(parseGuiFlags(args));
     return;
   }
 
