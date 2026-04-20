@@ -4,21 +4,23 @@ import type {
   ExecutionEvent,
   ExecutionHandle,
   ExecutionResult,
+  ExecutionStatus,
   ExecutorStartOptions
 } from "./executor.js";
 import type { RepoRef, SandboxProvider, SandboxRef } from "./sandbox.js";
+import { resolveLocalPath } from "./sandbox.js";
 
 export class NoopSandboxProvider implements SandboxProvider {
   private counter = 0;
-  private readonly paths = new Map<string, string>();
+  private readonly refs = new Set<string>();
 
   async create(repo: RepoRef, base: string): Promise<SandboxRef> {
     const id = `noop-sandbox-${++this.counter}`;
-    this.paths.set(id, repo.root);
+    this.refs.add(id);
 
     return {
       id,
-      workdir: repo.root,
+      workdir: { kind: "local", path: repo.root },
       meta: { base }
     };
   }
@@ -26,11 +28,7 @@ export class NoopSandboxProvider implements SandboxProvider {
   async destroy(ref: SandboxRef): Promise<void> {
     // Idempotent: missing entries are a silent no-op so callers can retry
     // destroy without guarding on existence.
-    this.paths.delete(ref.id);
-  }
-
-  resolvePath(ref: SandboxRef): string | null {
-    return this.paths.get(ref.id) ?? null;
+    this.refs.delete(ref.id);
   }
 }
 
@@ -46,23 +44,42 @@ class NoopExecutionHandle implements ExecutionHandle {
     this.sandbox = sandbox;
   }
 
+  get status(): ExecutionStatus {
+    if (this.cachedResult) {
+      // wait() resolved normally; if kill() fires afterward it's a no-op and
+      // we stay `exited` per the documented contract on ExecutionHandle.kill.
+      return this.killed && this.cachedResult.exitCode === 137
+        ? "killed"
+        : "exited";
+    }
+
+    return this.killed ? "killed" : "running";
+  }
+
   async wait(): Promise<ExecutionResult> {
     if (this.cachedResult) {
       return this.cachedResult;
     }
 
     this.cachedResult = this.killed
-      ? { exitCode: 137, summary: "killed", stdout: "", stderr: "" }
+      ? // 128 + SIGKILL(9); standard Unix convention for a killed process.
+        { exitCode: 137, summary: "killed", stdout: "", stderr: "" }
       : { exitCode: 0, summary: "noop", stdout: "", stderr: "" };
 
     return this.cachedResult;
   }
 
   async kill(_signal?: "SIGTERM" | "SIGKILL"): Promise<void> {
+    // Idempotent. If wait() has already resolved the exit code is cached and
+    // this is a deliberate no-op — the handle's observable status remains
+    // `exited`. Double-kill is likewise safe: the flag is already set.
     this.killed = true;
   }
 
   async *stream(): AsyncIterable<ExecutionEvent> {
+    // Noop handles have no live producer, so stream() just synthesizes a
+    // terminal start+exit pair from cached state — matching the documented
+    // "synthesized from cached state" clause on ExecutionHandle.stream().
     yield { kind: "start", at: new Date().toISOString() };
     const result = await this.wait();
     yield {
@@ -73,6 +90,13 @@ class NoopExecutionHandle implements ExecutionHandle {
   }
 }
 
+/**
+ * Test double implementing {@link AgentExecutor}. Produces a synthetic
+ * success run with no side effects — use for scheduler unit tests and
+ * smoke tests that do not need real process spawning. Not a reference
+ * implementation; see T-202 (LocalChildProcessExecutor) and T-403
+ * (PodExecutor) for production impls.
+ */
 export class NoopExecutor implements AgentExecutor {
   private counter = 0;
 
@@ -85,3 +109,7 @@ export class NoopExecutor implements AgentExecutor {
     return new NoopExecutionHandle(id, opts.sandbox);
   }
 }
+
+// Re-export the free helper so consumers importing from noop-executor for
+// tests don't need a separate sandbox.js import path.
+export { resolveLocalPath };
