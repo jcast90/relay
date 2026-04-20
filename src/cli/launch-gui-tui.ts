@@ -46,7 +46,10 @@ async function requireCargo(): Promise<void> {
  */
 export async function launchTui(userCwd: string): Promise<number> {
   const repoRoot = resolveRepoRoot();
-  const tuiBinary = join(repoRoot, "tui", "target", "release", "relay-tui");
+  // Cargo workspace puts all member outputs in <root>/target, not
+  // <root>/tui/target — even when building via `pnpm tui:build` which cd's
+  // into tui/, cargo walks up to the workspace root.
+  const tuiBinary = join(repoRoot, "target", "release", "relay-tui");
 
   if (!existsSync(tuiBinary)) {
     console.log("[rly tui] building release binary (first run — takes ~1 min)…");
@@ -101,10 +104,11 @@ export async function launchGui(options: LaunchGuiOptions = {}): Promise<number>
     return 1;
   }
 
+  // Cargo workspace target, same as relay-tui — gui/src-tauri is a workspace
+  // member, so Tauri's bundle lands under <root>/target, not
+  // <root>/gui/src-tauri/target.
   const appPath = join(
     repoRoot,
-    "gui",
-    "src-tauri",
     "target",
     "release",
     "bundle",
@@ -137,6 +141,14 @@ export async function launchGui(options: LaunchGuiOptions = {}): Promise<number>
 }
 
 export function parseGuiFlags(args: string[]): LaunchGuiOptions {
+  const known = new Set(["--dev", "--rebuild"]);
+  for (const arg of args) {
+    if (arg.startsWith("--") && !known.has(arg)) {
+      console.warn(
+        `[rly gui] ignoring unknown flag ${arg}. Supported: --dev, --rebuild.`
+      );
+    }
+  }
   return {
     dev: args.includes("--dev"),
     rebuild: args.includes("--rebuild")
