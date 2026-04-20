@@ -32,6 +32,7 @@ import { Orchestrator } from "./orchestrator/orchestrator.js";
 import { OrchestratorV2 } from "./orchestrator/orchestrator-v2.js";
 import { ScriptedInvoker } from "./simulation/scripted-invoker.js";
 import { ChannelStore } from "./channels/channel-store.js";
+import { resolveBoardTickets } from "./channels/board-resolver.js";
 import {
   createPrWatcherFactory,
   getActiveWatcher
@@ -845,39 +846,22 @@ async function printTaskBoard(channelId: string, args: string[] = []): Promise<v
     return;
   }
 
-  // Unified ticket board: channel-scoped file is the live source for both
-  // chat-created and orchestrator-generated tickets. Fall back to the per-run
-  // ledgers only if the channel board is empty (legacy data written before
-  // the unification in PR #10). Remove the fallback once all workspaces have
-  // a non-empty channel board.
+  // Delegates to resolveBoardTickets so CLI + MCP tool + GUI all read the
+  // channel board through the same unified-then-fallback policy.
   const board: Record<string, Array<{ ticketId: string; title: string }>> = {};
-  const channelTickets = await store.readChannelTickets(channelId);
+  const resolved = await resolveBoardTickets(store, channelId, async (
+    workspaceId,
+    runId
+  ) => {
+    const wsStore = new LocalArtifactStore(
+      `${getGlobalRoot()}/workspaces/${workspaceId}/artifacts`
+    );
+    return wsStore.readTicketLedger(runId);
+  });
 
-  if (channelTickets.length > 0) {
-    for (const ticket of channelTickets) {
-      if (!board[ticket.status]) board[ticket.status] = [];
-      board[ticket.status].push({ ticketId: ticket.ticketId, title: ticket.title });
-    }
-  } else {
-    const runLinks = await store.readRunLinks(channelId);
-
-    if (runLinks.length === 0) {
-      console.log("No tickets on this channel and no runs linked.");
-      return;
-    }
-
-    for (const link of runLinks) {
-      const wsStore = new LocalArtifactStore(
-        `${getGlobalRoot()}/workspaces/${link.workspaceId}/artifacts`
-      );
-      const tickets = await wsStore.readTicketLedger(link.runId);
-      if (!tickets) continue;
-
-      for (const ticket of tickets) {
-        if (!board[ticket.status]) board[ticket.status] = [];
-        board[ticket.status].push({ ticketId: ticket.ticketId, title: ticket.title });
-      }
-    }
+  for (const { entry } of resolved) {
+    if (!board[entry.status]) board[entry.status] = [];
+    board[entry.status].push({ ticketId: entry.ticketId, title: entry.title });
   }
 
   if (args.includes("--json")) {

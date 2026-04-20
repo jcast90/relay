@@ -1,5 +1,6 @@
 import { getAgentName } from "../domain/agent-names.js";
 import { ChannelStore } from "../channels/channel-store.js";
+import { resolveBoardTickets } from "../channels/board-resolver.js";
 import { LocalArtifactStore } from "../execution/artifact-store.js";
 import {
   getGlobalRoot,
@@ -176,40 +177,21 @@ export async function callChannelTool(
       const channelId = String(args.channelId ?? "");
       const board: Record<string, Array<{ ticketId: string; title: string; runId: string | null }>> = {};
 
-      // Unified ticket board: channel-scoped file is the live source for both
-      // chat-created and orchestrator-generated tickets. Fall back to the
-      // per-run ledgers only if the channel board is empty (legacy data
-      // written before the unification in PR #10). Remove the fallback once
-      // all workspaces have a non-empty channel board.
-      const channelTickets = await store.readChannelTickets(channelId);
+      const tickets = await resolveBoardTickets(store, channelId, async (
+        workspaceId,
+        runId
+      ) => {
+        const artifactStore = buildArtifactStoreForWorkspace(workspaceId);
+        return artifactStore.readTicketLedger(runId);
+      });
 
-      if (channelTickets.length > 0) {
-        for (const ticket of channelTickets) {
-          if (!board[ticket.status]) board[ticket.status] = [];
-          board[ticket.status].push({
-            ticketId: ticket.ticketId,
-            title: ticket.title,
-            runId: ticket.runId ?? null
-          });
-        }
-        return { channelId, board };
-      }
-
-      // Legacy fallback: traverse run links.
-      const runLinks = await store.readRunLinks(channelId);
-      for (const link of runLinks) {
-        const artifactStore = buildArtifactStoreForWorkspace(link.workspaceId);
-        const tickets = await artifactStore.readTicketLedger(link.runId);
-        if (!tickets) continue;
-
-        for (const ticket of tickets) {
-          if (!board[ticket.status]) board[ticket.status] = [];
-          board[ticket.status].push({
-            ticketId: ticket.ticketId,
-            title: ticket.title,
-            runId: link.runId
-          });
-        }
+      for (const { entry, runId } of tickets) {
+        if (!board[entry.status]) board[entry.status] = [];
+        board[entry.status].push({
+          ticketId: entry.ticketId,
+          title: entry.title,
+          runId
+        });
       }
 
       return { channelId, board };
