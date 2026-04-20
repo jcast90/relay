@@ -47,6 +47,45 @@ describe("buildHarnessStore", () => {
     expect(() => buildHarnessStore()).toThrow(/T-402/);
   });
 
+  it("throws NotImplementedError mentioning sqlite when HARNESS_STORE=sqlite", () => {
+    process.env["HARNESS_STORE"] = "sqlite";
+    expect(() => buildHarnessStore()).toThrow(NotImplementedError);
+    expect(() => buildHarnessStore()).toThrow(/sqlite/i);
+  });
+
+  it("throws NotImplementedError for explicit opts.kind=sqlite (same guard path)", () => {
+    expect(() => buildHarnessStore({ kind: "sqlite" })).toThrow(
+      NotImplementedError
+    );
+    expect(() => buildHarnessStore({ kind: "sqlite" })).toThrow(/sqlite/i);
+  });
+
+  it("throws NotImplementedError for explicit opts.kind=postgres with postgresUrl (same guard path)", () => {
+    // Proves env-driven and opts-driven paths both flow through the same
+    // NotImplementedError guard — not a separate opts-only branch.
+    expect(() =>
+      buildHarnessStore({
+        kind: "postgres",
+        postgresUrl: "postgres://example/db"
+      })
+    ).toThrow(NotImplementedError);
+    expect(() =>
+      buildHarnessStore({
+        kind: "postgres",
+        postgresUrl: "postgres://example/db"
+      })
+    ).toThrow(/T-402/);
+  });
+
+  it("falls through to file default when HARNESS_STORE is an unrecognized value", () => {
+    // Pins current behavior: `HARNESS_STORE=garbage` silently falls back to
+    // "file" rather than throwing. If a future refactor tightens this to
+    // throw-on-unknown, updating this test should be a conscious decision.
+    process.env["HARNESS_STORE"] = "garbage";
+    const store = buildHarnessStore();
+    expect(store).toBeInstanceOf(FileHarnessStore);
+  });
+
   it("explicit opts.kind overrides env and opts.fileRoot roots the store there", async () => {
     process.env["HARNESS_STORE"] = "postgres";
     const store = buildHarnessStore({ kind: "file", fileRoot: tmpRoot });

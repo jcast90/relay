@@ -15,8 +15,9 @@ export interface StoreFactoryOptions {
 
 /**
  * Thrown when a store kind is recognized but not yet implemented. The message
- * points at the tracking ticket so operators know where to follow up instead
- * of filing duplicate bugs.
+ * points at the tracking ticket (where one exists) so operators know where to
+ * follow up instead of filing duplicate bugs. SQLite has no tracking ticket
+ * yet (TBD); postgres points at T-402.
  */
 export class NotImplementedError extends Error {
   constructor(message: string) {
@@ -39,8 +40,9 @@ export class NotImplementedError extends Error {
  *
  * Other `node:fs/promises` importers (workspace bootstrap, agent wrapper,
  * crosslink hook/tools, config, welcome, mcp server, scripted invoker,
- * agent-names, cli-agents, this file's peer `file-store.ts`) are not
- * storage backends and stay on direct fs access.
+ * agent-names, cli-agents, src/index.ts (reads package.json for version),
+ * this file's peer `file-store.ts`) are not storage backends and stay on
+ * direct fs access.
  */
 
 function resolveKind(explicit: StoreKind | undefined): StoreKind {
@@ -54,6 +56,8 @@ function resolveKind(explicit: StoreKind | undefined): StoreKind {
  * Construct the HarnessStore instance for this process. Single source of
  * truth for backend selection — downstream modules take the store as a ctor
  * argument and must not call this factory directly.
+ *
+ * Precedence: `opts.kind` > `HARNESS_STORE` env > default `"file"`.
  */
 export function buildHarnessStore(
   opts: StoreFactoryOptions = {}

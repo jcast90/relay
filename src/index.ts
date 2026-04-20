@@ -430,6 +430,12 @@ export async function main(): Promise<void> {
 
 // One store per process. Handlers migrating off direct `fs/promises` (T-101+)
 // will call `getHarnessStore()`; nothing wires it yet.
+//
+// Module-level singleton rather than DI: legacy handlers still instantiate
+// their own stores directly, and a module-level cache keeps them from forking
+// behavior against a separately-constructed instance. Downstream constructors
+// (T-101+) take `HarnessStore` as a ctor arg for test substitution, so the
+// singleton is only a default entry point — not a hard dependency.
 let cachedStore: HarnessStore | null = null;
 export function getHarnessStore(): HarnessStore {
   if (!cachedStore) cachedStore = buildHarnessStore();
