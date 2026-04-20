@@ -182,7 +182,13 @@ Direct `pnpm` scripts (useful when hacking on the GUI from the repo):
 
 ```bash
 pnpm gui:dev      # launch dev window (Vite + Tauri)
-pnpm gui:build    # produce a release .app/.dmg
+pnpm gui:build    # produce a release .app bundle
+```
+
+Default bundle target is `app` only — the DMG bundler (`bundle_dmg.sh`) is flaky on macOS (osascript/hdiutil permissions, leftover mounts) and isn't needed for local use. To produce a DMG for distribution, run:
+
+```bash
+cd gui && pnpm tauri build --bundles app,dmg
 ```
 
 The Rust backend in `gui/src-tauri/` shares `crates/harness-data` with the TUI, so both read the same `~/.relay/` files. Prereqs: `cargo` (rustup) and Xcode command-line tools on macOS.
