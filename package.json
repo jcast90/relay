@@ -14,7 +14,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node -e \"require('fs').cpSync('src/storage/migrations','dist/storage/migrations',{recursive:true,filter:(p)=>!p.endsWith('.ts')})\"",
     "demo": "tsx src/cli.ts",
     "demo:live": "HARNESS_LIVE=1 tsx src/cli.ts",
     "list-runs": "tsx src/cli.ts list-runs",
@@ -30,6 +30,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.30",
+    "@types/pg": "^8.20.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4",
     "zod": "^3.24.4"
@@ -39,6 +40,7 @@
     "@aoagents/ao-plugin-scm-github": "0.2.5",
     "@aoagents/ao-plugin-tracker-github": "0.2.5",
     "@aoagents/ao-plugin-tracker-linear": "0.2.5",
+    "pg": "^8.20.0",
     "tsx": "^4.20.6"
   }
 }

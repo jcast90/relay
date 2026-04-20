@@ -52,7 +52,7 @@ let tmpCounter = 0;
  * would otherwise be able to read/write arbitrary files under the process's
  * uid.
  */
-function assertSafeSegment(segment: string, kind: "ns" | "id"): void {
+export function assertSafeSegment(segment: string, kind: "ns" | "id"): void {
   if (
     segment === "" ||
     segment === "." ||
