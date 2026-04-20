@@ -107,7 +107,8 @@ export class PrPoller {
       let enriched: Map<string, EnrichedPR>;
       try {
         enriched = await this.scm.enrichBatch(states.map((s) => s.entry.pr));
-      } catch {
+      } catch (error) {
+        console.warn("[pr-poller] enrichBatch failed; skipping tick", error);
         return;
       }
 
@@ -225,16 +226,19 @@ export class PrPoller {
         content,
         metadata,
       });
-    } catch {
-      /* non-critical */
+    } catch (error) {
+      console.warn("[pr-poller] failed to post channel entry", error);
     }
   }
 
   private async enqueue(request: FollowUpRequest): Promise<void> {
     try {
       await this.scheduler.enqueueFollowUp(request);
-    } catch {
-      /* non-critical; next transition will re-fire */
+    } catch (error) {
+      console.warn(
+        `[pr-poller] failed to enqueue follow-up ${request.kind}; next transition will re-fire`,
+        error
+      );
     }
   }
 

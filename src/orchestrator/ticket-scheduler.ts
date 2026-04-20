@@ -74,8 +74,8 @@ export class TicketScheduler {
     try {
       return await this.drain(run);
     } finally {
-      // Only clear the active-run marker if we are still the active session.
-      // (Defensive: `enqueue` never calls executeAll concurrently.)
+      // Defensive double-clear: drain's finally already cleared the marker
+      // on the normal path. This catches the throw-without-clearing case.
       if (this.activeRun === run) {
         this.activeRun = null;
         this.wakeResolve = null;
@@ -138,6 +138,23 @@ export class TicketScheduler {
   private async drain(run: HarnessRun): Promise<boolean> {
     const executing = new Map<string, Promise<RaceResult>>();
 
+    try {
+      return await this.drainLoop(run, executing);
+    } finally {
+      // Clear the active-run marker BEFORE drain returns, so a concurrent
+      // enqueue() that races with drain-just-returning takes the fresh-drain
+      // branch via enqueueTail instead of a no-op wake() on a dead loop.
+      if (this.activeRun === run) {
+        this.activeRun = null;
+        this.wakeResolve = null;
+      }
+    }
+  }
+
+  private async drainLoop(
+    run: HarnessRun,
+    executing: Map<string, Promise<RaceResult>>
+  ): Promise<boolean> {
     while (true) {
       const allCompleted = run.ticketLedger.every(
         (t) => t.status === "completed" || t.status === "failed"
