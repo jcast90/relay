@@ -1,9 +1,28 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
+  createTracker,
   detectTrackerKind,
   resolveIssue
 } from "../../src/integrations/tracker.js";
+
+// Mock the AO GitHub tracker so its `create()` throws when invoked. We use
+// plain `vi.mock` here — no seam in tracker.ts was needed, since tracker.ts
+// imports the plugin via the standard default export and `vi.mock` hoists
+// ahead of the module-graph resolution.
+vi.mock("@aoagents/ao-plugin-tracker-github", () => ({
+  default: {
+    manifest: {
+      name: "tracker-github",
+      slot: "tracker" as const,
+      description: "mocked",
+      version: "0.0.0-test"
+    },
+    create: () => {
+      throw new Error("boom from mocked plugin create()");
+    }
+  }
+}));
 
 describe("detectTrackerKind", () => {
   const cases: Array<{ input: string; expected: "github" | "linear" | null; why: string }> = [
@@ -168,5 +187,47 @@ describe("resolveIssue", () => {
 
     const harnessIssue = await resolveIssue(tracker, "7", project);
     expect(harnessIssue.labels).toEqual([]);
+  });
+});
+
+describe("createTracker — env restoration when plugin create() throws", () => {
+  it("restores process.env.GITHUB_TOKEN to undefined (variable absent) when prior was unset and create() throws", async () => {
+    // Save whatever the real env had so we leave the process clean.
+    const prior = process.env.GITHUB_TOKEN;
+    // Force the "prior was undefined" branch to exercise deletion-on-restore.
+    delete process.env.GITHUB_TOKEN;
+
+    try {
+      expect(process.env.GITHUB_TOKEN).toBeUndefined();
+      expect("GITHUB_TOKEN" in process.env).toBe(false);
+
+      await expect(
+        createTracker("github", { token: "throwaway" })
+      ).rejects.toThrow(/boom from mocked plugin create\(\)/);
+
+      // After the throw propagates, the env var must be gone again — matching
+      // its prior undefined / absent state, not a lingering "throwaway".
+      expect(process.env.GITHUB_TOKEN).toBeUndefined();
+      expect("GITHUB_TOKEN" in process.env).toBe(false);
+    } finally {
+      if (prior === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = prior;
+    }
+  });
+
+  it("restores process.env.GITHUB_TOKEN to its prior defined value when create() throws", async () => {
+    const prior = process.env.GITHUB_TOKEN;
+    process.env.GITHUB_TOKEN = "original-token";
+
+    try {
+      await expect(
+        createTracker("github", { token: "throwaway" })
+      ).rejects.toThrow(/boom from mocked plugin create\(\)/);
+
+      expect(process.env.GITHUB_TOKEN).toBe("original-token");
+    } finally {
+      if (prior === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = prior;
+    }
   });
 });

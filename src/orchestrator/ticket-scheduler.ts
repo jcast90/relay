@@ -128,8 +128,18 @@ export class TicketScheduler {
     });
 
     // Keep the chain alive even if one drain throws, so future enqueues still run.
-    this.enqueueTail = next.catch(() => {
-      /* swallow — failures are recorded on the ledger entry itself */
+    // Surface the failure on the run's event log so it isn't silently lost —
+    // the inner `await next` below still rethrows for the real-time caller.
+    this.enqueueTail = next.catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[scheduler] tail drain failed: ${message}`);
+      try {
+        this.recordEvent(run, "TicketFailed", "__scheduler_tail__", {
+          error: message
+        });
+      } catch {
+        /* recordEvent itself must never break the chain */
+      }
     });
 
     await next;

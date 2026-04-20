@@ -126,6 +126,58 @@ describe("wrapScm — facade delegation", () => {
   });
 });
 
+describe("wrapScm — detectPR cross-repo routing", () => {
+  it("uses the explicit repo arg (not the bound project) when building ProjectConfig", async () => {
+    const detectPR = vi.fn(async () => null);
+    const scm = { name: "gh", detectPR } as any;
+
+    // Bind the facade to project a/alpha.
+    const wrapped = wrapScm(scm, {
+      owner: "a",
+      name: "alpha",
+      path: "/tmp/alpha",
+      defaultBranch: "main"
+    });
+
+    // Call detectPR with a different repo (b/beta).
+    await wrapped.detectPR("feat/x", { owner: "b", name: "beta" });
+
+    expect(detectPR).toHaveBeenCalledTimes(1);
+    const call = detectPR.mock.calls[0] as unknown as [
+      unknown,
+      { name: string; repo: string; path: string; defaultBranch: string; sessionPrefix: string }
+    ];
+    const projectArg = call[1];
+
+    // AO's ProjectConfig.repo is the GitHub "owner/repo" identifier.
+    expect(projectArg.repo).toBe("b/beta");
+    expect(projectArg.name).toBe("b/beta");
+    expect(projectArg.sessionPrefix).toBe("beta");
+    // Must NOT be the bound project.
+    expect(projectArg.repo).not.toBe("a/alpha");
+  });
+
+  it("reuses the bound ProjectConfig when repo matches the bound project", async () => {
+    const detectPR = vi.fn(async () => null);
+    const scm = { name: "gh", detectPR } as any;
+
+    const wrapped = wrapScm(scm, {
+      owner: "a",
+      name: "alpha",
+      path: "/tmp/alpha",
+      defaultBranch: "main"
+    });
+
+    await wrapped.detectPR("feat/x", { owner: "a", name: "alpha" });
+
+    const call = detectPR.mock.calls[0] as unknown as [
+      unknown,
+      { repo: string }
+    ];
+    expect(call[1].repo).toBe("a/alpha");
+  });
+});
+
 describe("wrapScm — enrichBatch fallback", () => {
   it("falls back to per-PR getPRState/getCISummary/getReviewDecision and keys correctly", async () => {
     const scm = {

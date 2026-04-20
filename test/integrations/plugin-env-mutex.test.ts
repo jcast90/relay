@@ -164,6 +164,44 @@ describe("withEnvOverride — restore on throw", () => {
   });
 });
 
+describe("withEnvOverride — recursion self-deadlock guard", () => {
+  let snap: { key: string | undefined; other: string | undefined };
+
+  beforeEach(() => {
+    snap = snapshotAndClear();
+  });
+
+  afterEach(() => {
+    restore(snap);
+  });
+
+  it("throws when fn reenters withEnvOverride directly (would otherwise deadlock)", async () => {
+    const recursive = withEnvOverride({ [KEY]: "OUTER" }, async () => {
+      // This inner call would block forever on the outer's chain promise if
+      // the guard were absent. The guard must throw synchronously-from-the-
+      // perspective-of-the-inner-promise so the outer fn surfaces the error.
+      await withEnvOverride({ [KEY]: "INNER" }, () => process.env[KEY]);
+    });
+
+    await expect(recursive).rejects.toThrow(
+      /recursive call detected/,
+    );
+    // Outer's finally must have run, restoring env.
+    expect(process.env[KEY]).toBeUndefined();
+  });
+
+  it("keeps the chain usable: a normal call after a recursion-error still resolves", async () => {
+    const bad = withEnvOverride({ [KEY]: "OUTER" }, async () => {
+      await withEnvOverride({ [KEY]: "INNER" }, () => undefined);
+    });
+    await expect(bad).rejects.toThrow(/recursive call detected/);
+
+    const value = await withEnvOverride({ [KEY]: "OK" }, () => process.env[KEY]);
+    expect(value).toBe("OK");
+    expect(process.env[KEY]).toBeUndefined();
+  });
+});
+
 describe("withEnvOverride — unset semantics", () => {
   let snap: { key: string | undefined; other: string | undefined };
 

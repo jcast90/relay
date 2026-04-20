@@ -239,7 +239,13 @@ export class ChannelStore {
         .trim()
         .split("\n")
         .filter(Boolean)
-        .map((line) => JSON.parse(line) as ChannelEntry);
+        .map((line) => {
+          const entry = JSON.parse(line) as ChannelEntry;
+          entry.metadata = denormalizeMetadata(
+            entry.metadata as Record<string, string>
+          );
+          return entry;
+        });
 
       if (limit) {
         return entries.slice(-limit);
@@ -408,10 +414,25 @@ export class ChannelStore {
 }
 
 /**
+ * Prefix used to tag metadata values that were JSON-serialized on write so
+ * `denormalizeMetadata` can losslessly restore them on read. Chosen to be
+ * distinctive and effectively never collide with real string payloads; if a
+ * caller genuinely needs to store a string that happens to start with this
+ * prefix, pass it through `JSON.stringify` before calling `post` (it will
+ * round-trip as a string once parsed back).
+ */
+const JSON_TAG = "__ah_meta_json::";
+
+/**
  * Serialize non-string metadata values to JSON strings so existing readers
  * (Rust `crates/harness-data` and `gui/src/types.ts`, which both type
  * metadata as `Record<string, string>`) continue to deserialize the feed
- * without changes. `null` and `undefined` are dropped. Strings pass through.
+ * without changes. Non-string values are prefixed with `JSON_TAG` so
+ * `denormalizeMetadata` can restore the original type on read.
+ * `null` and `undefined` are dropped. Plain strings pass through verbatim;
+ * as a collision-safety measure, a string that happens to start with
+ * `JSON_TAG` is also JSON-tagged on write so `denormalizeMetadata` restores
+ * the exact original string instead of treating it as a serialized payload.
  */
 function normalizeMetadata(
   metadata: Record<string, unknown>
@@ -419,7 +440,42 @@ function normalizeMetadata(
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(metadata)) {
     if (value === undefined || value === null) continue;
-    out[key] = typeof value === "string" ? value : JSON.stringify(value);
+    if (typeof value === "string") {
+      // Normal case: strings pass through verbatim. The rare string that
+      // coincidentally starts with the tag must be tagged too, otherwise
+      // the reader would mis-parse it.
+      out[key] = value.startsWith(JSON_TAG)
+        ? JSON_TAG + JSON.stringify(value)
+        : value;
+    } else {
+      out[key] = JSON_TAG + JSON.stringify(value);
+    }
+  }
+  return out;
+}
+
+/**
+ * Inverse of `normalizeMetadata`. Values that begin with `JSON_TAG` are
+ * stripped and JSON-parsed back to their original type; all other values
+ * pass through as strings. Safe to call on entries written before the tag
+ * was introduced (those are pure strings and pass through unchanged).
+ */
+function denormalizeMetadata(
+  metadata: Record<string, string> | undefined
+): Record<string, unknown> {
+  if (!metadata) return {};
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    if (typeof value === "string" && value.startsWith(JSON_TAG)) {
+      try {
+        out[key] = JSON.parse(value.slice(JSON_TAG.length));
+      } catch {
+        // Malformed payload — surface the raw string rather than throw.
+        out[key] = value;
+      }
+    } else {
+      out[key] = value;
+    }
   }
   return out;
 }

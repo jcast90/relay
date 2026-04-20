@@ -11,7 +11,7 @@ import type {
   AgentResult,
   WorkRequest
 } from "../../src/domain/agent.js";
-import type { HarnessRun } from "../../src/domain/run.js";
+import type { HarnessRun, RunEventType } from "../../src/domain/run.js";
 import {
   initializeTicketLedger,
   parseTicketPlan,
@@ -83,12 +83,29 @@ function buildRun(repoRoot: string, tickets: TicketDefinition[]): HarnessRun {
   };
 }
 
+interface RecordedEvent {
+  type: RunEventType;
+  phaseId: string;
+  details: Record<string, string>;
+}
+
+interface BuildSchedulerOptions {
+  dispatchOverride?: (
+    run: HarnessRun,
+    req: Omit<WorkRequest, "runId">
+  ) => Promise<AgentResult>;
+  onRecordEvent?: (event: RecordedEvent) => void;
+}
+
 /**
  * Build a scheduler whose dispatch always returns success — no verification
  * commands are proposed, so the built-in verification pass sees an empty
  * command list and trivially succeeds.
  */
-async function buildScheduler(repoRoot: string) {
+async function buildScheduler(
+  repoRoot: string,
+  options: BuildSchedulerOptions = {}
+) {
   const registry = new AgentRegistry();
   for (const agent of createLiveAgents({
     cwd: repoRoot,
@@ -104,7 +121,9 @@ async function buildScheduler(repoRoot: string) {
   );
 
   const dispatched: WorkRequest[] = [];
-  const dispatch = async (
+  const events: RecordedEvent[] = [];
+
+  const defaultDispatch = async (
     _run: HarnessRun,
     req: Omit<WorkRequest, "runId">
   ): Promise<AgentResult> => {
@@ -117,19 +136,31 @@ async function buildScheduler(repoRoot: string) {
     };
   };
 
+  const dispatch = options.dispatchOverride
+    ? async (
+        run: HarnessRun,
+        req: Omit<WorkRequest, "runId">
+      ): Promise<AgentResult> => {
+        dispatched.push({ runId: "run-test", ...req });
+        return options.dispatchOverride!(run, req);
+      }
+    : defaultDispatch;
+
   const scheduler = new TicketScheduler(
     repoRoot,
     artifactStore,
     verificationRunner,
     registry,
     dispatch,
-    () => {
-      /* no-op event recorder */
+    (_run, type, phaseId, details) => {
+      const event: RecordedEvent = { type, phaseId, details };
+      events.push(event);
+      options.onRecordEvent?.(event);
     },
     { maxConcurrency: 2 }
   );
 
-  return { scheduler, dispatched, artifactStore };
+  return { scheduler, dispatched, events, artifactStore };
 }
 
 describe("TicketScheduler.enqueue", () => {
@@ -205,6 +236,120 @@ describe("TicketScheduler.enqueue", () => {
 
       const matches = run.ticketLedger.filter((t) => t.ticketId === "t_once");
       expect(matches).toHaveLength(1);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("surfaces tail-drain failures through recordEvent and keeps the chain alive", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "ts-enqueue-tail-"));
+    const warnCalls: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnCalls.push(args.map((a) => String(a)).join(" "));
+    };
+
+    try {
+      const run = buildRun(tmp, [ticket("t_seed")]);
+
+      // Throw synchronously from dispatch for the poison ticket only. Because
+      // executeTicket's `.then(..., onRejected)` catches the rejection, a
+      // simple throw there just yields success=false. To force drain itself
+      // to throw, throw from recordEvent on TicketStarted for that ticket —
+      // that call site is outside the executeTicket catch and bubbles up.
+      const { scheduler, events } = await buildScheduler(tmp, {
+        onRecordEvent: (ev) => {
+          if (ev.type === "TicketStarted" && ev.phaseId === "t_poison") {
+            throw new Error("boom: synthetic drain failure");
+          }
+        }
+      });
+
+      // Pre-seed the run via executeAll so the scheduler is idle when the
+      // first enqueue lands and takes the fresh-drain branch.
+      await scheduler.executeAll(run);
+
+      // First enqueue: the poison ticket. Drain will throw when recordEvent
+      // fires for TicketStarted. The outer `await next` must rethrow.
+      let firstError: unknown = null;
+      try {
+        await scheduler.enqueue(run, ticket("t_poison"));
+      } catch (err) {
+        firstError = err;
+      }
+      expect(firstError).toBeInstanceOf(Error);
+      expect(String(firstError)).toContain("boom: synthetic drain failure");
+
+      // Second enqueue: a clean ticket. The chain should still be alive and
+      // this one must schedule and complete normally.
+      await scheduler.enqueue(run, ticket("t_clean"));
+      const clean = run.ticketLedger.find((t) => t.ticketId === "t_clean");
+      expect(clean?.status).toBe("completed");
+
+      // The tail-drain failure must be visible: either a recordEvent with the
+      // sentinel phaseId, or a console.warn with the scheduler prefix. The
+      // production code emits both, but we accept either so the test doesn't
+      // pin a specific implementation detail beyond visibility.
+      const tailEvent = events.find(
+        (e) => e.phaseId === "__scheduler_tail__"
+      );
+      const tailWarn = warnCalls.find((w) =>
+        w.includes("[scheduler] tail drain failed")
+      );
+      expect(tailEvent || tailWarn).toBeTruthy();
+      if (tailEvent) {
+        expect(tailEvent.details.error).toContain(
+          "boom: synthetic drain failure"
+        );
+      }
+      if (tailWarn) {
+        expect(tailWarn).toContain("boom: synthetic drain failure");
+      }
+    } finally {
+      console.warn = originalWarn;
+      await rm(tmp, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  // The scheduler's activeRun gating assumes at most one executeAll(run) is
+  // in flight at a time. The code does NOT raise or short-circuit on overlap;
+  // both calls share the same mutable ledger and each drain has its own local
+  // `executing` map. This test pins the observed contract: both promises
+  // resolve, the ledger settles to terminal states, and activeRun is cleared
+  // afterwards. It intentionally does NOT assert that the same ticket is
+  // dispatched exactly once — the current code permits double-dispatch in a
+  // race window between getReadyTickets() and updateTicketStatus("executing"),
+  // which is a latent bug flagged separately.
+  it("does not corrupt activeRun when two executeAll calls overlap", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "ts-executeall-overlap-"));
+    try {
+      const run = buildRun(tmp, [ticket("t_one"), ticket("t_two")]);
+      const { scheduler } = await buildScheduler(tmp);
+
+      const a = scheduler.executeAll(run);
+      const b = scheduler.executeAll(run);
+
+      // Neither call should throw — the scheduler has no guard against
+      // overlap today. Both drains walk the shared ledger.
+      const [resA, resB] = await Promise.all([a, b]);
+
+      // Both calls return booleans (exact values are a function of the race,
+      // so we just assert the promise shape resolved cleanly).
+      expect(typeof resA).toBe("boolean");
+      expect(typeof resB).toBe("boolean");
+
+      // Every ticket must have reached a terminal state — nothing stuck in
+      // "executing" / "verifying" / "retry" / "ready".
+      for (const entry of run.ticketLedger) {
+        expect(["completed", "failed"]).toContain(entry.status);
+      }
+
+      // activeRun should be cleared once both drains are done, so a fresh
+      // enqueue takes the fresh-drain branch cleanly.
+      // (Inspected via behavior: enqueue a new ticket and confirm it runs.)
+      await scheduler.enqueue(run, ticket("t_after"));
+      const after = run.ticketLedger.find((t) => t.ticketId === "t_after");
+      expect(after?.status).toBe("completed");
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }
