@@ -130,6 +130,7 @@ fn run_cli(args: Vec<String>) -> CliResult {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RepoAssignmentInput {
     pub alias: String,
     pub workspace_id: String,
@@ -455,6 +456,31 @@ fn start_chat(
                                             text: describe_tool_use(name, input),
                                         },
                                     );
+                                }
+                                Some("thinking") => {
+                                    // Claude extended-thinking content blocks —
+                                    // surface a trimmed preview as activity so
+                                    // the UI shows something other than "…"
+                                    // while the model is reasoning.
+                                    if let Some(text) = block
+                                        .get("thinking")
+                                        .and_then(|v| v.as_str())
+                                    {
+                                        let preview = text
+                                            .split_whitespace()
+                                            .take(16)
+                                            .collect::<Vec<_>>()
+                                            .join(" ");
+                                        if !preview.is_empty() {
+                                            let _ = app_handle.emit(
+                                                "chat-event",
+                                                ChatEvent::Activity {
+                                                    stream_id,
+                                                    text: format!("thinking: {}…", preview),
+                                                },
+                                            );
+                                        }
+                                    }
                                 }
                                 _ => {}
                             }

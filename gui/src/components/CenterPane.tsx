@@ -196,21 +196,31 @@ function ChatView({
           <FeedView entries={feed} />
         )}
         {stream && (
-          <div className={`feed-entry role-assistant`}>
+          <div className={`feed-entry role-assistant streaming`}>
             <div className="feed-header">
               <span className="feed-author">
                 {stream.alias ? `@${stream.alias}` : "assistant"}
               </span>
-              <span>streaming…</span>
+              <span className="stream-status">
+                <span className="stream-dot" /> streaming
+              </span>
             </div>
-            {stream.activity.length > 0 && (
-              <div className="stream-activity">
-                {stream.activity.slice(-4).map((a, i) => (
-                  <div key={i}>· {a}</div>
-                ))}
-              </div>
+            <div className="stream-activity">
+              {stream.activity.length === 0 ? (
+                <div className="stream-activity-empty">
+                  {stream.accum ? "writing response…" : "thinking…"}
+                </div>
+              ) : (
+                stream.activity.slice(-5).map((a, i) => (
+                  <div key={i} className="stream-activity-line">
+                    · {a}
+                  </div>
+                ))
+              )}
+            </div>
+            {stream.accum && (
+              <div className="feed-content">{stream.accum}</div>
             )}
-            <div className="feed-content">{stream.accum || "…"}</div>
           </div>
         )}
       </div>
