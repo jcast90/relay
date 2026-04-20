@@ -2,22 +2,72 @@
 
 Local-first orchestration for phase-driven coding with Claude and Codex adapters. Classifies requests by complexity, decomposes work into parallelizable tickets, and executes them with verification loops.
 
-## Quickstart
+## Install
+
+### One command (recommended)
+
+```bash
+cd /path/to/agent-harness
+./install.sh
+```
+
+Add `--with-tui` or `--with-gui` to also build the Rust dashboards. Use `--skip-link` to avoid `pnpm link --global` (useful in CI or on shared machines).
+
+The installer checks prereqs (`node >=20`, `pnpm`, `git`, plus `cargo` if you asked for TUI/GUI), runs `pnpm install && pnpm build`, links the `agent-harness` binary on your `$PATH`, and scaffolds `~/.agent-harness/config.env.template`. It's safe to re-run.
+
+### Manual
 
 ```bash
 pnpm install && pnpm build && pnpm link --global
-
-# Register a repo (stores config at ~/.agent-harness/)
-cd /path/to/your/repo
-agent-harness up
-
-# Use the wrapper around your normal CLI
-agent-harness claude
-agent-harness codex
-
-# Run the scripted demo
-pnpm demo
 ```
+
+## Getting started
+
+1. **Register a repo.** From inside any repo you want the harness to manage:
+
+   ```bash
+   agent-harness up
+   ```
+
+   This writes the repo into `~/.agent-harness/workspace-registry.json`.
+
+2. **Set your tokens.** Copy the template and fill it in:
+
+   ```bash
+   cp ~/.agent-harness/config.env.template ~/.agent-harness/config.env
+   # edit ~/.agent-harness/config.env
+   source ~/.agent-harness/config.env
+   ```
+
+   `GITHUB_TOKEN` unlocks GitHub issue ingestion and the PR watcher. `LINEAR_API_KEY` unlocks Linear issue ingestion. `HARNESS_LIVE=1` switches from the scripted demo to real Claude/Codex adapters. Add `source ~/.agent-harness/config.env` to your `~/.zshrc` so every shell picks it up.
+
+3. **Sanity check.**
+
+   ```bash
+   agent-harness doctor
+   ```
+
+   Verifies workspace paths, MCP wiring, and token presence.
+
+4. **Launch a session.**
+
+   ```bash
+   agent-harness claude    # or: agent-harness codex
+   ```
+
+   These wrap your normal CLI and attach the harness MCP server.
+
+### End-to-end workflow
+
+Once tokens are set and a session is running, paste a GitHub or Linear issue URL (or a bare Linear key like `ABC-123`) to the agent. The harness:
+
+1. Pulls the issue (title, body, labels, branch hint) via the tracker integration.
+2. Classifies it into a complexity tier and generates a plan.
+3. Decomposes the plan into parallelizable tickets and executes them.
+4. Opens PRs via the SCM integration and tracks them — when `GITHUB_TOKEN` is set the PR watcher polls CI / review state every 30s and posts updates into the ticket's channel.
+5. Surfaces live state in the dashboards.
+
+The **TUI** (`agent-harness tui`, built with `--with-tui`) and **GUI** (built with `--with-gui`) are optional dashboards over the same `~/.agent-harness/` data — every operation they show is also available via CLI (`status`, `running`, `board`, `channels`, `decisions`, `list-runs`, …).
 
 ## How it works
 
@@ -57,6 +107,8 @@ pnpm demo
 | `agent-harness decisions <channelId>` | Decision history |
 | `agent-harness doctor` | Workspace + MCP diagnostics |
 | `agent-harness crosslink status` | Active agent sessions |
+| `agent-harness pr-watch <url-or-#>` | Track a PR in the active watcher |
+| `agent-harness pr-status` | List PRs currently tracked by the watcher |
 
 ## MCP tools (15)
 

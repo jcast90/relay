@@ -9,6 +9,7 @@ import {
   getWorkspaceDir
 } from "../cli/workspace-registry.js";
 import { OrchestratorV2, buildRunId } from "./orchestrator-v2.js";
+import { createPrWatcherFactory } from "../cli/pr-watcher-factory.js";
 
 export interface DispatchInput {
   featureRequest: string;
@@ -74,6 +75,14 @@ export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
     artifactsDir,
     channelStore,
     workspaceId
+  );
+  // Auto-attach PR watcher. No-op without GITHUB_TOKEN; safe to always call.
+  orchestrator.attachPoller(
+    createPrWatcherFactory({
+      channelStore,
+      repoRoot: repoPath,
+      defaultChannelId: channelId
+    })
   );
 
   // Pre-generate run ID so we can return it immediately
