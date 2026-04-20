@@ -118,8 +118,9 @@ The **TUI** (`rly tui`, built with `--with-tui`) and **GUI** (built with `--with
 | `rly pr-status` | List PRs currently tracked by the watcher |
 | `rly tui` | Launch the ratatui dashboard (auto-builds on first run) |
 | `rly gui` | Launch the Tauri desktop app (auto-builds on first run; `--dev` for hot reload) |
+| `rly rebuild` | Rebuild the TS dist; `--tui` / `--gui` / `--all` to rebuild more |
 
-`agent-harness <cmd>` is accepted as a legacy alias for `rly <cmd>` — both binaries are shipped so existing scripts don't break.
+`agent-harness <cmd>` is accepted as a legacy alias for `rly <cmd>` — both binaries are shipped so existing scripts don't break. `rly` reads current TypeScript source by default (via `tsx`), so a rebuild is **not** required after `git pull`. Set `RELAY_USE_DIST=1` for the compiled dist if you want slightly faster startup.
 
 ## MCP tools (15)
 
@@ -208,5 +209,6 @@ Tokens are read from the environment:
 
 - `HARNESS_LIVE=1` — use real Claude/Codex adapters instead of scripted simulation
 - `RELAY_AUTO_APPROVE=1` (or `--auto-approve` / `--yolo` on the CLI) — run fully unattended: Claude launches with `--dangerously-skip-permissions`, Codex with `--full-auto` + workspace-write sandbox + `--ask-for-approval never`, and internal scheduler-dispatched agents inherit. Required for multi-hour runs where you don't want permission prompts. Only use when you trust the tasks you're dispatching.
+- `RELAY_USE_DIST=1` — run the pre-built `dist/cli.js` in-process instead of launching TypeScript source via `tsx`. Slightly faster startup (~80 ms), but stale if you haven't run `rly rebuild` since the last source change. Default behavior reads source, so no rebuild is required after `git pull`.
 - `--sequential` — use v1 sequential orchestrator instead of v2 ticket-based
 - `--no-harness-mcp` — launch Claude/Codex without attaching the Relay MCP server

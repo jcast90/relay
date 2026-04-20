@@ -15,6 +15,7 @@ import {
 } from "./cli/agent-wrapper.js";
 import { AgentRegistry } from "./agents/registry.js";
 import { launchGui, launchTui, parseGuiFlags } from "./cli/launch-gui-tui.js";
+import { parseRebuildFlags, runRebuild } from "./cli/rebuild.js";
 import { launchInteractiveCommand } from "./cli/launcher.js";
 import {
   ensureHarnessWorkspace,
@@ -120,6 +121,11 @@ export async function main(): Promise<void> {
 
   if (command === "gui") {
     process.exitCode = await launchGui(parseGuiFlags(args));
+    return;
+  }
+
+  if (command === "rebuild") {
+    process.exitCode = await runRebuild(parseRebuildFlags(args));
     return;
   }
 
