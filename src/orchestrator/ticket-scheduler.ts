@@ -13,6 +13,7 @@ import {
 } from "../domain/ticket.js";
 import type { ArtifactStore } from "../execution/artifact-store.js";
 import type { ChannelStore } from "../channels/channel-store.js";
+import type { AgentExecutor } from "../execution/executor.js";
 import type { VerificationRunner } from "../execution/verification-runner.js";
 import { selectVerificationCommands } from "../execution/verification-runner.js";
 import {
@@ -21,6 +22,11 @@ import {
   fallbackFailureClassification,
   isVerificationPlanIssue
 } from "./failure-routing.js";
+
+export type SchedulerDispatch = (
+  run: HarnessRun,
+  request: Omit<WorkRequest, "runId">
+) => Promise<AgentResult>;
 
 export interface TicketSchedulerOptions {
   maxConcurrency: number;
@@ -31,6 +37,18 @@ export interface TicketSchedulerOptions {
    * where a caller supplying options silently drops the store.
    */
   channelStore?: ChannelStore;
+  /**
+   * Optional {@link AgentExecutor}. When set the scheduler invokes the
+   * executor's `start`/`wait` for each implementation step instead of the
+   * dispatch callback. The callback is still used for the planner-style
+   * steps (run_checks, classify_failure) so existing verification logic
+   * keeps running unchanged — see the migration note on the ctor.
+   *
+   * Both `dispatch` and `executor` may be supplied simultaneously: the
+   * executor handles `implement_phase`, dispatch handles everything else.
+   * Suppling neither is a configuration error; see the ctor for the check.
+   */
+  executor?: AgentExecutor;
 }
 
 const DEFAULT_OPTIONS: Required<Pick<TicketSchedulerOptions, "maxConcurrency">> = {
@@ -59,15 +77,36 @@ export class TicketScheduler {
 
   private readonly channelStore: ChannelStore | undefined;
 
+  /**
+   * Effective dispatch callback. When the caller supplies an `AgentExecutor`
+   * via options, this is the adapter built in {@link buildExecutorDispatch}
+   * that routes to `executor.start().wait()` and maps the `ExecutionResult`
+   * back into an `AgentResult` shape. When the caller supplies the legacy
+   * `dispatch` ctor arg, this is that callback verbatim. The internal loop
+   * never branches on which one is wired — it just calls `this.dispatch`.
+   */
+  private readonly dispatch: SchedulerDispatch;
+
+  /**
+   * Scheduler ctor.
+   *
+   * Exactly one of `dispatch` (positional, legacy) or `options.executor`
+   * (new) must be supplied:
+   *
+   *   - Both → throws at construction time (ambiguous wiring).
+   *   - Neither → throws (nothing to do).
+   *
+   * The positional `dispatch` slot is kept so `orchestrator-v2` and existing
+   * tests compile unchanged during the migration. Prefer `options.executor`
+   * for new call sites — it composes with the sandbox and streaming story
+   * from T-201/T-202.
+   */
   constructor(
     private readonly repoRoot: string,
     private readonly artifactStore: ArtifactStore,
     private readonly verificationRunner: VerificationRunner,
     private readonly registry: AgentRegistry,
-    private readonly dispatch: (
-      run: HarnessRun,
-      request: Omit<WorkRequest, "runId">
-    ) => Promise<AgentResult>,
+    dispatch: SchedulerDispatch | null,
     private readonly recordEvent: (
       run: HarnessRun,
       type: RunEventType,
@@ -78,6 +117,80 @@ export class TicketScheduler {
   ) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
     this.channelStore = options?.channelStore;
+
+    const executor = options?.executor;
+    if (dispatch && executor) {
+      throw new Error(
+        "TicketScheduler received both a dispatch callback and options.executor; supply exactly one."
+      );
+    }
+    if (!dispatch && !executor) {
+      throw new Error(
+        "TicketScheduler requires either a dispatch callback or options.executor."
+      );
+    }
+
+    this.dispatch = dispatch ?? this.buildExecutorDispatch(executor!);
+  }
+
+  /**
+   * Adapt an {@link AgentExecutor} into the `SchedulerDispatch` shape the
+   * drain loop already understands.
+   *
+   * Why adapt rather than branching inside `executeTicket`: the scheduler
+   * has extensive retry/verification/classification logic that runs against
+   * a single `dispatch` surface. Forking that surface would duplicate every
+   * branch. Instead we keep one internal call site and funnel both legacy
+   * dispatch callbacks and new executor runs through it.
+   *
+   * Mapping decisions:
+   *   - `exitCode === 0` → summary + stdout as evidence, no blockers.
+   *   - `exitCode !== 0` → non-zero surfaces as a blocker so the existing
+   *     retry machinery kicks in; stdout/stderr land in evidence for the
+   *     classifier to read.
+   *   - Verification artifacts (proposedCommands) can't come from a raw
+   *     child process — we fall back to the ticket's own `verificationCommands`
+   *     as the proposal. That matches the dispatch-based default behavior
+   *     where the tester agent echoes the allowlist back.
+   */
+  private buildExecutorDispatch(executor: AgentExecutor): SchedulerDispatch {
+    return async (run, request) => {
+      const ticket = this.findTicketDefinition(run, request.phaseId);
+      if (!ticket) {
+        throw new Error(
+          `Executor dispatch could not locate ticket ${request.phaseId} on run ${run.id}.`
+        );
+      }
+
+      const handle = await executor.start(ticket, {
+        runId: run.id,
+        repoRoot: this.repoRoot
+      });
+      const result = await handle.wait();
+
+      const evidence: string[] = [];
+      if (result.stdout) evidence.push(`stdout: ${result.stdout.slice(0, 2000)}`);
+      if (result.stderr) evidence.push(`stderr: ${result.stderr.slice(0, 2000)}`);
+
+      const blockers = result.exitCode === 0
+        ? []
+        : [`Executor exited with code ${result.exitCode}`];
+
+      // Prefer the ticket's verificationCommands as the tester proposal —
+      // same default used when a tester agent echoes its allowlist. For
+      // non-tester work kinds this just gets ignored by verification.
+      const proposedCommands =
+        request.kind === "run_checks"
+          ? [...request.verificationCommands]
+          : [];
+
+      return {
+        summary: result.summary ?? `exit ${result.exitCode}`,
+        evidence,
+        proposedCommands,
+        blockers
+      };
+    };
   }
 
   async executeAll(run: HarnessRun): Promise<boolean> {

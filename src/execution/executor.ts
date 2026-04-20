@@ -4,7 +4,14 @@ import type { SandboxRef } from "./sandbox.js";
 export interface ExecutorStartOptions {
   runId: string;
   repoRoot: string;
-  sandbox: SandboxRef;
+  /**
+   * Pre-built sandbox to execute inside. Optional so executors that manage
+   * their own sandbox lifecycle (see `LocalChildProcessExecutor` with a
+   * `sandboxProvider`) can create one per `start()` call without the caller
+   * having to fabricate a ref. Executors that don't create sandboxes must
+   * throw a clear error if this field is missing.
+   */
+  sandbox?: SandboxRef;
   /** Optional per-invocation timeout, in ms. Executors enforce via kill(). */
   timeoutMs?: number;
   /** Forwarded to the process environment where applicable. */
