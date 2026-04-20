@@ -35,6 +35,19 @@ export function getRelayDir(): string {
   const legacyPath = join(home, LEGACY_DIR_NAME);
 
   if (existsSync(newPath)) {
+    // Divergent state: both paths exist as real dirs. Could happen if a user
+    // manually copied data across hosts or partially followed a migration
+    // guide. Surface the orphaned legacy dir once per process so data isn't
+    // silently lost — we still use the new path, but point at the old one.
+    if (existsSync(legacyPath)) {
+      const legacyStat = lstatSync(legacyPath);
+      if (legacyStat.isDirectory() && !legacyStat.isSymbolicLink()) {
+        console.warn(
+          `[relay] ignoring legacy state dir at ${legacyPath} — using ${newPath}. ` +
+            "Move or delete the legacy directory to silence this warning."
+        );
+      }
+    }
     resolved = newPath;
     return resolved;
   }

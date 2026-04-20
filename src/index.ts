@@ -1296,7 +1296,7 @@ async function inspectMcp(input: {
     });
     console.log(`Claude MCP config: ${claudeConfigPath}`);
     console.log(
-      `Codex MCP server: agent_harness -> ${cliEntrypoint} mcp-server --workspace ${input.cwd}`
+      `Codex MCP server: relay -> ${cliEntrypoint} mcp-server --workspace ${input.cwd}`
     );
     console.log("");
   }
