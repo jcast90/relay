@@ -1,21 +1,25 @@
 :root {
-  --bg: #1a1b26;
-  --bg-alt: #16161e;
-  --bg-panel: #1f2030;
-  --bg-hover: #2a2b3d;
-  --border: #2f3146;
-  --text: #c0caf5;
-  --text-dim: #7982a9;
-  --text-muted: #565f89;
-  --accent: #7aa2f7;
-  --accent-dim: #3d59a1;
-  --user: #9ece6a;
-  --assistant: #7aa2f7;
-  --system: #bb9af7;
-  --activity: #e0af68;
-  --error: #f7768e;
-  --ok: #9ece6a;
-  --warn: #e0af68;
+  /* Catppuccin Mocha — matches the CMUX ghostty theme.
+     Mantle for sidebars is darker than base so the center pane sits a touch
+     elevated; alt surfaces stay sunken (same aesthetic as the old Tokyo Night
+     theme, just different hues). */
+  --bg: #1e1e2e;            /* base */
+  --bg-alt: #181825;        /* mantle — sunken card / entry surface */
+  --bg-panel: #11111b;      /* crust — darker sidebars */
+  --bg-hover: #313244;      /* surface0 */
+  --border: #45475a;        /* surface1 */
+  --text: #cdd6f4;          /* text */
+  --text-dim: #bac2de;      /* subtext1 */
+  --text-muted: #7f849c;    /* overlay1 */
+  --accent: #89b4fa;        /* blue */
+  --accent-dim: #74c7ec;    /* sapphire — used for secondary accent hits */
+  --user: #a6e3a1;          /* green */
+  --assistant: #89b4fa;     /* blue */
+  --system: #cba6f7;        /* mauve */
+  --activity: #f9e2af;      /* yellow */
+  --error: #f38ba8;         /* red */
+  --ok: #a6e3a1;            /* green */
+  --warn: #fab387;          /* peach */
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   color-scheme: dark;
 }
