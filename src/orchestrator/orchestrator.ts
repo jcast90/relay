@@ -31,10 +31,10 @@ export class Orchestrator {
     private readonly artifactsDir?: string
   ) {}
 
-  async run(featureRequest: string): Promise<HarnessRun> {
+  async run(featureRequest: string, runId?: string): Promise<HarnessRun> {
     const now = new Date().toISOString();
     const run: HarnessRun = {
-      id: buildRunId(),
+      id: runId ?? buildRunId(),
       featureRequest,
       state: "DRAFT_PLAN",
       startedAt: now,

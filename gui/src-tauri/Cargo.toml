@@ -1,0 +1,19 @@
+[package]
+name = "agent-harness-gui"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "agent_harness_gui_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.0", features = [] }
+tauri-plugin-shell = "2.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+notify = "6"
+harness-data = { path = "../../crates/harness-data" }

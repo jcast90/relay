@@ -1,10 +1,11 @@
-mod data;
 mod ui;
+
+use harness_data as data;
 
 use crossterm::{
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-        MouseButton, MouseEvent, MouseEventKind,
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     },
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
@@ -20,7 +21,31 @@ use std::time::{Duration, Instant};
 
 use data::*;
 
-#[derive(Clone, Copy, PartialEq)]
+/// Resolve the agent-harness CLI binary path
+fn cli_bin() -> String {
+    std::env::var("AGENT_HARNESS_BIN").unwrap_or_else(|_| "agent-harness".to_string())
+}
+
+/// Call the agent-harness CLI with given args and parse JSON output.
+/// Returns None if the command fails or output isn't valid JSON.
+fn cli_json(args: &[&str]) -> Option<serde_json::Value> {
+    let output = Command::new(cli_bin())
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str(stdout.trim()).ok()
+}
+
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FocusPanel {
     Sidebar,
     Center,
@@ -95,15 +120,6 @@ pub struct ChatMessage {
 }
 
 impl ChatMessage {
-    fn to_persisted(&self) -> data::PersistedChatMessage {
-        data::PersistedChatMessage {
-            role: self.role.as_str().to_string(),
-            content: self.content.clone(),
-            timestamp: self.timestamp.clone(),
-            agent_alias: self.agent_alias.clone(),
-        }
-    }
-
     fn from_persisted(p: &data::PersistedChatMessage) -> Self {
         ChatMessage {
             role: ChatRole::from_str(&p.role),
@@ -133,6 +149,7 @@ pub struct CompletionItem {
 pub enum CompletionKind {
     Repo,
     Agent,
+    Channel,
 }
 
 // --- Per-repo worker ---
@@ -151,6 +168,7 @@ enum WorkerEvent {
 }
 
 /// A Claude worker session bound to a specific repo directory
+#[allow(dead_code)]
 struct RepoWorker {
     pub alias: String,
     pub repo_path: String,
@@ -168,6 +186,26 @@ pub struct LayoutRegions {
     pub input: Rect,
 }
 
+/// Text selection state scoped to a specific panel.
+/// Positions are stored as content-relative (line_index, col) so they
+/// track the text itself rather than screen pixels — scrolling moves
+/// the highlight with the content.
+#[derive(Clone, Debug, Default)]
+pub struct TextSelection {
+    /// Whether a selection is currently active (mouse is being dragged)
+    pub selecting: bool,
+    /// Start position as (content_line_index, col_within_inner)
+    pub start: (usize, usize),
+    /// End position as (content_line_index, col_within_inner)
+    pub end: (usize, usize),
+    /// Which panel this selection belongs to
+    pub panel: Option<FocusPanel>,
+    /// The full rendered text lines for the panel (captured during draw for copy)
+    pub rendered_lines: Vec<String>,
+    /// The panel's inner area (excluding borders) set during draw
+    pub inner_area: Rect,
+}
+
 /// State for the repo-selection popup during channel creation or editing
 #[derive(Clone)]
 pub struct RepoSelectState {
@@ -183,6 +221,12 @@ pub struct RepoSelectState {
     pub alias_input_cursor: usize,
     /// If Some, we're editing repos on an existing channel (not creating new)
     pub editing_channel_id: Option<String>,
+    /// Scroll offset for the repo list
+    pub scroll_offset: usize,
+    /// Search/filter string (type / to start filtering)
+    pub filter: String,
+    /// Whether the filter input is active
+    pub filtering: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -250,6 +294,9 @@ pub struct App {
     // Mouse capture toggle — when false, terminal handles native text selection
     pub mouse_captured: bool,
 
+    // Per-panel text selection
+    pub selection: TextSelection,
+
     // Activity stacks per agent alias (None key = general)
     pub activity_stacks: HashMap<Option<String>, ActivityStack>,
     /// Whether to show all activities or just the condensed top-3
@@ -305,6 +352,7 @@ impl App {
             chat_total_lines: 0,
             repo_select: None,
             mouse_captured: true,
+            selection: TextSelection::default(),
             activity_stacks: HashMap::new(),
             activity_expanded: false,
             completion_items: Vec::new(),
@@ -320,6 +368,28 @@ impl App {
     /// Get the current channel ID if one is selected
     fn current_channel_id(&self) -> Option<String> {
         self.channels.get(self.selected_channel).map(|ch| ch.channel_id.clone())
+    }
+
+    /// Archive (soft-delete) the currently selected channel via CLI
+    fn delete_current_channel(&mut self) {
+        let ch = match self.channels.get(self.selected_channel) {
+            Some(c) => c,
+            None => return,
+        };
+
+        cli_json(&["channel", "archive", &ch.channel_id, "--json"]);
+
+        // Drop workers for this channel
+        self.workers.clear();
+        self.active_worker_alias = None;
+
+        // Refresh — archived channel will be filtered out
+        self.refresh();
+        if self.selected_channel >= self.channels.len() && self.selected_channel > 0 {
+            self.selected_channel -= 1;
+        }
+        self.load_chat_for_channel();
+        self.respawn_workers_with_session();
     }
 
     /// Load chat history from the active session for the current channel.
@@ -359,18 +429,22 @@ impl App {
         self.chat_scroll = usize::MAX;
     }
 
-    /// Start a new chat session for the current channel
+    /// Start a new chat session for the current channel via CLI
     fn new_session(&mut self) {
         let ch_id = match self.current_channel_id() {
             Some(id) => id,
             None => return,
         };
 
-        let session = create_session(&ch_id, "New conversation");
-        self.chat_messages.clear();
-        self.activity_stacks.clear();
-        self.active_session = Some(session.clone());
-        self.session_list = load_sessions(&ch_id);
+        // Create session via CLI
+        if let Some(json) = cli_json(&["session", "create", "--channel", &ch_id, "--title", "New conversation"]) {
+            if let Ok(session) = serde_json::from_value::<data::ChatSession>(json) {
+                self.chat_messages.clear();
+                self.activity_stacks.clear();
+                self.active_session = Some(session);
+                self.session_list = load_sessions(&ch_id);
+            }
+        }
 
         // Reset workers to start fresh Claude sessions (no --resume)
         self.reset_workers_for_new_session();
@@ -392,7 +466,31 @@ impl App {
         self.ensure_workers_for_channel();
     }
 
-    /// Persist a chat message to the active session
+    /// Respawn all workers using --resume session IDs from the active session.
+    /// Called on startup after session data has been loaded.
+    fn respawn_workers_with_session(&mut self) {
+        self.workers.clear();
+        self.active_worker_alias = None;
+
+        let ch_id = self.current_channel_id();
+        let resume_sid = self.active_session.as_ref()
+            .and_then(|s| s.claude_session_ids.get("_general"))
+            .cloned();
+
+        let (general_tx, general_rx) = spawn_claude_worker_with_session(
+            self.auto_approve,
+            None,
+            resume_sid.as_deref(),
+            None,
+            ch_id.as_deref(),
+        );
+        self.general_worker_tx = general_tx;
+        self.general_worker_rx = general_rx;
+
+        self.ensure_workers_for_channel();
+    }
+
+    /// Persist a chat message to the active session via CLI
     fn persist_message(&mut self, msg: &ChatMessage) {
         let ch_id = match self.current_channel_id() {
             Some(id) => id,
@@ -406,13 +504,32 @@ impl App {
             } else {
                 "New conversation".to_string()
             };
-            let session = create_session(&ch_id, &title);
-            self.active_session = Some(session);
-            self.session_list = load_sessions(&ch_id);
+            if let Some(json) = cli_json(&["session", "create", "--channel", &ch_id, "--title", &title]) {
+                if let Ok(session) = serde_json::from_value::<data::ChatSession>(json) {
+                    self.active_session = Some(session);
+                    self.session_list = load_sessions(&ch_id);
+                }
+            }
         }
 
         if let Some(ref mut session) = self.active_session {
-            append_session_message(&ch_id, &session.session_id, &msg.to_persisted());
+            let role = msg.role.as_str();
+            let alias_args: Vec<String> = msg.agent_alias.as_ref()
+                .map(|a| vec!["--alias".to_string(), a.clone()])
+                .unwrap_or_default();
+
+            let mut args: Vec<String> = vec![
+                "session".into(), "append".into(),
+                "--channel".into(), ch_id.clone(),
+                "--session".into(), session.session_id.clone(),
+                "--role".into(), role.to_string(),
+            ];
+            args.extend(alias_args);
+            args.push(msg.content.clone());
+
+            let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            cli_json(&arg_refs);
+
             session.message_count += 1;
             session.updated_at = chrono::Utc::now().to_rfc3339();
 
@@ -420,23 +537,34 @@ impl App {
             if session.title == "New conversation" && msg.role == ChatRole::User {
                 session.title = truncate_str(&msg.content, 60);
             }
-
-            update_session(&ch_id, session);
         }
     }
 
-    /// Update the last persisted message (for completed streaming)
+    /// Update the last persisted message (for completed streaming) via CLI
     fn persist_update_last(&self, msg: &ChatMessage) {
         let ch_id = match self.current_channel_id() {
             Some(id) => id,
             None => return,
         };
         if let Some(ref session) = self.active_session {
-            update_last_session_message(&ch_id, &session.session_id, &msg.to_persisted());
+            let mut args: Vec<String> = vec![
+                "session".into(), "update-last".into(),
+                "--channel".into(), ch_id,
+                "--session".into(), session.session_id.clone(),
+                "--role".into(), msg.role.as_str().to_string(),
+            ];
+            if let Some(ref alias) = msg.agent_alias {
+                args.push("--alias".into());
+                args.push(alias.clone());
+            }
+            args.push(msg.content.clone());
+
+            let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            cli_json(&arg_refs);
         }
     }
 
-    /// Store a Claude CLI session ID for a worker alias in the active session
+    /// Store a Claude CLI session ID for a worker alias via CLI
     fn store_claude_session_id(&mut self, alias: &str, claude_sid: &str) {
         let ch_id = match self.current_channel_id() {
             Some(id) => id,
@@ -444,7 +572,13 @@ impl App {
         };
         if let Some(ref mut session) = self.active_session {
             session.claude_session_ids.insert(alias.to_string(), claude_sid.to_string());
-            update_session(&ch_id, session);
+            cli_json(&[
+                "session", "update-claude-sid",
+                "--channel", &ch_id,
+                "--session", &session.session_id,
+                "--alias", alias,
+                "--sid", claude_sid,
+            ]);
         }
     }
 
@@ -478,7 +612,9 @@ impl App {
         let mut seen_run_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
         for ws in load_workspaces() {
             for run in load_runs_for_workspace(&ws.workspace_id) {
-                if is_active_state(&run.state) && seen_run_ids.insert(run.run_id.clone()) {
+                // Skip runs that have completed_at set — they finished (or crashed) even if state wasn't updated
+                let truly_active = is_active_state(&run.state) && run.completed_at.is_none();
+                if truly_active && seen_run_ids.insert(run.run_id.clone()) {
                     self.active_runs.push(ActiveRun {
                         run_id: run.run_id,
                         state: run.state,
@@ -537,10 +673,8 @@ impl App {
             );
         }
 
-        // Default active worker to first repo if none set
-        if self.active_worker_alias.is_none() && !repos.is_empty() {
-            self.active_worker_alias = Some(repos[0].alias.clone());
-        }
+        // Don't auto-select a worker — user picks one explicitly with @alias.
+        // Messages without @alias go to the general worker.
     }
 
     /// Get the list of repo aliases for the current channel
@@ -837,6 +971,10 @@ impl App {
                     }
                     None => {}
                 }
+                // Extend selection downward if actively selecting while scrolling
+                if self.selection.selecting && self.selection.panel.is_some() {
+                    self.selection.end.0 = self.selection.end.0.saturating_add(3);
+                }
             }
             MouseEventKind::ScrollUp => {
                 let panel = self.panel_at(col, row);
@@ -867,6 +1005,10 @@ impl App {
                     }
                     None => {}
                 }
+                // Extend selection upward if actively selecting while scrolling
+                if self.selection.selecting && self.selection.panel.is_some() {
+                    self.selection.end.0 = self.selection.end.0.saturating_sub(3);
+                }
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 if self.layout.input.contains(Position::new(col, row)) {
@@ -877,10 +1019,161 @@ impl App {
 
                 if let Some(panel) = self.panel_at(col, row) {
                     self.focus = panel;
+
+                    // Start text selection — convert screen coords to content coords
+                    let content_pos = self.screen_to_content(panel, row, col);
+                    self.selection = TextSelection {
+                        selecting: true,
+                        start: content_pos,
+                        end: content_pos,
+                        panel: Some(panel),
+                        rendered_lines: Vec::new(),
+                        inner_area: Rect::default(),
+                    };
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if self.selection.selecting {
+                    if let Some(panel) = self.selection.panel {
+                        let area = match panel {
+                            FocusPanel::Sidebar => self.layout.sidebar,
+                            FocusPanel::Center => self.layout.center,
+                            FocusPanel::Right => self.layout.right,
+                        };
+                        let clamped_col = col.clamp(area.x, area.x + area.width.saturating_sub(1));
+                        let clamped_row = row.clamp(area.y, area.y + area.height.saturating_sub(1));
+                        self.selection.end = self.screen_to_content(panel, clamped_row, clamped_col);
+                    }
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                if self.selection.selecting {
+                    self.selection.selecting = false;
+                    if self.selection.start != self.selection.end {
+                        self.copy_selection_to_clipboard();
+                    }
                 }
             }
             _ => {}
         }
+    }
+
+    /// Convert screen (row, col) to content-relative (line_index, col_within_inner).
+    /// Accounts for scroll offset and panel border insets.
+    fn screen_to_content(&self, panel: FocusPanel, screen_row: u16, screen_col: u16) -> (usize, usize) {
+        let area = match panel {
+            FocusPanel::Sidebar => self.layout.sidebar,
+            FocusPanel::Center => self.layout.center,
+            FocusPanel::Right => self.layout.right,
+        };
+        // Inner area is area minus 1px border on each side
+        let inner_y = area.y + 1;
+        let inner_x = area.x + 1;
+
+        let scroll_offset = match panel {
+            FocusPanel::Center => self.center_scroll(),
+            FocusPanel::Right => self.runs_scroll,
+            FocusPanel::Sidebar => self.selected_channel, // sidebar doesn't really scroll the same way
+        };
+
+        let visible_row = screen_row.saturating_sub(inner_y) as usize;
+        let content_line = visible_row + scroll_offset;
+        let col = screen_col.saturating_sub(inner_x) as usize;
+        (content_line, col)
+    }
+
+    /// Extract selected text from rendered lines and copy to system clipboard
+    fn copy_selection_to_clipboard(&self) {
+        let sel = &self.selection;
+        if sel.rendered_lines.is_empty() {
+            return;
+        }
+
+        // Normalize so start <= end
+        let (start_line, start_col, end_line, end_col) = if sel.start.0 < sel.end.0
+            || (sel.start.0 == sel.end.0 && sel.start.1 <= sel.end.1)
+        {
+            (sel.start.0, sel.start.1, sel.end.0, sel.end.1)
+        } else {
+            (sel.end.0, sel.end.1, sel.start.0, sel.start.1)
+        };
+
+        let mut selected_text = String::new();
+
+        for (i, line) in sel.rendered_lines.iter().enumerate() {
+            if i < start_line || i > end_line {
+                continue;
+            }
+
+            let chars: Vec<char> = line.chars().collect();
+            let line_start = if i == start_line { start_col } else { 0 };
+            let line_end = if i == end_line {
+                (end_col + 1).min(chars.len())
+            } else {
+                chars.len()
+            };
+
+            if line_start < chars.len() {
+                let end = line_end.min(chars.len());
+                let slice: String = chars[line_start..end].iter().collect();
+                selected_text.push_str(slice.trim_end());
+            }
+
+            if i < end_line {
+                selected_text.push('\n');
+            }
+        }
+
+        if !selected_text.is_empty() {
+            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                let _ = clipboard.set_text(selected_text);
+            }
+        }
+    }
+
+    /// Handle a bracketed paste event — insert multi-line text into the input buffer.
+    /// Newlines are preserved so the user can paste code blocks and long text.
+    fn handle_paste(&mut self, text: String) {
+        // Auto-enter input mode if not already
+        if self.input_mode != InputMode::Input {
+            self.input_mode = InputMode::Input;
+            self.active_tab = Tab::Chat;
+        }
+
+        // Sanitize: strip control chars except newlines/tabs, cap total buffer size
+        let clean: String = text
+            .chars()
+            .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+            .collect();
+
+        // Cap total buffer at 32KB to prevent rendering issues with huge pastes
+        let max_buf: usize = 32_768;
+        let remaining_capacity = max_buf.saturating_sub(self.input_buffer.len());
+        let to_insert: &str = if clean.len() > remaining_capacity {
+            // Take up to remaining capacity at a char boundary
+            match clean.char_indices().take_while(|(i, _)| *i < remaining_capacity).last() {
+                Some((i, c)) => &clean[..i + c.len_utf8()],
+                None => "",
+            }
+        } else {
+            &clean
+        };
+
+        if !to_insert.is_empty() {
+            // Ensure input_cursor is at a valid char boundary
+            let cursor = self.input_cursor.min(self.input_buffer.len());
+            // Find nearest char boundary at or before cursor
+            let safe_cursor = self.input_buffer[..cursor]
+                .char_indices()
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(0);
+
+            self.input_buffer.insert_str(safe_cursor, to_insert);
+            self.input_cursor = safe_cursor + to_insert.len();
+        }
+
+        self.update_completion();
     }
 
     fn panel_at(&self, col: u16, row: u16) -> Option<FocusPanel> {
@@ -980,6 +1273,7 @@ impl App {
                     if self.input_cursor > 0 {
                         let before = &self.input_buffer[..self.input_cursor];
                         let trimmed = before.trim_end();
+                        // rfind(' ') returns a byte index — ' ' is 1 byte so the +1 is safe
                         let new_end = trimmed.rfind(' ').map(|i| i + 1).unwrap_or(0);
                         self.input_buffer.drain(new_end..self.input_cursor);
                         self.input_cursor = new_end;
@@ -988,41 +1282,67 @@ impl App {
                 // Ctrl-B: back one character
                 KeyCode::Char('b') if ctrl => {
                     if self.input_cursor > 0 {
-                        self.input_cursor -= 1;
+                        self.input_cursor = self.input_buffer[..self.input_cursor]
+                            .char_indices()
+                            .last()
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
                     }
                 }
                 // Ctrl-F: forward one character
                 KeyCode::Char('f') if ctrl => {
                     if self.input_cursor < self.input_buffer.len() {
-                        self.input_cursor += 1;
+                        self.input_cursor = self.input_buffer[self.input_cursor..]
+                            .char_indices()
+                            .nth(1)
+                            .map(|(i, _)| self.input_cursor + i)
+                            .unwrap_or(self.input_buffer.len());
                     }
                 }
                 KeyCode::Backspace => {
                     if self.input_cursor > 0 {
-                        self.input_buffer.remove(self.input_cursor - 1);
-                        self.input_cursor -= 1;
+                        let prev = self.input_buffer[..self.input_cursor]
+                            .char_indices()
+                            .last()
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
+                        self.input_buffer.drain(prev..self.input_cursor);
+                        self.input_cursor = prev;
                     }
                 }
                 KeyCode::Delete => {
                     if self.input_cursor < self.input_buffer.len() {
-                        self.input_buffer.remove(self.input_cursor);
+                        let next = self.input_buffer[self.input_cursor..]
+                            .char_indices()
+                            .nth(1)
+                            .map(|(i, _)| self.input_cursor + i)
+                            .unwrap_or(self.input_buffer.len());
+                        self.input_buffer.drain(self.input_cursor..next);
                     }
                 }
                 KeyCode::Left => {
                     if self.input_cursor > 0 {
-                        self.input_cursor -= 1;
+                        self.input_cursor = self.input_buffer[..self.input_cursor]
+                            .char_indices()
+                            .last()
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
                     }
                 }
                 KeyCode::Right => {
                     if self.input_cursor < self.input_buffer.len() {
-                        self.input_cursor += 1;
+                        self.input_cursor = self.input_buffer[self.input_cursor..]
+                            .char_indices()
+                            .nth(1)
+                            .map(|(i, _)| self.input_cursor + i)
+                            .unwrap_or(self.input_buffer.len());
                     }
                 }
                 KeyCode::Home => self.input_cursor = 0,
                 KeyCode::End => self.input_cursor = self.input_buffer.len(),
                 KeyCode::Char(c) => {
                     self.input_buffer.insert(self.input_cursor, c);
-                    self.input_cursor += 1;
+                    self.input_cursor += c.len_utf8();
                 }
                 _ => {}
             }
@@ -1057,6 +1377,9 @@ impl App {
                             alias_cursor: 0,
                             alias_input_cursor: 0,
                             editing_channel_id: None,
+                            scroll_offset: 0,
+                            filter: String::new(),
+                            filtering: false,
                         });
                         self.input_mode = InputMode::RepoSelect;
                         self.input_buffer.clear();
@@ -1181,6 +1504,13 @@ impl App {
                 self.open_session_picker();
             }
 
+            // Delete channel
+            KeyCode::Char('d') => {
+                if self.focus == FocusPanel::Sidebar {
+                    self.delete_current_channel();
+                }
+            }
+
             // Toggle mouse capture (m = release mouse for text selection)
             KeyCode::Char('m') => {
                 self.mouse_captured = !self.mouse_captured;
@@ -1207,25 +1537,87 @@ impl App {
 
         match state.step {
             RepoSelectStep::Picking => {
+                // If filtering is active, handle text input
+                if state.filtering {
+                    match code {
+                        KeyCode::Esc => {
+                            state.filtering = false;
+                            state.filter.clear();
+                            state.cursor = 0;
+                            state.scroll_offset = 0;
+                        }
+                        KeyCode::Enter => {
+                            state.filtering = false;
+                            // Keep filter applied, cursor stays where it is
+                        }
+                        KeyCode::Backspace => {
+                            state.filter.pop();
+                            state.cursor = 0;
+                            state.scroll_offset = 0;
+                        }
+                        KeyCode::Char(c) => {
+                            state.filter.push(c);
+                            state.cursor = 0;
+                            state.scroll_offset = 0;
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
+
+                // Get filtered indices for navigation
+                let filter_lower = state.filter.to_lowercase();
+                let filtered_indices: Vec<usize> = state.available_repos.iter().enumerate()
+                    .filter(|(_, ws)| {
+                        filter_lower.is_empty() || {
+                            let name = ws.repo_path.split('/').last().unwrap_or(&ws.workspace_id);
+                            name.to_lowercase().contains(&filter_lower)
+                                || ws.repo_path.to_lowercase().contains(&filter_lower)
+                        }
+                    })
+                    .map(|(i, _)| i)
+                    .collect();
+                let filtered_count = filtered_indices.len();
+
                 match code {
                     KeyCode::Esc => {
-                        self.repo_select = None;
-                        self.input_mode = InputMode::Normal;
+                        if !state.filter.is_empty() {
+                            // First Esc clears filter
+                            state.filter.clear();
+                            state.cursor = 0;
+                            state.scroll_offset = 0;
+                        } else {
+                            self.repo_select = None;
+                            self.input_mode = InputMode::Normal;
+                        }
+                    }
+                    KeyCode::Char('/') => {
+                        state.filtering = true;
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
-                        if state.cursor < state.available_repos.len().saturating_sub(1) {
+                        if state.cursor < filtered_count.saturating_sub(1) {
                             state.cursor += 1;
+                            // Keep cursor in viewport (assume ~14 visible lines)
+                            let viewport = 14usize;
+                            if state.cursor >= state.scroll_offset + viewport {
+                                state.scroll_offset = state.cursor.saturating_sub(viewport.saturating_sub(1));
+                            }
                         }
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
                         if state.cursor > 0 {
                             state.cursor -= 1;
+                            if state.cursor < state.scroll_offset {
+                                state.scroll_offset = state.cursor;
+                            }
                         }
                     }
                     KeyCode::Char(' ') => {
-                        // Toggle selection
-                        if state.cursor < state.selected.len() {
-                            state.selected[state.cursor] = !state.selected[state.cursor];
+                        // Toggle selection on the real repo index
+                        if let Some(&real_idx) = filtered_indices.get(state.cursor) {
+                            if real_idx < state.selected.len() {
+                                state.selected[real_idx] = !state.selected[real_idx];
+                            }
                         }
                     }
                     KeyCode::Enter => {
@@ -1317,8 +1709,7 @@ impl App {
             None => return,
         };
 
-        // Build repo assignments from selection
-        let mut repo_assignments: Vec<RepoAssignment> = Vec::new();
+        // Build repo assignments string: alias:workspaceId:repoPath,...
         let selected_repos: Vec<&WorkspaceEntry> = state
             .available_repos
             .iter()
@@ -1327,127 +1718,48 @@ impl App {
             .map(|(ws, _)| ws)
             .collect();
 
-        for (i, ws) in selected_repos.iter().enumerate() {
-            let alias = state
-                .aliases
-                .get(i)
-                .cloned()
-                .unwrap_or_else(|| {
-                    ws.repo_path
-                        .split('/')
-                        .last()
-                        .unwrap_or(&ws.workspace_id)
-                        .to_string()
-                });
-            repo_assignments.push(RepoAssignment {
-                alias,
-                workspace_id: ws.workspace_id.clone(),
-                repo_path: ws.repo_path.clone(),
-            });
-        }
-
-        let assignments_json: Vec<serde_json::Value> = repo_assignments
+        let repos_arg: String = selected_repos
             .iter()
-            .map(|r| {
-                serde_json::json!({
-                    "alias": r.alias,
-                    "workspaceId": r.workspace_id,
-                    "repoPath": r.repo_path,
-                })
+            .enumerate()
+            .map(|(i, ws)| {
+                let alias = state
+                    .aliases
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        ws.repo_path.split('/').last().unwrap_or(&ws.workspace_id).to_string()
+                    });
+                format!("{}:{}:{}", alias, ws.workspace_id, ws.repo_path)
             })
-            .collect();
-
-        let channels_dir = data::harness_root().join("channels");
-        let _ = std::fs::create_dir_all(&channels_dir);
+            .collect::<Vec<_>>()
+            .join(",");
 
         if let Some(existing_id) = state.editing_channel_id {
-            // --- Editing repos on an existing channel ---
-            let channel_file = channels_dir.join(format!("{}.json", existing_id));
-            if let Ok(content) = std::fs::read_to_string(&channel_file) {
-                if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&content) {
-                    json["repoAssignments"] = serde_json::Value::Array(
-                        assignments_json.into_iter().map(|v| v).collect(),
-                    );
-                    if let Ok(updated) = serde_json::to_string_pretty(&json) {
-                        let _ = std::fs::write(&channel_file, updated);
-                    }
-                }
+            // --- Editing repos on an existing channel via CLI ---
+            let mut args = vec!["channel", "update", &existing_id, "--json"];
+            if !repos_arg.is_empty() {
+                args.push("--repos");
+                args.push(&repos_arg);
             }
-
-            // Write a feed entry about the change
-            let repo_desc = repo_desc_string(&repo_assignments);
-            let channel_sub_dir = channels_dir.join(&existing_id);
-            let _ = std::fs::create_dir_all(&channel_sub_dir);
-            let entry = serde_json::json!({
-                "entryId": format!("tui-{}", chrono::Utc::now().timestamp_millis()),
-                "channelId": existing_id,
-                "type": "status_update",
-                "fromAgentId": "tui-user",
-                "fromDisplayName": "You",
-                "content": format!("Repos updated: {}", repo_desc),
-                "metadata": {},
-                "createdAt": chrono::Utc::now().to_rfc3339(),
-            });
-            let feed_path = channel_sub_dir.join("feed.jsonl");
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&feed_path)
-            {
-                use std::io::Write;
-                let _ = writeln!(file, "{}", entry);
-            }
+            cli_json(&args);
         } else {
-            // --- Creating a new channel ---
-            let name = state.channel_name;
-            let channel_id = format!("ch-{}", chrono::Utc::now().timestamp_millis());
-
-            let channel_json = serde_json::json!({
-                "channelId": channel_id,
-                "name": name,
-                "description": name,
-                "status": "active",
-                "members": [],
-                "pinnedRefs": [],
-                "repoAssignments": assignments_json,
-            });
-
-            let channel_file = channels_dir.join(format!("{}.json", channel_id));
-            if let Ok(content) = serde_json::to_string_pretty(&channel_json) {
-                let _ = std::fs::write(&channel_file, content);
+            // --- Creating a new channel via CLI ---
+            let name = &state.channel_name;
+            let mut args = vec!["channel", "create", name, name, "--json"];
+            if !repos_arg.is_empty() {
+                args.push("--repos");
+                args.push(&repos_arg);
             }
-
-            let channel_sub_dir = channels_dir.join(&channel_id);
-            let _ = std::fs::create_dir_all(&channel_sub_dir);
-
-            let repo_desc = repo_desc_string(&repo_assignments);
-            let entry = serde_json::json!({
-                "entryId": format!("tui-{}", chrono::Utc::now().timestamp_millis()),
-                "channelId": channel_id,
-                "type": "status_update",
-                "fromAgentId": "tui-user",
-                "fromDisplayName": "You",
-                "content": format!("Channel \"{}\" created with repos: {}", name, repo_desc),
-                "metadata": {},
-                "createdAt": chrono::Utc::now().to_rfc3339(),
-            });
-
-            let feed_path = channel_sub_dir.join("feed.jsonl");
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&feed_path)
-            {
-                use std::io::Write;
-                let _ = writeln!(file, "{}", entry);
-            }
+            let result = cli_json(&args);
 
             // Select the newly created channel after refresh
             self.input_mode = InputMode::Normal;
             self.refresh();
-            if let Some(idx) = self.channels.iter().position(|c| c.channel_id == channel_id) {
-                self.selected_channel = idx;
-                self.refresh();
+            if let Some(channel_id) = result.and_then(|v| v.get("channelId").and_then(|id| id.as_str()).map(|s| s.to_string())) {
+                if let Some(idx) = self.channels.iter().position(|c| c.channel_id == channel_id) {
+                    self.selected_channel = idx;
+                    self.refresh();
+                }
             }
             self.ensure_workers_for_channel();
             self.load_chat_for_channel();
@@ -1601,6 +1913,9 @@ impl App {
             alias_cursor: 0,
             alias_input_cursor: 0,
             editing_channel_id: Some(channel_id),
+            scroll_offset: 0,
+            filter: String::new(),
+            filtering: false,
         });
         self.input_mode = InputMode::RepoSelect;
     }
@@ -1665,7 +1980,7 @@ impl App {
                 self.active_tab = Tab::Chat;
             }
             KeyCode::Char('d') => {
-                // Delete selected session (but not the active one)
+                // Delete selected session (but not the active one) via CLI
                 if let Some(session) = self.session_list.get(self.session_cursor) {
                     let is_active = self.active_session.as_ref()
                         .map(|a| a.session_id == session.session_id)
@@ -1673,17 +1988,8 @@ impl App {
                     if !is_active {
                         if let Some(ch_id) = self.current_channel_id() {
                             let sid = session.session_id.clone();
-                            // Remove from index
+                            cli_json(&["session", "delete", "--channel", &ch_id, "--session", &sid]);
                             self.session_list.retain(|s| s.session_id != sid);
-                            save_sessions(&ch_id, &self.session_list);
-                            // Delete the chat file
-                            let chat_path = data::harness_root()
-                                .join("channels")
-                                .join(&ch_id)
-                                .join("sessions")
-                                .join(format!("{}.jsonl", sid));
-                            let _ = std::fs::remove_file(chat_path);
-                            // Clamp cursor
                             if self.session_cursor >= self.session_list.len() && self.session_cursor > 0 {
                                 self.session_cursor -= 1;
                             }
@@ -1707,9 +2013,12 @@ impl App {
         // Parse @alias prefix to route to a specific repo agent
         let (target_alias, actual_msg) = parse_agent_prefix(&msg, &self.current_repo_aliases());
 
+        // Resolve #channel references — inject referenced channel context
+        let msg_with_context = self.resolve_channel_refs(&actual_msg);
+
         let resolved_alias = target_alias.or_else(|| self.active_worker_alias.clone());
 
-        // Add user message to chat and persist
+        // Add user message to chat (show original, not the expanded version)
         let user_msg = ChatMessage {
             role: ChatRole::User,
             content: actual_msg.clone(),
@@ -1731,17 +2040,40 @@ impl App {
         self.active_tab = Tab::Chat;
         self.chat_scroll = usize::MAX;
 
-        // Route to the correct worker
+        // Route to the correct worker (send the context-expanded version)
         if let Some(ref alias) = resolved_alias {
             if let Some(worker) = self.workers.get_mut(alias) {
                 worker.streaming = true;
-                let _ = worker.tx.send(WorkerCommand::SendMessage(actual_msg));
+                let _ = worker.tx.send(WorkerCommand::SendMessage(msg_with_context));
                 return;
             }
         }
 
         // Fallback to general worker
-        let _ = self.general_worker_tx.send(WorkerCommand::SendMessage(actual_msg));
+        let _ = self.general_worker_tx.send(WorkerCommand::SendMessage(msg_with_context));
+    }
+
+    /// Resolve #channel-name references in a message.
+    /// For each match, appends a context block with that channel's recent chat history.
+    /// Resolve #channel references via CLI — returns message with context appended
+    fn resolve_channel_refs(&self, msg: &str) -> String {
+        // Quick check: does the message even contain a # reference?
+        if !msg.contains('#') {
+            return msg.to_string();
+        }
+
+        let ch_id = match self.current_channel_id() {
+            Some(id) => id,
+            None => return msg.to_string(),
+        };
+
+        if let Some(json) = cli_json(&["chat", "resolve-refs", "--channel", &ch_id, msg]) {
+            if let Some(resolved) = json.get("resolved").and_then(|v| v.as_str()) {
+                return resolved.to_string();
+            }
+        }
+
+        msg.to_string()
     }
 
     /// Build completion items for the @ popup
@@ -1775,19 +2107,51 @@ impl App {
         items
     }
 
+    fn build_channel_completion_items(&self, filter: &str) -> Vec<CompletionItem> {
+        let mut items = Vec::new();
+        let filter_lower = filter.to_lowercase();
+
+        for ch in &self.channels {
+            if filter.is_empty() || ch.name.to_lowercase().contains(&filter_lower) {
+                items.push(CompletionItem {
+                    label: format!("#{}", ch.name),
+                    insert: format!("#{} ", ch.name),
+                    kind: CompletionKind::Channel,
+                });
+            }
+        }
+
+        items
+    }
+
     /// Update the completion popup based on current input
     fn update_completion(&mut self) {
         let buf = &self.input_buffer;
-        let cursor = self.input_cursor;
+        let cursor = self.input_cursor.min(buf.len());
 
-        // Find the @ character before cursor
         let before_cursor = &buf[..cursor];
+
+        // Check for @ mentions (repos, agents)
         if let Some(at_pos) = before_cursor.rfind('@') {
-            // Make sure there's no space between @ and cursor (still typing the mention)
             let fragment = &before_cursor[at_pos + 1..];
             if !fragment.contains(' ') {
                 self.completion_anchor = at_pos;
                 let items = self.build_completion_items(fragment);
+                if !items.is_empty() {
+                    self.completion_items = items;
+                    self.completion_visible = true;
+                    self.completion_cursor = 0;
+                    return;
+                }
+            }
+        }
+
+        // Check for # channel references
+        if let Some(hash_pos) = before_cursor.rfind('#') {
+            let fragment = &before_cursor[hash_pos + 1..];
+            if !fragment.contains(' ') {
+                self.completion_anchor = hash_pos;
+                let items = self.build_channel_completion_items(fragment);
                 if !items.is_empty() {
                     self.completion_items = items;
                     self.completion_visible = true;
@@ -1843,23 +2207,6 @@ fn parse_agent_prefix(msg: &str, known_aliases: &[String]) -> (Option<String>, S
     }
 }
 
-fn repo_desc_string(repo_assignments: &[RepoAssignment]) -> String {
-    if repo_assignments.is_empty() {
-        "none".to_string()
-    } else {
-        repo_assignments
-            .iter()
-            .map(|r| {
-                format!(
-                    "@{} ({})",
-                    r.alias,
-                    r.repo_path.split('/').last().unwrap_or(&r.repo_path)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-}
 
 fn now_time() -> String {
     chrono::Utc::now().format("%H:%M:%S").to_string()
@@ -1867,10 +2214,13 @@ fn now_time() -> String {
 
 fn truncate_str(s: &str, max: usize) -> String {
     let trimmed = s.trim();
-    if trimmed.len() <= max {
+    let char_count = trimmed.chars().count();
+    if char_count <= max {
         trimmed.to_string()
     } else {
-        format!("{}...", &trimmed[..max.saturating_sub(3)])
+        let take = max.saturating_sub(3);
+        let end: String = trimmed.chars().take(take).collect();
+        format!("{}...", end)
     }
 }
 
@@ -1883,6 +2233,20 @@ fn spawn_claude_worker(
     channel_id: Option<&str>,
 ) -> (mpsc::Sender<WorkerCommand>, mpsc::Receiver<WorkerEvent>) {
     spawn_claude_worker_with_session(auto_approve, cwd, None, None, channel_id)
+}
+
+/// Find the MCP config file via CLI
+fn find_mcp_config(cwd: Option<&str>) -> Option<String> {
+    let mut args = vec!["chat", "mcp-config"];
+    let repo_arg;
+    if let Some(dir) = cwd {
+        repo_arg = format!("{}", dir);
+        args.push("--repo");
+        args.push(&repo_arg);
+    }
+
+    cli_json(&args)
+        .and_then(|json| json.get("path").and_then(|v| v.as_str()).map(|s| s.to_string()))
 }
 
 fn spawn_claude_worker_with_session(
@@ -1899,7 +2263,7 @@ fn spawn_claude_worker_with_session(
     let initial_session_id = resume_session_id.map(|s| s.to_string());
     let repo_alias_owned = repo_alias.map(|s| s.to_string());
     let channel_id_owned = channel_id.map(|s| s.to_string());
-    let harness_dir = harness_root().to_string_lossy().to_string();
+    let mcp_config = find_mcp_config(cwd);
 
     thread::spawn(move || {
         let mut session_id: Option<String> = initial_session_id;
@@ -1917,81 +2281,42 @@ fn spawn_claude_worker_with_session(
                 args.push("--dangerously-skip-permissions".to_string());
             }
 
-            // Build system prompt with repo context and artifact paths
-            let mut system_parts: Vec<String> = Vec::new();
+            // Attach MCP config so Claude has access to harness tools
+            if let Some(ref mcp_path) = mcp_config {
+                args.push("--mcp-config".to_string());
+                args.push(mcp_path.clone());
+            }
 
-            if let (Some(ref alias), Some(ref dir)) = (&repo_alias_owned, &cwd_owned) {
+            // Build system prompt via CLI
+            if let Some(ref ch_id) = channel_id_owned {
+                let mut prompt_args: Vec<String> = vec![
+                    "chat".into(), "system-prompt".into(),
+                    "--channel".into(), ch_id.clone(),
+                ];
+                if let Some(ref dir) = cwd_owned {
+                    prompt_args.push("--repo".into());
+                    prompt_args.push(dir.clone());
+                }
+                if let Some(ref alias) = repo_alias_owned {
+                    prompt_args.push("--alias".into());
+                    prompt_args.push(alias.clone());
+                }
+                let prompt_arg_refs: Vec<&str> = prompt_args.iter().map(|s| s.as_str()).collect();
+                if let Some(json) = cli_json(&prompt_arg_refs) {
+                    if let Some(prompt) = json.get("prompt").and_then(|v| v.as_str()) {
+                        args.push("--append-system-prompt".to_string());
+                        args.push(prompt.to_string());
+                    }
+                }
+            } else if let (Some(ref alias), Some(ref dir)) = (&repo_alias_owned, &cwd_owned) {
+                // No channel — still add basic repo context
                 let repo_name = dir.rsplit('/').next().unwrap_or(dir);
-                system_parts.push(format!(
+                args.push("--append-system-prompt".to_string());
+                args.push(format!(
                     "You are working in the '{}' repository (alias: @{}) at: {}. \
-                     Your working directory is already set to this repo — do NOT search for it elsewhere. \
-                     All file operations should be relative to this directory.",
+                     Your working directory is already set to this repo.",
                     repo_name, alias, dir
                 ));
-            }
-
-            if let Some(ref ch_id) = channel_id_owned {
-                let channel_dir = format!("{}/channels/{}", harness_dir, ch_id);
-                let tickets_path = format!("{}/tickets.json", channel_dir);
-                let decisions_dir = format!("{}/decisions", channel_dir);
-                system_parts.push(format!(
-                    "\n\n## Shared Ticket Board & Decisions\n\
-                     \n\
-                     The ticket board at `{tickets}` is the shared coordination surface for all agents in this channel. \
-                     Other agents read this file to know what work is available, what's blocked, and when dependencies are resolved.\n\
-                     \n\
-                     ### Ticket lifecycle\n\
-                     When the user asks you to create tickets, a plan, or task breakdown, write them to:\n\
-                     `{tickets}`\n\
-                     \n\
-                     Format:\n\
-                     ```json\n\
-                     {{\"tickets\": [\n\
-                       {{\n\
-                         \"ticketId\": \"T-1\",\n\
-                         \"title\": \"Short description of the work\",\n\
-                         \"specialty\": \"frontend|backend|fullstack|devops|design\",\n\
-                         \"status\": \"pending\",\n\
-                         \"dependsOn\": [\"T-0\"],\n\
-                         \"assignedAgentId\": null,\n\
-                         \"assignedAgentName\": null,\n\
-                         \"verification\": \"how to verify this ticket is done (test commands, checks)\",\n\
-                         \"attempt\": 0\n\
-                       }}\n\
-                     ]}}\n\
-                     ```\n\
-                     \n\
-                     Status values: `pending` (no unmet deps, ready to pick up) | `blocked` (has unmet dependsOn) | `executing` (agent working on it) | `completed` | `failed`\n\
-                     \n\
-                     Rules:\n\
-                     - Set `dependsOn` accurately — list ticket IDs that MUST be completed before this ticket can start.\n\
-                     - Tickets whose `dependsOn` are all `completed` should be `pending` (available for pickup).\n\
-                     - Tickets with unresolved deps should be `blocked`.\n\
-                     - When you START working on a ticket, read the file, set that ticket's status to `executing`, and write it back.\n\
-                     - When you FINISH a ticket, set status to `completed` (or `failed`), increment `attempt`, and write it back. \
-                       Then check if any `blocked` tickets now have all deps met — flip those to `pending`.\n\
-                     - Always read-modify-write the WHOLE file to avoid clobbering other agents' updates.\n\
-                     \n\
-                     ### Decisions\n\
-                     When making architectural or design decisions during planning, write each as a separate JSON file in:\n\
-                     `{decisions}/`\n\
-                     \n\
-                     Format:\n\
-                     ```json\n\
-                     {{\"decisionId\": \"D-<timestamp>\", \"title\": \"...\", \"description\": \"...\", \
-                     \"rationale\": \"why this approach\", \"alternatives\": [\"alt1\", \"alt2\"], \
-                     \"decidedByName\": \"Claude\", \"createdAt\": \"<ISO 8601>\"}}\n\
-                     ```\n\
-                     \n\
-                     Create directories if they don't exist. These paths are read by the TUI Board and Decisions tabs, \
-                     and by other agents for coordination.",
-                    tickets = tickets_path, decisions = decisions_dir
-                ));
-            }
-
-            if !system_parts.is_empty() {
-                args.push("--append-system-prompt".to_string());
-                args.push(system_parts.join("\n"));
             }
 
             if let Some(ref id) = session_id {
@@ -2132,12 +2457,11 @@ fn describe_tool_use(name: &str, input: &serde_json::Value) -> String {
         }
         "Bash" => {
             let cmd = get_str("command");
-            let short = if cmd.len() > 50 { &cmd[..50] } else { cmd };
-            format!("$ {}", short)
+            format!("$ {}", truncate_str(cmd, 50))
         }
         "Grep" => {
             let pattern = get_str("pattern");
-            format!("Searching for '{}'", if pattern.len() > 40 { &pattern[..40] } else { pattern })
+            format!("Searching for '{}'", truncate_str(pattern, 40))
         }
         "Glob" => {
             let pattern = get_str("pattern");
@@ -2153,11 +2477,11 @@ fn describe_tool_use(name: &str, input: &serde_json::Value) -> String {
         }
         "WebSearch" => {
             let query = get_str("query");
-            format!("Web search: {}", if query.len() > 40 { &query[..40] } else { query })
+            format!("Web search: {}", truncate_str(query, 40))
         }
         "WebFetch" => {
             let url = get_str("url");
-            format!("Fetching {}", if url.len() > 40 { &url[..40] } else { url })
+            format!("Fetching {}", truncate_str(url, 40))
         }
         "LSP" => {
             let method = get_str("method");
@@ -2186,15 +2510,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
     stdout().execute(EnableMouseCapture)?;
+    stdout().execute(EnableBracketedPaste)?;
 
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
 
+    // Spawn a temporary general worker — will be replaced after session loads
     let (general_tx, general_rx) = spawn_claude_worker(auto_approve, None, None);
     let mut app = App::new(general_tx, general_rx, auto_approve);
     app.refresh();
-    app.ensure_workers_for_channel();
+
+    // Load session data FIRST so we know which Claude session IDs to resume
     app.load_chat_for_channel();
+
+    // Now respawn workers with the correct --resume session IDs from the loaded session
+    app.respawn_workers_with_session();
 
     let tick_rate = Duration::from_secs(3);
     let mut last_tick = Instant::now();
@@ -2220,6 +2550,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Event::Mouse(mouse) => {
                     app.handle_mouse(mouse);
                 }
+                Event::Paste(text) => {
+                    app.handle_paste(text);
+                }
                 _ => {}
             }
         }
@@ -2237,6 +2570,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     disable_raw_mode()?;
+    stdout().execute(DisableBracketedPaste)?;
     stdout().execute(DisableMouseCapture)?;
     stdout().execute(LeaveAlternateScreen)?;
     Ok(())

@@ -41,6 +41,12 @@ export interface ChannelRef {
   addedAt: string;
 }
 
+export interface RepoAssignment {
+  alias: string;
+  workspaceId: string;
+  repoPath: string;
+}
+
 export interface Channel {
   channelId: string;
   name: string;
@@ -49,6 +55,7 @@ export interface Channel {
   workspaceIds: string[];
   members: ChannelMember[];
   pinnedRefs: ChannelRef[];
+  repoAssignments?: RepoAssignment[];
   createdAt: string;
   updatedAt: string;
 }

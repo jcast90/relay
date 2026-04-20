@@ -99,6 +99,17 @@ All data lives at `~/.agent-harness/`:
 - **Decisions** — recorded with rationale and alternatives considered, queryable per channel.
 - **Crosslink** — file-based session discovery and messaging between concurrent agent sessions.
 
+## Desktop GUI
+
+A Tauri desktop app under `gui/` mirrors the TUI's channel/board/decisions layout.
+
+```bash
+pnpm gui:dev      # launch dev window (Vite + Tauri)
+pnpm gui:build    # produce a release .app/.dmg
+```
+
+The Rust backend in `gui/src-tauri/` shares `crates/harness-data` with the TUI, so both read the same `~/.agent-harness/` files.
+
 ## Flags
 
 - `HARNESS_LIVE=1` — use real Claude/Codex adapters instead of scripted simulation

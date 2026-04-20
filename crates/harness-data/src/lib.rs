@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 // --- Workspace Registry ---
@@ -11,7 +10,7 @@ pub struct WorkspaceRegistry {
     pub workspaces: Vec<WorkspaceEntry>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceEntry {
     pub workspace_id: String,
@@ -25,8 +24,9 @@ pub struct RunsIndex {
     pub runs: Option<Vec<RunIndexEntry>>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct RunIndexEntry {
     pub run_id: String,
     pub feature_request: String,
@@ -44,7 +44,7 @@ pub struct TicketLedger {
     pub tickets: Option<Vec<TicketLedgerEntry>>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TicketLedgerEntry {
     pub ticket_id: String,
@@ -69,7 +69,7 @@ pub struct RepoAssignment {
     pub repo_path: String,    // absolute path to repo
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Channel {
     pub channel_id: String,
@@ -82,7 +82,7 @@ pub struct Channel {
     pub repo_assignments: Vec<RepoAssignment>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelMember {
     pub agent_id: String,
@@ -92,7 +92,7 @@ pub struct ChannelMember {
     pub status: String,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelRef {
     #[serde(rename = "type")]
@@ -103,7 +103,7 @@ pub struct ChannelRef {
 
 // --- Channel Feed Entry ---
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelEntry {
     pub entry_id: String,
@@ -119,7 +119,7 @@ pub struct ChannelEntry {
 
 // --- Agent Names ---
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentNameEntry {
     pub agent_id: String,
@@ -130,7 +130,7 @@ pub struct AgentNameEntry {
 
 // --- Decision ---
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Decision {
     pub decision_id: String,
@@ -144,7 +144,7 @@ pub struct Decision {
 
 // --- Channel Run Link ---
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelRunLink {
     pub run_id: String,
@@ -472,47 +472,6 @@ pub fn load_session_chat(channel_id: &str, session_id: &str, limit: usize) -> Ve
         .collect();
 
     entries.into_iter().rev().take(limit).collect::<Vec<_>>().into_iter().rev().collect()
-}
-
-/// Append a single chat message to a session's chat file
-pub fn append_session_message(channel_id: &str, session_id: &str, msg: &PersistedChatMessage) {
-    let path = session_chat_path(channel_id, session_id);
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if let Ok(mut file) = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    {
-        if let Ok(json) = serde_json::to_string(msg) {
-            let _ = writeln!(file, "{}", json);
-        }
-    }
-}
-
-/// Update the last message in a session's chat file (for streaming completions)
-pub fn update_last_session_message(channel_id: &str, session_id: &str, msg: &PersistedChatMessage) {
-    let path = session_chat_path(channel_id, session_id);
-    let content = match fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-
-    let lines: Vec<&str> = content.lines().collect();
-    if lines.is_empty() {
-        return;
-    }
-
-    if let Ok(json) = serde_json::to_string(msg) {
-        let mut output: Vec<String> = lines[..lines.len() - 1].iter().map(|l| l.to_string()).collect();
-        output.push(json);
-        let final_content = output.join("\n") + "\n";
-        let tmp_path = path.with_extension("jsonl.tmp");
-        if fs::write(&tmp_path, &final_content).is_ok() {
-            let _ = fs::rename(&tmp_path, &path);
-        }
-    }
 }
 
 /// Migrate old single chat.jsonl to a session (one-time migration)

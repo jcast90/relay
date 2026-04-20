@@ -134,7 +134,7 @@ async function refresh(state: DashboardState, channelStore: ChannelStore): Promi
     const runs = await store.readRunsIndex();
 
     for (const run of runs) {
-      if (ACTIVE_RUN_STATES.has(run.state)) {
+      if (ACTIVE_RUN_STATES.has(run.state) && !run.completedAt) {
         state.activeRuns.push({
           runId: run.runId,
           state: run.state,

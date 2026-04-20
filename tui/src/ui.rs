@@ -3,24 +3,14 @@ use ratatui::{
     widgets::*,
 };
 
-use crate::{App, ChatRole, CompletionKind, FocusPanel, InputMode, RepoSelectStep, Tab};
+use crate::{App, ChatRole, CompletionKind, FocusPanel, InputMode, RepoSelectStep, Tab, TextSelection};
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let size = frame.area();
 
-    // Calculate input height: wrap the input buffer text
-    let input_height = if app.input_mode == InputMode::Input && !app.input_buffer.is_empty() {
-        let available_width = size.width.saturating_sub(5) as usize; // 2 border + "> " + pad
-        if available_width > 0 {
-            let lines = (app.input_buffer.len() as f32 / available_width as f32).ceil() as u16;
-            lines.max(1) + 2 // +2 for borders
-        } else {
-            3
-        }
-    } else {
-        3
-    };
-    let input_height = input_height.min(8); // cap at 8 lines
+    // Input bar is always a fixed 3 lines tall (1 content + 2 border).
+    // Multi-line content shows a condensed "[1 of N lines]" indicator.
+    let input_height: u16 = 3;
 
     // Always reserve space at bottom for input bar
     let (main_area, input_area) = {
@@ -312,12 +302,6 @@ fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect) {
                 Style::default().fg(Color::Black).bg(Color::Cyan),
             )
         });
-        let alias_space = if alias_badge.is_some() {
-            Span::raw(" ")
-        } else {
-            Span::raw("")
-        };
-
         match msg.role {
             ChatRole::User => {
                 // User header
@@ -447,9 +431,24 @@ fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect) {
     let scroll_offset = app.chat_scroll.min(max_scroll);
     app.chat_scroll = scroll_offset;
 
+    // Capture ALL plain-text lines for text selection copy (not just visible ones)
+    if app.selection.panel == Some(FocusPanel::Center) {
+        app.selection.inner_area = inner;
+        app.selection.rendered_lines = lines.iter()
+            .map(|line| {
+                line.spans.iter().map(|s| s.content.as_ref()).collect::<String>()
+            })
+            .collect();
+    }
+
     let paragraph = Paragraph::new(lines)
         .scroll((scroll_offset as u16, 0));
     frame.render_widget(paragraph, inner);
+
+    // Draw selection highlight overlay (content-relative, scroll-aware)
+    if app.selection.panel == Some(FocusPanel::Center) {
+        draw_selection_highlight(frame, &app.selection, inner, scroll_offset);
+    }
 
     // Scroll indicator
     if total_lines > visible_height {
@@ -696,67 +695,80 @@ fn draw_input_bar(frame: &mut Frame, app: &App, area: Rect) {
     let is_active = app.input_mode == InputMode::Input;
 
     if is_active {
-        // Wrap input text
         let available_width = area.width.saturating_sub(5) as usize; // borders + "> "
+
+        // Count total lines in the buffer (newlines + wrapping)
+        let total_lines = if available_width > 0 && !app.input_buffer.is_empty() {
+            word_wrap(&app.input_buffer, available_width).len()
+        } else {
+            1
+        };
+
+        // Find which line the cursor is on (1-based for display)
+        let cursor_line_num = if available_width > 0 && !app.input_buffer.is_empty() {
+            let safe_cursor = app.input_cursor.min(app.input_buffer.len());
+            // Find nearest char boundary
+            let at = app.input_buffer[..safe_cursor]
+                .char_indices()
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(0);
+            let before = &app.input_buffer[..at];
+            word_wrap(before, available_width).len()
+        } else {
+            1
+        };
+
+        // Get the current line's text to display
         let wrapped = if available_width > 0 && !app.input_buffer.is_empty() {
             word_wrap(&app.input_buffer, available_width)
         } else {
             vec![app.input_buffer.clone()]
         };
+        let display_line_idx = cursor_line_num.saturating_sub(1).min(wrapped.len().saturating_sub(1));
+        let display_text = wrapped.get(display_line_idx).cloned().unwrap_or_default();
 
-        let mut lines: Vec<Line> = Vec::new();
-        for (i, line_text) in wrapped.iter().enumerate() {
-            if i == 0 {
-                lines.push(Line::from(vec![
-                    Span::styled("> ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                    Span::raw(line_text.as_str()),
-                ]));
-            } else {
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::raw(line_text.as_str()),
-                ]));
-            }
+        // Build the single display line
+        let mut spans = vec![
+            Span::styled("> ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw(display_text.clone()),
+        ];
+
+        // Show line indicator if multi-line
+        if total_lines > 1 {
+            spans.push(Span::styled(
+                format!("  [{} of {} lines]", cursor_line_num, total_lines),
+                Style::default().fg(Color::DarkGray),
+            ));
         }
 
-        if lines.is_empty() {
-            lines.push(Line::from(vec![
-                Span::styled("> ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            ]));
-        }
-
-        let title = " Chat ".to_string();
-        let input = Paragraph::new(lines)
+        let content = Paragraph::new(Line::from(spans))
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Cyan))
-                    .title(title)
+                    .title(" Chat ")
                     .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
             );
-        frame.render_widget(input, area);
+        frame.render_widget(content, area);
 
-        // Place cursor at correct wrapped position by walking wrapped lines
-        let (cursor_line, cursor_col) = if available_width > 0 && !wrapped.is_empty() {
-            let mut remaining = app.input_cursor;
-            let mut line_idx = 0;
-            for (i, wline) in wrapped.iter().enumerate() {
-                let len = wline.len();
-                if remaining <= len || i == wrapped.len() - 1 {
-                    line_idx = i;
-                    break;
-                }
-                // +1 accounts for the space/break between wrapped segments
-                remaining = remaining.saturating_sub(len + 1);
-                line_idx = i + 1;
-            }
-            (line_idx, remaining)
+        // Place cursor within the displayed line
+        let col_in_line = if available_width > 0 && !wrapped.is_empty() {
+            let safe_cursor = app.input_cursor.min(app.input_buffer.len());
+            let at = app.input_buffer[..safe_cursor]
+                .char_indices()
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(0);
+            let before = &app.input_buffer[..at];
+            let wb = word_wrap(before, available_width);
+            wb.last().map(|l| char_width(l)).unwrap_or(0)
         } else {
-            (0, app.input_cursor)
+            app.input_cursor
         };
         frame.set_cursor_position(Position::new(
-            area.x + 3 + cursor_col as u16,
-            area.y + 1 + cursor_line as u16,
+            area.x + 3 + col_in_line as u16,
+            area.y + 1,
         ));
     } else {
         // Show active agent hint if repos are configured
@@ -831,9 +843,9 @@ fn draw_repo_select_popup(frame: &mut Frame, app: &App, area: Rect) {
     let dim = Block::default().style(Style::default().bg(Color::Black));
     frame.render_widget(dim, area);
 
-    let popup_width = 60.min(area.width - 4);
+    let popup_width = 70.min(area.width - 4);
     let popup_height = match state.step {
-        RepoSelectStep::Picking => (state.available_repos.len() as u16 + 6).min(area.height - 4),
+        RepoSelectStep::Picking => 20.min(area.height - 4),
         RepoSelectStep::Aliasing => (state.aliases.len() as u16 * 2 + 6).min(area.height - 4),
     };
     let popup_x = (area.width - popup_width) / 2;
@@ -844,16 +856,73 @@ fn draw_repo_select_popup(frame: &mut Frame, app: &App, area: Rect) {
 
     match state.step {
         RepoSelectStep::Picking => {
+            // Filter repos
+            let filter_lower = state.filter.to_lowercase();
+            let filtered: Vec<(usize, &harness_data::WorkspaceEntry)> = state.available_repos.iter().enumerate()
+                .filter(|(_, ws)| {
+                    filter_lower.is_empty() || {
+                        let name = ws.repo_path.split('/').last().unwrap_or(&ws.workspace_id);
+                        name.to_lowercase().contains(&filter_lower)
+                            || ws.repo_path.to_lowercase().contains(&filter_lower)
+                    }
+                })
+                .collect();
+
+            // Viewport: how many repo lines fit (popup height - header(2) - footer(1) - filter(1) - borders(2))
+            let viewport_height = popup_height.saturating_sub(6) as usize;
+
+            // Keep cursor in viewport
+            let scroll = if state.cursor >= state.scroll_offset + viewport_height {
+                state.cursor.saturating_sub(viewport_height.saturating_sub(1))
+            } else if state.cursor < state.scroll_offset {
+                state.cursor
+            } else {
+                state.scroll_offset
+            };
+
             let mut lines: Vec<Line> = Vec::new();
+
+            // Header
             lines.push(Line::from(Span::styled(
                 format!(" Select repos for \"{}\":", state.channel_name),
                 Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
             )));
-            lines.push(Line::raw(""));
 
-            for (i, ws) in state.available_repos.iter().enumerate() {
-                let is_cursor = i == state.cursor;
-                let is_selected = state.selected.get(i).copied().unwrap_or(false);
+            // Filter bar
+            if state.filtering {
+                lines.push(Line::from(vec![
+                    Span::styled(" /", Style::default().fg(Color::Yellow)),
+                    Span::styled(&state.filter, Style::default().fg(Color::White)),
+                    Span::styled("▌", Style::default().fg(Color::Yellow)),
+                ]));
+            } else if !state.filter.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!(" filter: {}  ({} matches)", state.filter, filtered.len()),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    format!(" {} repos  /:search", filtered.len()),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+
+            // Scroll indicator if needed
+            if scroll > 0 {
+                lines.push(Line::from(Span::styled(
+                    format!("  ↑ {} more above", scroll),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+
+            // Visible repos
+            let visible = filtered.iter().skip(scroll).take(viewport_height);
+            for (visible_idx, (real_idx, ws)) in visible.enumerate() {
+                let display_idx = scroll + visible_idx;
+                let is_cursor = display_idx == state.cursor;
+                let is_selected = state.selected.get(*real_idx).copied().unwrap_or(false);
                 let checkbox = if is_selected { "[x]" } else { "[ ]" };
                 let cursor_indicator = if is_cursor { "▸ " } else { "  " };
                 let repo_short = ws.repo_path.split('/').last().unwrap_or(&ws.workspace_id);
@@ -866,6 +935,9 @@ fn draw_repo_select_popup(frame: &mut Frame, app: &App, area: Rect) {
                     Style::default().fg(Color::DarkGray)
                 };
 
+                let max_path_width = popup_width.saturating_sub(12) as usize;
+                let path_display = truncate(&ws.repo_path, max_path_width);
+
                 lines.push(Line::from(vec![
                     Span::styled(cursor_indicator, Style::default().fg(Color::Cyan)),
                     Span::styled(
@@ -874,11 +946,26 @@ fn draw_repo_select_popup(frame: &mut Frame, app: &App, area: Rect) {
                     ),
                     Span::styled(format!(" {}", repo_short), style),
                     Span::styled(
-                        format!("  {}", ws.repo_path),
+                        format!("  {}", path_display),
                         Style::default().fg(Color::Rgb(60, 60, 70)),
                     ),
                 ]));
             }
+
+            // Scroll-down indicator
+            let remaining_below = filtered.len().saturating_sub(scroll + viewport_height);
+            if remaining_below > 0 {
+                lines.push(Line::from(Span::styled(
+                    format!("  ↓ {} more below", remaining_below),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+
+            let help = if state.filtering {
+                " type to filter  enter:apply  esc:clear "
+            } else {
+                " space:toggle  /:search  enter:next  esc:cancel "
+            };
 
             let block = Block::default()
                 .borders(Borders::ALL)
@@ -886,16 +973,14 @@ fn draw_repo_select_popup(frame: &mut Frame, app: &App, area: Rect) {
                 .border_type(BorderType::Double)
                 .title(" Select Repos ")
                 .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-                .title_bottom(
-                    Line::from(" space:toggle  enter:next  esc:cancel ").right_aligned(),
-                )
+                .title_bottom(Line::from(help).right_aligned())
                 .style(Style::default().bg(Color::Rgb(20, 20, 30)));
 
             let paragraph = Paragraph::new(lines).block(block);
             frame.render_widget(paragraph, popup_area);
         }
         RepoSelectStep::Aliasing => {
-            let selected_repos: Vec<&crate::data::WorkspaceEntry> = state
+            let selected_repos: Vec<&harness_data::WorkspaceEntry> = state
                 .available_repos
                 .iter()
                 .zip(state.selected.iter())
@@ -1053,6 +1138,7 @@ fn draw_completion_popup(frame: &mut Frame, app: &App, input_area: Rect) {
             let kind_icon = match item.kind {
                 CompletionKind::Repo => "  ",
                 CompletionKind::Agent => "  ",
+                CompletionKind::Channel => "# ",
             };
             let style = if is_selected {
                 Style::default().fg(Color::White).bg(Color::Rgb(50, 50, 70)).add_modifier(Modifier::BOLD)
@@ -1344,9 +1430,9 @@ fn help_text(app: &App) -> String {
         return " esc:close  j/k:scroll".to_string();
     }
     match app.focus {
-        FocusPanel::Sidebar => " j/k:nav  n:new  r:repos  s:sessions".to_string(),
-        FocusPanel::Center => " j/k:scroll  h/l:panel  s:sessions".to_string(),
-        FocusPanel::Right => " j/k:nav  h:left  enter:detail".to_string(),
+        FocusPanel::Sidebar => " j/k:nav  n:new  d:delete  r:repos  s:sessions".to_string(),
+        FocusPanel::Center => " j/k:scroll  h/l:panel  s:sessions  m:select".to_string(),
+        FocusPanel::Right => " j/k:nav  h:left  enter:detail  m:select".to_string(),
     }
 }
 
@@ -1402,35 +1488,49 @@ fn state_icon(state: &str) -> &'static str {
 
 // ─── Markdown Rendering ───────────────────────────────────────────────────────
 
+const MD_TEXT: Color = Color::Rgb(200, 200, 210);
+const MD_CODE_FG: Color = Color::Rgb(220, 180, 120);
+const MD_CODE_BG: Color = Color::Rgb(35, 35, 45);
+const MD_QUOTE_FG: Color = Color::Rgb(140, 140, 160);
+const MD_QUOTE_BAR: Color = Color::Rgb(80, 80, 100);
+const MD_TABLE_BORDER: Color = Color::Rgb(70, 70, 90);
+const MD_TABLE_HEADER: Color = Color::Rgb(180, 200, 255);
+const MD_LINK_FG: Color = Color::Rgb(100, 160, 255);
+
 /// Render a markdown string into styled ratatui Lines.
-/// Handles: headers, bold, italic, code blocks, inline code, lists, horizontal rules.
 fn render_markdown<'a>(text: &str, max_width: usize) -> Vec<Line<'a>> {
     let mut lines: Vec<Line> = Vec::new();
     let mut in_code_block = false;
     let mut code_block_lines: Vec<String> = Vec::new();
+    let mut table_rows: Vec<Vec<String>> = Vec::new();
+    let mut in_table = false;
 
-    for raw_line in text.split('\n') {
+    let raw_lines: Vec<&str> = text.split('\n').collect();
+    let mut i = 0;
+
+    while i < raw_lines.len() {
+        let raw_line = raw_lines[i];
         let trimmed = raw_line.trim();
 
-        // Code block fences
+        // ── Code block fences ──
         if trimmed.starts_with("```") {
+            // Flush any pending table
+            if in_table {
+                render_table(&table_rows, max_width, &mut lines);
+                table_rows.clear();
+                in_table = false;
+            }
+
             if in_code_block {
-                // End code block — flush accumulated lines
                 for cl in &code_block_lines {
-                    let display = if cl.len() > max_width {
-                        &cl[..max_width]
-                    } else {
-                        cl.as_str()
-                    };
                     lines.push(Line::from(Span::styled(
-                        display.to_string(),
-                        Style::default().fg(Color::Rgb(180, 180, 200)).bg(Color::Rgb(30, 30, 40)),
+                        take_chars(cl, max_width).to_string(),
+                        Style::default().fg(Color::Rgb(180, 180, 200)).bg(MD_CODE_BG),
                     )));
                 }
                 code_block_lines.clear();
                 in_code_block = false;
             } else {
-                // Start code block — show language tag if present
                 let lang = trimmed.trim_start_matches('`').trim();
                 if !lang.is_empty() {
                     lines.push(Line::from(Span::styled(
@@ -1440,77 +1540,168 @@ fn render_markdown<'a>(text: &str, max_width: usize) -> Vec<Line<'a>> {
                 }
                 in_code_block = true;
             }
+            i += 1;
             continue;
         }
 
         if in_code_block {
             code_block_lines.push(format!("  {}", raw_line));
+            i += 1;
             continue;
         }
 
-        // Horizontal rule
+        // ── Table detection (line with | separators) ──
+        if trimmed.contains('|') && trimmed.starts_with('|') {
+            // Skip separator rows like |---|---|
+            let is_separator = trimmed.chars().all(|c| c == '|' || c == '-' || c == ':' || c == ' ');
+            if !is_separator {
+                let cells: Vec<String> = trimmed
+                    .split('|')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.trim().to_string())
+                    .collect();
+                if !cells.is_empty() {
+                    table_rows.push(cells);
+                    in_table = true;
+                }
+            }
+            i += 1;
+            continue;
+        }
+
+        // Flush table if we hit a non-table line
+        if in_table {
+            render_table(&table_rows, max_width, &mut lines);
+            table_rows.clear();
+            in_table = false;
+        }
+
+        // ── Horizontal rule ──
         if trimmed == "---" || trimmed == "***" || trimmed == "___" {
             let rule = "─".repeat(max_width.min(60));
-            lines.push(Line::from(Span::styled(
-                rule,
-                Style::default().fg(Color::DarkGray),
-            )));
+            lines.push(Line::from(Span::styled(rule, Style::default().fg(Color::DarkGray))));
+            i += 1;
             continue;
         }
 
-        // Headers
-        if trimmed.starts_with("### ") {
-            let header_text = trimmed.trim_start_matches("### ");
+        // ── Headers ──
+        if trimmed.starts_with("#### ") {
+            let h = trimmed.trim_start_matches("#### ");
             lines.push(Line::from(Span::styled(
-                format!("   {}", header_text),
+                format!("    {}", h),
+                Style::default().fg(Color::Rgb(180, 180, 200)).add_modifier(Modifier::BOLD),
+            )));
+            i += 1;
+            continue;
+        }
+        if trimmed.starts_with("### ") {
+            let h = trimmed.trim_start_matches("### ");
+            lines.push(Line::from(Span::styled(
+                format!("   {}", h),
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
             )));
+            i += 1;
             continue;
         }
         if trimmed.starts_with("## ") {
-            let header_text = trimmed.trim_start_matches("## ");
+            let h = trimmed.trim_start_matches("## ");
             lines.push(Line::from(Span::styled(
-                format!("  {}", header_text),
+                format!("  {}", h),
                 Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             )));
+            i += 1;
             continue;
         }
         if trimmed.starts_with("# ") {
-            let header_text = trimmed.trim_start_matches("# ");
+            let h = trimmed.trim_start_matches("# ");
             lines.push(Line::from(Span::styled(
-                header_text.to_string(),
+                h.to_string(),
                 Style::default().fg(Color::White).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             )));
+            i += 1;
             continue;
         }
 
-        // Empty line
+        // ── Empty line ──
         if trimmed.is_empty() {
             lines.push(Line::raw(""));
+            i += 1;
             continue;
         }
 
-        // Bullet lists
+        // ── Blockquotes ──
+        if trimmed.starts_with("> ") || trimmed == ">" {
+            let quote_text = if trimmed.len() > 2 { &trimmed[2..] } else { "" };
+            let content_width = max_width.saturating_sub(3);
+            let wrapped = word_wrap(quote_text, content_width);
+            for wline in &wrapped {
+                let mut spans = vec![
+                    Span::styled("▎ ", Style::default().fg(MD_QUOTE_BAR)),
+                ];
+                spans.extend(parse_inline_markdown_with_color(wline, MD_QUOTE_FG));
+                lines.push(Line::from(spans));
+            }
+            i += 1;
+            continue;
+        }
+
+        // ── Task lists ──
+        if trimmed.starts_with("- [x] ") || trimmed.starts_with("- [X] ") {
+            let rest = &trimmed[6..];
+            let content_width = max_width.saturating_sub(5);
+            let wrapped = word_wrap(rest, content_width);
+            for (wi, wline) in wrapped.iter().enumerate() {
+                let prefix = if wi == 0 { "  ☑ " } else { "    " };
+                let mut spans: Vec<Span> = vec![Span::styled(prefix, Style::default().fg(Color::Green))];
+                spans.extend(parse_inline_markdown(wline));
+                lines.push(Line::from(spans));
+            }
+            i += 1;
+            continue;
+        }
+        if trimmed.starts_with("- [ ] ") {
+            let rest = &trimmed[6..];
+            let content_width = max_width.saturating_sub(5);
+            let wrapped = word_wrap(rest, content_width);
+            for (wi, wline) in wrapped.iter().enumerate() {
+                let prefix = if wi == 0 { "  ☐ " } else { "    " };
+                let mut spans: Vec<Span> = vec![Span::styled(prefix, Style::default().fg(Color::DarkGray))];
+                spans.extend(parse_inline_markdown(wline));
+                lines.push(Line::from(spans));
+            }
+            i += 1;
+            continue;
+        }
+
+        // ── Bullet lists ──
         let (indent, rest) = if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
             ("  • ".to_string(), &trimmed[2..])
         } else if trimmed.starts_with("  - ") || trimmed.starts_with("  * ") {
             ("    ◦ ".to_string(), &trimmed[4..])
+        } else if trimmed.starts_with("    - ") || trimmed.starts_with("    * ") {
+            ("      ‣ ".to_string(), &trimmed[6..])
         } else if let Some(rest) = strip_numbered_list(trimmed) {
             ("  ".to_string(), rest)
         } else {
             (String::new(), trimmed)
         };
 
-        // Word-wrap the content with inline formatting
-        let content_width = max_width.saturating_sub(indent.len());
+        let content_width = max_width.saturating_sub(char_width(&indent));
         let wrapped = word_wrap(rest, content_width);
 
         for (wi, wline) in wrapped.iter().enumerate() {
-            let prefix = if wi == 0 { indent.clone() } else { " ".repeat(indent.len()) };
+            let prefix = if wi == 0 { indent.clone() } else { " ".repeat(char_width(&indent)) };
             let mut spans: Vec<Span> = vec![Span::raw(prefix)];
             spans.extend(parse_inline_markdown(wline));
             lines.push(Line::from(spans));
         }
+
+        i += 1;
+    }
+
+    // Flush pending table
+    if in_table {
+        render_table(&table_rows, max_width, &mut lines);
     }
 
     // Flush any unclosed code block
@@ -1518,12 +1709,116 @@ fn render_markdown<'a>(text: &str, max_width: usize) -> Vec<Line<'a>> {
         for cl in &code_block_lines {
             lines.push(Line::from(Span::styled(
                 cl.clone(),
-                Style::default().fg(Color::Rgb(180, 180, 200)).bg(Color::Rgb(30, 30, 40)),
+                Style::default().fg(Color::Rgb(180, 180, 200)).bg(MD_CODE_BG),
             )));
         }
     }
 
     lines
+}
+
+/// Render a markdown table as a clean, compact list.
+/// Each row shows truncated columns with visual separators.
+/// For wide tables that won't fit, drops trailing columns and shows the
+/// most important data (first 2-3 columns) clearly.
+fn render_table<'a>(rows: &[Vec<String>], max_width: usize, lines: &mut Vec<Line<'a>>) {
+    if rows.is_empty() { return; }
+
+    let col_count = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    if col_count == 0 { return; }
+
+    // Figure out how many columns we can fit.
+    // Give each column: min 6 chars content + 3 overhead (space + separator + space)
+    let per_col_overhead = 3usize;
+    let min_col_content = 6usize;
+    let usable = max_width.saturating_sub(2); // left margin
+    let max_cols = (usable / (min_col_content + per_col_overhead)).max(1).min(col_count);
+
+    // Measure ideal widths for the columns we'll show
+    let mut ideal_widths: Vec<usize> = vec![0; max_cols];
+    for row in rows {
+        for j in 0..max_cols {
+            if let Some(cell) = row.get(j) {
+                ideal_widths[j] = ideal_widths[j].max(char_width(cell));
+            }
+        }
+    }
+
+    // Allocate widths: fit to available space
+    let separator_space = if max_cols > 1 { (max_cols - 1) * 3 } else { 0 }; // " · " between cols
+    let content_budget = usable.saturating_sub(separator_space);
+    let total_ideal: usize = ideal_widths.iter().sum();
+
+    let col_widths: Vec<usize> = if total_ideal <= content_budget {
+        ideal_widths
+    } else {
+        // Proportional distribution with a floor
+        let mut widths = vec![0usize; max_cols];
+        for (j, &ideal) in ideal_widths.iter().enumerate() {
+            let share = if total_ideal > 0 {
+                ((ideal as f64 / total_ideal as f64) * content_budget as f64).floor() as usize
+            } else {
+                content_budget / max_cols
+            };
+            widths[j] = share.max(min_col_content);
+        }
+        widths
+    };
+
+    // Header row
+    if let Some(header) = rows.first() {
+        let mut spans: Vec<Span> = Vec::new();
+        for j in 0..max_cols {
+            if j > 0 {
+                spans.push(Span::styled("   ", Style::default().fg(MD_TABLE_BORDER)));
+            }
+            let cell = header.get(j).map(|s| s.as_str()).unwrap_or("");
+            // Strip markdown markers from header text since we style it bold already
+            let clean = strip_inline_markdown(cell);
+            let display = truncate(&clean, col_widths[j]);
+            let pad = col_widths[j].saturating_sub(char_width(&display));
+            spans.push(Span::styled(
+                format!("{}{}", display, " ".repeat(pad)),
+                Style::default().fg(MD_TABLE_HEADER).add_modifier(Modifier::BOLD),
+            ));
+        }
+        if max_cols < col_count {
+            spans.push(Span::styled(
+                format!("  +{}", col_count - max_cols),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        lines.push(Line::from(spans));
+
+        // Separator under header
+        let rule_width = col_widths.iter().sum::<usize>() + separator_space;
+        lines.push(Line::from(Span::styled(
+            "─".repeat(rule_width.min(max_width)),
+            Style::default().fg(MD_TABLE_BORDER),
+        )));
+    }
+
+    // Data rows — parse inline markdown in each cell
+    for row in rows.iter().skip(1) {
+        let mut spans: Vec<Span> = Vec::new();
+        for j in 0..max_cols {
+            if j > 0 {
+                spans.push(Span::styled(" · ", Style::default().fg(MD_TABLE_BORDER)));
+            }
+            let cell = row.get(j).map(|s| s.as_str()).unwrap_or("");
+            let display = truncate(cell, col_widths[j]);
+            let pad = col_widths[j].saturating_sub(char_width(&display));
+            // Parse inline markdown so **bold**, `code`, etc. render properly
+            spans.extend(parse_inline_markdown(&display));
+            if pad > 0 {
+                spans.push(Span::raw(" ".repeat(pad)));
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+
+    // Spacer after table
+    lines.push(Line::raw(""));
 }
 
 /// Check if a line is a numbered list item like "1. foo" and return the rest
@@ -1537,97 +1832,185 @@ fn strip_numbered_list(s: &str) -> Option<&str> {
     }
 }
 
-/// Parse inline markdown: **bold**, *italic*, `code`, ***bold-italic***
+/// Strip inline markdown markers, returning plain text.
+/// e.g. "**bold** and `code`" → "bold and code"
+fn strip_inline_markdown(text: &str) -> String {
+    text.replace("***", "")
+        .replace("**", "")
+        .replace('*', "")
+        .replace('`', "")
+        .replace("~~", "")
+}
+
+/// Parse inline markdown with default text color
 fn parse_inline_markdown(text: &str) -> Vec<Span<'static>> {
+    parse_inline_markdown_with_color(text, MD_TEXT)
+}
+
+/// Parse inline markdown: **bold**, *italic*, `code`, ~~strike~~, [link](url)
+fn parse_inline_markdown_with_color(text: &str, base_color: Color) -> Vec<Span<'static>> {
     let mut spans: Vec<Span> = Vec::new();
-    let mut remaining = text;
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    let mut pos = 0;
+    let mut plain_buf = String::new();
 
-    while !remaining.is_empty() {
-        // Find the next markdown marker
-        if let Some(pos) = remaining.find(|c: char| c == '*' || c == '`') {
-            // Add text before the marker
-            if pos > 0 {
-                spans.push(Span::styled(
-                    remaining[..pos].to_string(),
-                    Style::default().fg(Color::Rgb(200, 200, 210)),
-                ));
-            }
-            remaining = &remaining[pos..];
-
-            // Inline code
-            if remaining.starts_with('`') {
-                if let Some(end) = remaining[1..].find('`') {
-                    let code_text = &remaining[1..1 + end];
-                    spans.push(Span::styled(
-                        code_text.to_string(),
-                        Style::default().fg(Color::Rgb(220, 180, 120)).bg(Color::Rgb(35, 35, 45)),
-                    ));
-                    remaining = &remaining[2 + end..];
-                    continue;
-                }
-            }
-
-            // Bold-italic (*** or ___)
-            if remaining.starts_with("***") {
-                if let Some(end) = remaining[3..].find("***") {
-                    let inner = &remaining[3..3 + end];
-                    spans.push(Span::styled(
-                        inner.to_string(),
-                        Style::default()
-                            .fg(Color::White)
-                            .add_modifier(Modifier::BOLD | Modifier::ITALIC),
-                    ));
-                    remaining = &remaining[6 + end..];
-                    continue;
-                }
-            }
-
-            // Bold
-            if remaining.starts_with("**") {
-                if let Some(end) = remaining[2..].find("**") {
-                    let inner = &remaining[2..2 + end];
-                    spans.push(Span::styled(
-                        inner.to_string(),
-                        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-                    ));
-                    remaining = &remaining[4 + end..];
-                    continue;
-                }
-            }
-
-            // Italic
-            if remaining.starts_with('*') {
-                if let Some(end) = remaining[1..].find('*') {
-                    let inner = &remaining[1..1 + end];
-                    spans.push(Span::styled(
-                        inner.to_string(),
-                        Style::default().fg(Color::Rgb(200, 200, 210)).add_modifier(Modifier::ITALIC),
-                    ));
-                    remaining = &remaining[2 + end..];
-                    continue;
-                }
-            }
-
-            // No matching end marker — treat as literal
-            spans.push(Span::styled(
-                remaining[..1].to_string(),
-                Style::default().fg(Color::Rgb(200, 200, 210)),
-            ));
-            remaining = &remaining[1..];
-        } else {
-            // No more markers — rest is plain text
-            spans.push(Span::styled(
-                remaining.to_string(),
-                Style::default().fg(Color::Rgb(200, 200, 210)),
-            ));
-            break;
+    let flush_plain = |buf: &mut String, spans: &mut Vec<Span>, color: Color| {
+        if !buf.is_empty() {
+            spans.push(Span::styled(buf.clone(), Style::default().fg(color)));
+            buf.clear();
         }
+    };
+
+    while pos < len {
+        // ── Inline code ──
+        if chars[pos] == '`' {
+            if let Some(end) = find_closing(&chars, pos + 1, '`') {
+                flush_plain(&mut plain_buf, &mut spans, base_color);
+                let inner: String = chars[pos + 1..end].iter().collect();
+                spans.push(Span::styled(inner, Style::default().fg(MD_CODE_FG).bg(MD_CODE_BG)));
+                pos = end + 1;
+                continue;
+            }
+        }
+
+        // ── Links: [text](url) ──
+        if chars[pos] == '[' {
+            if let Some(close_bracket) = find_closing(&chars, pos + 1, ']') {
+                if close_bracket + 1 < len && chars[close_bracket + 1] == '(' {
+                    if let Some(close_paren) = find_closing(&chars, close_bracket + 2, ')') {
+                        flush_plain(&mut plain_buf, &mut spans, base_color);
+                        let link_text: String = chars[pos + 1..close_bracket].iter().collect();
+                        spans.push(Span::styled(
+                            link_text,
+                            Style::default().fg(MD_LINK_FG).add_modifier(Modifier::UNDERLINED),
+                        ));
+                        pos = close_paren + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        // ── Strikethrough ~~ ──
+        if pos + 1 < len && chars[pos] == '~' && chars[pos + 1] == '~' {
+            if let Some(end) = find_double_closing(&chars, pos + 2, '~') {
+                flush_plain(&mut plain_buf, &mut spans, base_color);
+                let inner: String = chars[pos + 2..end].iter().collect();
+                spans.push(Span::styled(
+                    inner,
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT),
+                ));
+                pos = end + 2;
+                continue;
+            }
+        }
+
+        // ── Bold-italic *** ──
+        if pos + 2 < len && chars[pos] == '*' && chars[pos + 1] == '*' && chars[pos + 2] == '*' {
+            if let Some(end) = find_triple_closing(&chars, pos + 3, '*') {
+                flush_plain(&mut plain_buf, &mut spans, base_color);
+                let inner: String = chars[pos + 3..end].iter().collect();
+                spans.push(Span::styled(
+                    inner,
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD | Modifier::ITALIC),
+                ));
+                pos = end + 3;
+                continue;
+            }
+        }
+
+        // ── Bold ** ──
+        if pos + 1 < len && chars[pos] == '*' && chars[pos + 1] == '*' {
+            if let Some(end) = find_double_closing(&chars, pos + 2, '*') {
+                flush_plain(&mut plain_buf, &mut spans, base_color);
+                let inner: String = chars[pos + 2..end].iter().collect();
+                spans.push(Span::styled(
+                    inner,
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                ));
+                pos = end + 2;
+                continue;
+            }
+        }
+
+        // ── Italic * ──
+        if chars[pos] == '*' {
+            if let Some(end) = find_closing(&chars, pos + 1, '*') {
+                flush_plain(&mut plain_buf, &mut spans, base_color);
+                let inner: String = chars[pos + 1..end].iter().collect();
+                spans.push(Span::styled(
+                    inner,
+                    Style::default().fg(base_color).add_modifier(Modifier::ITALIC),
+                ));
+                pos = end + 1;
+                continue;
+            }
+        }
+
+        // ── Plain character ──
+        plain_buf.push(chars[pos]);
+        pos += 1;
     }
 
+    flush_plain(&mut plain_buf, &mut spans, base_color);
     spans
 }
 
+/// Find the position of a closing single char (not preceded by backslash)
+fn find_closing(chars: &[char], start: usize, marker: char) -> Option<usize> {
+    for i in start..chars.len() {
+        if chars[i] == marker {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Find closing double marker (e.g. ** or ~~)
+fn find_double_closing(chars: &[char], start: usize, marker: char) -> Option<usize> {
+    let len = chars.len();
+    for i in start..len.saturating_sub(1) {
+        if chars[i] == marker && chars[i + 1] == marker {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Find closing triple marker (***)
+fn find_triple_closing(chars: &[char], start: usize, marker: char) -> Option<usize> {
+    let len = chars.len();
+    for i in start..len.saturating_sub(2) {
+        if chars[i] == marker && chars[i + 1] == marker && chars[i + 2] == marker {
+            return Some(i);
+        }
+    }
+    None
+}
+
 /// Simple word-wrap that breaks on word boundaries
+/// Count display width in characters (not bytes)
+fn char_width(s: &str) -> usize {
+    s.chars().count()
+}
+
+/// Take up to `n` characters from a string (char-safe, no byte-boundary panics)
+fn take_chars(s: &str, n: usize) -> &str {
+    match s.char_indices().nth(n) {
+        Some((byte_pos, _)) => &s[..byte_pos],
+        None => s,
+    }
+}
+
+/// Skip the first `n` characters of a string
+fn skip_chars(s: &str, n: usize) -> &str {
+    match s.char_indices().nth(n) {
+        Some((byte_pos, _)) => &s[byte_pos..],
+        None => "",
+    }
+}
+
 fn word_wrap(s: &str, max_width: usize) -> Vec<String> {
     if max_width == 0 {
         return vec![s.to_string()];
@@ -1644,18 +2027,22 @@ fn word_wrap(s: &str, max_width: usize) -> Vec<String> {
         let mut current_line = String::new();
 
         for word in paragraph.split_whitespace() {
+            let word_len = char_width(word);
+            let line_len = char_width(&current_line);
+
             if current_line.is_empty() {
-                if word.len() > max_width {
+                if word_len > max_width {
+                    // Hard-wrap long words at character boundaries
                     let mut remaining = word;
-                    while remaining.len() > max_width {
-                        lines.push(remaining[..max_width].to_string());
-                        remaining = &remaining[max_width..];
+                    while char_width(remaining) > max_width {
+                        lines.push(take_chars(remaining, max_width).to_string());
+                        remaining = skip_chars(remaining, max_width);
                     }
                     current_line = remaining.to_string();
                 } else {
                     current_line = word.to_string();
                 }
-            } else if current_line.len() + 1 + word.len() > max_width {
+            } else if line_len + 1 + word_len > max_width {
                 lines.push(current_line);
                 current_line = word.to_string();
             } else {
@@ -1677,9 +2064,60 @@ fn word_wrap(s: &str, max_width: usize) -> Vec<String> {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    if char_width(s) <= max {
         s.to_string()
     } else {
-        format!("{}...", &s[..max.saturating_sub(3)])
+        format!("{}...", take_chars(s, max.saturating_sub(3)))
+    }
+}
+
+/// Draw a highlight overlay for the current text selection within a panel's inner area.
+/// Selection positions are content-relative (line_index, col); we convert to screen
+/// coordinates using the scroll offset so the highlight tracks the text through scrolls.
+fn draw_selection_highlight(frame: &mut Frame, selection: &TextSelection, inner: Rect, scroll_offset: usize) {
+    if selection.start == selection.end {
+        return;
+    }
+
+    // Normalize so start <= end
+    let (start_line, start_col, end_line, end_col) = if selection.start.0 < selection.end.0
+        || (selection.start.0 == selection.end.0 && selection.start.1 <= selection.end.1)
+    {
+        (selection.start.0, selection.start.1, selection.end.0, selection.end.1)
+    } else {
+        (selection.end.0, selection.end.1, selection.start.0, selection.start.1)
+    };
+
+    let visible_height = inner.height as usize;
+    let highlight_style = Style::default().bg(Color::Rgb(60, 80, 120));
+
+    for content_line in start_line..=end_line {
+        // Skip lines not currently visible
+        if content_line < scroll_offset || content_line >= scroll_offset + visible_height {
+            continue;
+        }
+
+        let screen_row = inner.y + (content_line - scroll_offset) as u16;
+
+        let col_from = if content_line == start_line {
+            inner.x + start_col as u16
+        } else {
+            inner.x
+        };
+        let col_to = if content_line == end_line {
+            (inner.x + end_col as u16 + 1).min(inner.x + inner.width)
+        } else {
+            inner.x + inner.width
+        };
+
+        if col_from >= col_to {
+            continue;
+        }
+
+        let area = Rect::new(col_from, screen_row, col_to - col_from, 1);
+        frame.render_widget(
+            Block::default().style(highlight_style),
+            area,
+        );
     }
 }

@@ -33,6 +33,8 @@ import { ScriptedInvoker } from "./simulation/scripted-invoker.js";
 import { ChannelStore } from "./channels/channel-store.js";
 import { handleCrosslinkCommand } from "./crosslink/cli.js";
 import { startDashboard } from "./tui/dashboard.js";
+import { SessionStore } from "./cli/session-store.js";
+import { buildSystemPrompt, resolveChannelRefs, findMcpConfig } from "./cli/chat-context.js";
 
 export async function main(): Promise<void> {
   const cwd = process.cwd();
@@ -54,12 +56,12 @@ export async function main(): Promise<void> {
   }
 
   if (command === "list-runs") {
-    await printRunsIndex(artifactStore, cwd);
+    await printRunsIndex(artifactStore, cwd, args);
     return;
   }
 
   if (command === "list-workspaces") {
-    await printWorkspaces();
+    await printWorkspaces(args);
     return;
   }
 
@@ -88,6 +90,16 @@ export async function main(): Promise<void> {
     return;
   }
 
+  if (command === "session") {
+    await handleSessionCommand(args);
+    return;
+  }
+
+  if (command === "chat") {
+    await handleChatCommand(args, cwd, workspace);
+    return;
+  }
+
   if (command === "dashboard") {
     await startDashboard();
     return;
@@ -108,7 +120,7 @@ export async function main(): Promise<void> {
   }
 
   if (command === "channels") {
-    await printChannels();
+    await printChannels(args);
     return;
   }
 
@@ -118,17 +130,17 @@ export async function main(): Promise<void> {
   }
 
   if (command === "running") {
-    await printRunningTasks();
+    await printRunningTasks(args);
     return;
   }
 
   if (command === "board") {
-    await printTaskBoard(args[0] ?? "");
+    await printTaskBoard(args[0] ?? "", args);
     return;
   }
 
   if (command === "decisions") {
-    await printDecisions(args[0] ?? "");
+    await printDecisions(args[0] ?? "", args);
     return;
   }
 
@@ -142,13 +154,25 @@ export async function main(): Promise<void> {
     return;
   }
 
-  if (command === "claude" || command === "codex") {
+  if (command === "claude" || command === "codex" || command.startsWith("claude-") || command.startsWith("codex-")) {
     const cliEntrypoint = resolveCliEntrypoint();
     const attachHarnessMcp = !hasHarnessMcpOptOut(args);
     const userArgs = stripHarnessMcpOptOut(args);
+
+    // For claude-* variants (e.g. claude-turingon), use the base binary
+    // with CLAUDE_CONFIG_DIR set to ~/.claude-<variant>
+    const isVariant = command.startsWith("claude-") || command.startsWith("codex-");
+    const baseBinary = isVariant ? command.split("-")[0] : command;
+    const variantEnv: Record<string, string> = {};
+    if (isVariant) {
+      const variantName = command; // e.g. "claude-turingon"
+      const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+      variantEnv.CLAUDE_CONFIG_DIR = `${home}/.${variantName}`;
+    }
+
     const launchArgs = attachHarnessMcp
       ? await buildWrappedAgentLaunchArgs({
-          command,
+          command: baseBinary,
           cwd,
           cliEntrypoint,
           userArgs,
@@ -156,10 +180,11 @@ export async function main(): Promise<void> {
         })
       : userArgs;
     const exitCode = await launchInteractiveCommand({
-      command,
+      command: baseBinary,
       args: launchArgs,
       cwd,
       env: {
+        ...variantEnv,
         AGENT_HARNESS_HOME: workspace.paths.rootDir,
         AGENT_HARNESS_ARTIFACTS_DIR: workspace.paths.artifactsDir,
         AGENT_HARNESS_RUNS_INDEX: workspace.paths.runsIndexPath
@@ -171,6 +196,15 @@ export async function main(): Promise<void> {
   }
 
   const sequential = args.includes("--sequential");
+  const featureRequest = args.filter((a) => !a.startsWith("--")).join(" ").trim();
+
+  if (!featureRequest) {
+    console.error("Usage: agent-harness run <feature request>");
+    console.error("  Example: agent-harness run \"Add user authentication with OAuth2\"");
+    process.exitCode = 1;
+    return;
+  }
+
   const defaultProvider = (process.env.HARNESS_PROVIDER ?? "claude") as "claude" | "codex";
   const agentOverrides = parseAgentOverrides();
   await registerAgentNames({ defaultProvider, overrides: agentOverrides });
@@ -190,9 +224,9 @@ export async function main(): Promise<void> {
     new NodeCommandInvoker(),
     artifactStore
   );
-
-  const featureRequest = "Build a basic harness scaffold that can select agents by role and specialty.";
   let run: Awaited<ReturnType<Orchestrator["run"]>>;
+
+  const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   try {
     if (sequential) {
@@ -203,7 +237,7 @@ export async function main(): Promise<void> {
         artifactStore,
         workspace.paths.artifactsDir
       );
-      run = await orchestrator.run(featureRequest);
+      run = await orchestrator.run(featureRequest, runId);
     } else {
       const channelStore = new ChannelStore();
       const orchestratorV2 = new OrchestratorV2(
@@ -215,10 +249,27 @@ export async function main(): Promise<void> {
         channelStore,
         workspace.status.workspaceId
       );
-      run = await orchestratorV2.run(featureRequest);
+      run = await orchestratorV2.run(featureRequest, runId);
     }
   } catch (error) {
     console.error("Orchestrator failed:", error instanceof Error ? error.message : error);
+
+    // Mark the run as FAILED in the index so the dashboard doesn't show it as active
+    const now = new Date().toISOString();
+    await artifactStore.saveRunsIndex({
+      entry: {
+        runId,
+        featureRequest,
+        state: "FAILED",
+        channelId: null,
+        startedAt: now,
+        updatedAt: now,
+        completedAt: now,
+        phaseLedgerPath: null,
+        artifactsRoot: `${workspace.paths.artifactsDir}/${runId}`
+      }
+    });
+
     process.exitCode = 1;
     return;
   }
@@ -328,7 +379,13 @@ export async function main(): Promise<void> {
   }
 }
 
-async function printChannels(): Promise<void> {
+async function printChannels(args: string[] = []): Promise<void> {
+  if (args.includes("--json")) {
+    const store = new ChannelStore();
+    const channels = await store.listChannels("active");
+    jsonOut(channels);
+    return;
+  }
   const store = new ChannelStore();
   const channels = await store.listChannels();
 
@@ -355,18 +412,138 @@ async function handleChannelCommand(args: string[]): Promise<void> {
   if (sub === "create") {
     const name = args[1];
     if (!name) {
-      console.error("Usage: agent-harness channel create <name> [description]");
+      console.error("Usage: agent-harness channel create <name> [description] [--repos alias:wsId:path,...]");
       process.exitCode = 1;
       return;
     }
-    const description = args.slice(2).join(" ") || `Channel for ${name}`;
-    const channel = await store.createChannel({ name, description });
-    console.log(`Channel created: ${channel.name} (${channel.channelId})`);
+
+    const reposArg = parseNamedArg(args, "--repos");
+    const repoAssignments = reposArg
+      ? reposArg.split(",").map((r) => {
+          const [alias, workspaceId, ...pathParts] = r.split(":");
+          return { alias, workspaceId, repoPath: pathParts.join(":") };
+        })
+      : undefined;
+
+    // Description is everything after name that isn't a flag
+    const descParts = args.slice(2).filter((a) => !a.startsWith("--") && a !== reposArg);
+    const description = descParts.join(" ") || `Channel for ${name}`;
+
+    const channel = await store.createChannel({ name, description, repoAssignments });
+
+    if (args.includes("--json")) {
+      jsonOut(channel);
+    } else {
+      console.log(`Channel created: ${channel.name} (${channel.channelId})`);
+    }
+    return;
+  }
+
+  if (sub === "archive") {
+    const channelId = args[1];
+    if (!channelId) {
+      console.error("Usage: agent-harness channel archive <channelId>");
+      process.exitCode = 1;
+      return;
+    }
+
+    const archived = await store.archiveChannel(channelId);
+
+    if (args.includes("--json")) {
+      jsonOut(archived);
+    } else if (archived) {
+      console.log(`Channel archived: ${archived.name} (${archived.channelId})`);
+    } else {
+      console.error(`Channel not found: ${channelId}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (sub === "update") {
+    const channelId = args[1];
+    if (!channelId) {
+      console.error("Usage: agent-harness channel update <channelId> --repos alias:wsId:path,...");
+      process.exitCode = 1;
+      return;
+    }
+
+    const reposArg = parseNamedArg(args, "--repos");
+    const patch: Record<string, unknown> = {};
+
+    if (reposArg) {
+      patch.repoAssignments = reposArg.split(",").map((r) => {
+        const [alias, workspaceId, ...pathParts] = r.split(":");
+        return { alias, workspaceId, repoPath: pathParts.join(":") };
+      });
+    }
+
+    const updated = await store.updateChannel(channelId, patch);
+
+    if (args.includes("--json")) {
+      jsonOut(updated);
+    } else if (updated) {
+      console.log(`Channel updated: ${updated.name} (${updated.channelId})`);
+    } else {
+      console.error(`Channel not found: ${channelId}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (sub === "feed") {
+    const channelId = args[1];
+    const limit = Number(parseNamedArg(args, "--limit") ?? "50");
+
+    if (!channelId) {
+      console.error("Usage: agent-harness channel feed <channelId> [--limit N]");
+      process.exitCode = 1;
+      return;
+    }
+
+    const feed = await store.readFeed(channelId, limit);
+
+    if (args.includes("--json")) {
+      jsonOut(feed);
+    } else {
+      if (feed.length === 0) {
+        console.log("No feed entries.");
+      } else {
+        for (const entry of feed) {
+          const from = entry.fromDisplayName ?? "system";
+          console.log(`  [${entry.type}] ${from}: ${entry.content.slice(0, 120)}`);
+        }
+      }
+    }
+    return;
+  }
+
+  if (sub === "post") {
+    const channelId = args[1];
+    const content = args.slice(2).filter((a) => !a.startsWith("--")).join(" ");
+    const fromName = parseNamedArg(args, "--from") ?? "CLI";
+    const entryType = parseNamedArg(args, "--type") ?? "message";
+
+    if (!channelId || !content) {
+      console.error("Usage: agent-harness channel post <channelId> <content> [--from <name>] [--type <type>]");
+      process.exitCode = 1;
+      return;
+    }
+
+    const entry = await store.postEntry(channelId, {
+      type: entryType as "message",
+      fromAgentId: null,
+      fromDisplayName: fromName,
+      content,
+      metadata: {}
+    });
+
+    jsonOut(entry);
     return;
   }
 
   if (!sub) {
-    console.error("Usage: agent-harness channel <channelId|create>");
+    console.error("Usage: agent-harness channel <channelId|create|archive|update|feed|post>");
     process.exitCode = 1;
     return;
   }
@@ -409,7 +586,7 @@ async function handleChannelCommand(args: string[]): Promise<void> {
   }
 }
 
-async function printRunningTasks(): Promise<void> {
+async function printRunningTasks(args: string[] = []): Promise<void> {
   const workspaces = await listRegisteredWorkspaces();
   const activeStates = new Set([
     "CLASSIFYING", "DRAFT_PLAN", "PLAN_REVIEW", "AWAITING_APPROVAL",
@@ -417,7 +594,7 @@ async function printRunningTasks(): Promise<void> {
     "REVIEW_FIX_LOOP", "TICKETS_EXECUTING", "TICKETS_COMPLETE"
   ]);
 
-  let count = 0;
+  const activeRuns: Array<{ runId: string; state: string; featureRequest: string; workspace: string; channelId: string | null }> = [];
 
   for (const ws of workspaces) {
     const wsArtifactStore = new LocalArtifactStore(
@@ -426,24 +603,37 @@ async function printRunningTasks(): Promise<void> {
     const runs = await wsArtifactStore.readRunsIndex();
 
     for (const run of runs) {
-      if (activeStates.has(run.state)) {
-        console.log(`  ${run.runId} [${run.state}] ${run.featureRequest.slice(0, 80)}`);
-        console.log(`    Workspace: ${ws.repoPath}`);
-        if (run.channelId) console.log(`    Channel: ${run.channelId}`);
-        console.log("");
-        count += 1;
+      if (activeStates.has(run.state) && !run.completedAt) {
+        activeRuns.push({
+          runId: run.runId,
+          state: run.state,
+          featureRequest: run.featureRequest,
+          workspace: ws.repoPath,
+          channelId: run.channelId ?? null
+        });
       }
     }
   }
 
-  if (count === 0) {
+  if (args.includes("--json")) {
+    jsonOut(activeRuns);
+    return;
+  }
+
+  if (activeRuns.length === 0) {
     console.log("No running tasks.");
   } else {
-    console.log(`${count} active task(s).`);
+    for (const run of activeRuns) {
+      console.log(`  ${run.runId} [${run.state}] ${run.featureRequest.slice(0, 80)}`);
+      console.log(`    Workspace: ${run.workspace}`);
+      if (run.channelId) console.log(`    Channel: ${run.channelId}`);
+      console.log("");
+    }
+    console.log(`${activeRuns.length} active task(s).`);
   }
 }
 
-async function printTaskBoard(channelId: string): Promise<void> {
+async function printTaskBoard(channelId: string, args: string[] = []): Promise<void> {
   if (!channelId) {
     console.error("Usage: agent-harness board <channelId>");
     process.exitCode = 1;
@@ -481,6 +671,11 @@ async function printTaskBoard(channelId: string): Promise<void> {
     }
   }
 
+  if (args.includes("--json")) {
+    jsonOut(board);
+    return;
+  }
+
   for (const [status, tickets] of Object.entries(board)) {
     console.log(`[${status.toUpperCase()}] (${tickets.length})`);
     for (const t of tickets) {
@@ -490,7 +685,7 @@ async function printTaskBoard(channelId: string): Promise<void> {
   }
 }
 
-async function printDecisions(channelId: string): Promise<void> {
+async function printDecisions(channelId: string, args: string[] = []): Promise<void> {
   if (!channelId) {
     console.error("Usage: agent-harness decisions <channelId>");
     process.exitCode = 1;
@@ -507,6 +702,11 @@ async function printDecisions(channelId: string): Promise<void> {
   }
 
   const decisions = await store.listDecisions(channelId);
+
+  if (args.includes("--json")) {
+    jsonOut(decisions);
+    return;
+  }
 
   if (decisions.length === 0) {
     console.log("No decisions recorded in this channel.");
@@ -525,9 +725,14 @@ async function printDecisions(channelId: string): Promise<void> {
   }
 }
 
-async function printWorkspaces(): Promise<void> {
+async function printWorkspaces(args: string[] = []): Promise<void> {
   const globalRoot = getGlobalRoot();
   const workspaces = await listRegisteredWorkspaces();
+
+  if (args.includes("--json")) {
+    jsonOut(workspaces);
+    return;
+  }
 
   console.log(`Global root: ${globalRoot}`);
   console.log("");
@@ -594,11 +799,224 @@ async function handleConfigCommand(args: string[]): Promise<void> {
   }
 }
 
+function jsonOut(data: unknown): void {
+  console.log(JSON.stringify(data, null, 2));
+}
+
+function parseNamedArg(args: string[], name: string): string | undefined {
+  const idx = args.indexOf(name);
+  return idx >= 0 && idx + 1 < args.length ? args[idx + 1] : undefined;
+}
+
+async function handleSessionCommand(args: string[]): Promise<void> {
+  const sub = args[0];
+  const store = new SessionStore();
+
+  if (sub === "create") {
+    const channelId = parseNamedArg(args, "--channel");
+    const title = parseNamedArg(args, "--title") ?? "New conversation";
+
+    if (!channelId) {
+      console.error("Usage: agent-harness session create --channel <id> [--title <text>]");
+      process.exitCode = 1;
+      return;
+    }
+
+    const session = await store.createSession(channelId, title);
+    jsonOut(session);
+    return;
+  }
+
+  if (sub === "list") {
+    const channelId = parseNamedArg(args, "--channel");
+
+    if (!channelId) {
+      console.error("Usage: agent-harness session list --channel <id>");
+      process.exitCode = 1;
+      return;
+    }
+
+    const sessions = await store.listSessions(channelId);
+    jsonOut(sessions);
+    return;
+  }
+
+  if (sub === "get") {
+    const channelId = parseNamedArg(args, "--channel");
+    const sessionId = parseNamedArg(args, "--session");
+
+    if (!channelId || !sessionId) {
+      console.error("Usage: agent-harness session get --channel <id> --session <id>");
+      process.exitCode = 1;
+      return;
+    }
+
+    const session = await store.getSession(channelId, sessionId);
+    jsonOut(session);
+    return;
+  }
+
+  if (sub === "update-claude-sid") {
+    const channelId = parseNamedArg(args, "--channel");
+    const sessionId = parseNamedArg(args, "--session");
+    const alias = parseNamedArg(args, "--alias");
+    const sid = parseNamedArg(args, "--sid");
+
+    if (!channelId || !sessionId || !alias || !sid) {
+      console.error("Usage: agent-harness session update-claude-sid --channel <id> --session <id> --alias <name> --sid <claude_sid>");
+      process.exitCode = 1;
+      return;
+    }
+
+    const session = await store.updateClaudeSessionId(channelId, sessionId, alias, sid);
+    jsonOut(session);
+    return;
+  }
+
+  if (sub === "append") {
+    const channelId = parseNamedArg(args, "--channel");
+    const sessionId = parseNamedArg(args, "--session");
+    const role = parseNamedArg(args, "--role") ?? "user";
+    const alias = parseNamedArg(args, "--alias") ?? null;
+    const content = args.filter((a) => !a.startsWith("--")).slice(1).join(" ");
+
+    if (!channelId || !sessionId || !content) {
+      console.error("Usage: agent-harness session append --channel <id> --session <id> --role <role> [--alias <name>] <content>");
+      process.exitCode = 1;
+      return;
+    }
+
+    await store.appendMessage(channelId, sessionId, {
+      role,
+      content,
+      timestamp: new Date().toISOString(),
+      agentAlias: alias
+    });
+
+    jsonOut({ ok: true });
+    return;
+  }
+
+  if (sub === "update-last") {
+    const channelId = parseNamedArg(args, "--channel");
+    const sessionId = parseNamedArg(args, "--session");
+    const role = parseNamedArg(args, "--role") ?? "assistant";
+    const alias = parseNamedArg(args, "--alias") ?? null;
+    const content = args.filter((a) => !a.startsWith("--")).slice(1).join(" ");
+
+    if (!channelId || !sessionId || !content) {
+      console.error("Usage: agent-harness session update-last --channel <id> --session <id> <content>");
+      process.exitCode = 1;
+      return;
+    }
+
+    await store.updateLastMessage(channelId, sessionId, {
+      role,
+      content,
+      timestamp: new Date().toISOString(),
+      agentAlias: alias
+    });
+
+    jsonOut({ ok: true });
+    return;
+  }
+
+  if (sub === "messages") {
+    const channelId = parseNamedArg(args, "--channel");
+    const sessionId = parseNamedArg(args, "--session");
+    const limit = Number(parseNamedArg(args, "--limit") ?? "500");
+
+    if (!channelId || !sessionId) {
+      console.error("Usage: agent-harness session messages --channel <id> --session <id> [--limit N]");
+      process.exitCode = 1;
+      return;
+    }
+
+    const messages = await store.loadMessages(channelId, sessionId, limit);
+    jsonOut(messages);
+    return;
+  }
+
+  if (sub === "delete") {
+    const channelId = parseNamedArg(args, "--channel");
+    const sessionId = parseNamedArg(args, "--session");
+
+    if (!channelId || !sessionId) {
+      console.error("Usage: agent-harness session delete --channel <id> --session <id>");
+      process.exitCode = 1;
+      return;
+    }
+
+    await store.deleteSession(channelId, sessionId);
+    jsonOut({ ok: true, deleted: sessionId });
+    return;
+  }
+
+  console.error("Usage: agent-harness session <create|list|get|delete|update-claude-sid|append|update-last|messages>");
+  process.exitCode = 1;
+}
+
+async function handleChatCommand(
+  args: string[],
+  cwd: string,
+  workspace: { paths: HarnessWorkspacePaths; status: HarnessServiceStatus }
+): Promise<void> {
+  const sub = args[0];
+
+  if (sub === "system-prompt") {
+    const channelId = parseNamedArg(args, "--channel");
+    const repoPath = parseNamedArg(args, "--repo");
+    const alias = parseNamedArg(args, "--alias");
+
+    if (!channelId) {
+      console.error("Usage: agent-harness chat system-prompt --channel <id> [--repo <path>] [--alias <name>]");
+      process.exitCode = 1;
+      return;
+    }
+
+    const prompt = buildSystemPrompt({ channelId, repoPath, alias });
+    jsonOut({ prompt });
+    return;
+  }
+
+  if (sub === "resolve-refs") {
+    const channelId = parseNamedArg(args, "--channel");
+    const message = args.filter((a) => !a.startsWith("--")).slice(1).join(" ");
+
+    if (!channelId || !message) {
+      console.error("Usage: agent-harness chat resolve-refs --channel <id> <message>");
+      process.exitCode = 1;
+      return;
+    }
+
+    const result = await resolveChannelRefs({ message, currentChannelId: channelId });
+    jsonOut(result);
+    return;
+  }
+
+  if (sub === "mcp-config") {
+    const repoPath = parseNamedArg(args, "--repo") ?? cwd;
+    const path = findMcpConfig(repoPath);
+    jsonOut({ path });
+    return;
+  }
+
+  console.error("Usage: agent-harness chat <system-prompt|resolve-refs|mcp-config>");
+  process.exitCode = 1;
+}
+
 async function printRunsIndex(
   artifactStore: LocalArtifactStore,
-  cwd: string
+  cwd: string,
+  args: string[] = []
 ): Promise<void> {
   const recentRuns = await artifactStore.readRunsIndex();
+
+  if (args.includes("--json")) {
+    jsonOut(recentRuns.slice(0, 20));
+    return;
+  }
+
   const indexPath = `${cwd}/.agent-harness/artifacts/runs-index.json`;
 
   console.log(`Runs index path: ${indexPath}`);
@@ -796,7 +1214,7 @@ function resolveWorkspaceRoot(cwd: string, args: string[]): string {
 }
 
 async function buildWrappedAgentLaunchArgs(input: {
-  command: "claude" | "codex";
+  command: string;
   cwd: string;
   cliEntrypoint: string;
   userArgs: string[];
@@ -804,7 +1222,8 @@ async function buildWrappedAgentLaunchArgs(input: {
     paths: HarnessWorkspacePaths;
   };
 }): Promise<string[]> {
-  if (input.command === "claude") {
+  // claude-* variants use the same MCP config as claude
+  if (input.command === "claude" || input.command.startsWith("claude-")) {
     return buildClaudeLaunchArgs({
       userArgs: input.userArgs,
       mcpConfigPath: await ensureClaudeMcpConfig({
