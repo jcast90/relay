@@ -80,6 +80,12 @@ pub struct Channel {
     pub pinned_refs: Vec<ChannelRef>,
     #[serde(default)]
     pub repo_assignments: Vec<RepoAssignment>,
+    /// ISO 8601 timestamps. Optional for back-compat with channel files
+    /// written before these fields were tracked.
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

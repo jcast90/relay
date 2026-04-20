@@ -110,6 +110,19 @@ export class ChannelStore {
     return this.updateChannel(channelId, { status: "archived" });
   }
 
+  /**
+   * Bump a channel's `updatedAt` without patching any user-visible field.
+   * Called from activity writes (postEntry, recordDecision) so the sidebar
+   * can sort channels by most-recent activity. Silently no-ops if the
+   * channel is missing so activity on orphan feeds doesn't throw.
+   */
+  private async touchChannel(channelId: string): Promise<void> {
+    const channel = await this.getChannel(channelId);
+    if (!channel) return;
+    channel.updatedAt = new Date().toISOString();
+    await this.writeChannel(channel);
+  }
+
   // --- Members ---
 
   async joinChannel(channelId: string, member: Omit<ChannelMember, "joinedAt" | "status">): Promise<Channel | null> {
@@ -197,6 +210,9 @@ export class ChannelStore {
       join(feedDir, "feed.jsonl"),
       JSON.stringify(entry) + "\n"
     );
+
+    // Bump channel-level activity so sorts by updatedAt reflect feed writes.
+    await this.touchChannel(channelId);
 
     return entry;
   }

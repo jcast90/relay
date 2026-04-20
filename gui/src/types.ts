@@ -33,6 +33,9 @@ export type Channel = {
   members: ChannelMember[];
   pinnedRefs: ChannelRef[];
   repoAssignments: RepoAssignment[];
+  // ISO 8601; optional for back-compat with older channel files.
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 export type ChannelEntry = {
