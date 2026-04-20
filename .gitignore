@@ -9,3 +9,7 @@ gui/dist/
 gui/src-tauri/target/
 gui/src-tauri/gen/
 gui/tsconfig.tsbuildinfo
+# Mobile icon sets — only used if we target Android / iOS from Tauri. Generated
+# on demand by `pnpm tauri icon`.
+gui/src-tauri/icons/android/
+gui/src-tauri/icons/ios/
