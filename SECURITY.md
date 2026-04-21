@@ -28,7 +28,7 @@ These are deliberate trade-offs, not bugs. Please don't report them as vulnerabi
 
 - **`RELAY_AUTO_APPROVE=1` disables every permission check** in Claude and Codex (`--dangerously-skip-permissions` / `--full-auto`). That is the entire point of the flag — it exists so multi-hour unattended runs don't stall on prompts. Use it only when you trust the tasks you're dispatching.
 - **macOS Terminal spawning via `osascript`** requires the user to grant Automation permissions to their terminal once. Once granted, Relay can open Terminal tabs and run `rly claude` in them without further prompts. This is a feature (spawning associated-repo agents) not a privilege escalation.
-- **MCP tools run with the agent's full access.** Relay does not sandbox what Claude/Codex do inside a session — if the agent has shell access, so does anything it gets prompt-injected into running. For isolation, use the `PodExecutor` (Kubernetes) backend; verifications then run in a pod against a per-workspace PVC instead of on your laptop.
+- **MCP tools run with the agent's full access.** Relay does not sandbox what Claude/Codex do inside a session — if the agent has shell access, so does anything it gets prompt-injected into running. Run Relay inside a dedicated workspace / user account if you need tighter isolation.
 - **Tokens live in `~/.relay/config.env`** with standard Unix permissions. `GITHUB_TOKEN`, `LINEAR_API_KEY`, `COMPOSIO_API_KEY`, and any other secrets you put there are readable by anything running as your user. If someone has read access to your home directory, they have your tokens.
 
 ## Supported versions

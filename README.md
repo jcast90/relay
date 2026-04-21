@@ -337,14 +337,9 @@ All state — runs, tickets, decisions, crosslink messages, agent-names, workspa
 
 The interface is intentionally small (docs, changefeeds, logs, blobs) so adding a third backend is bounded work.
 
-### Executor (local vs. pod)
+### Executor
 
-Verification commands run through an `Executor` abstraction (`src/execution/executor.ts`):
-
-- **LocalChildProcessExecutor** — default. Spawns locally.
-- **PodExecutor + PVCSandboxProvider** — Kubernetes (T-403). Runs each ticket's verification in a pod against a per-workspace PVC. Enables cloud-side agent fleets without giving them your laptop.
-
-Both sit behind the same interface; the orchestrator doesn't care which one is live.
+Verification commands run through an `Executor` abstraction (`src/execution/executor.ts`). Today the only shipping impl is **LocalChildProcessExecutor** — spawns locally. A pod-based executor was prototyped but has been removed until it's wired end-to-end; see the OSS-08 PR for context.
 
 ## Configuration
 
@@ -404,7 +399,7 @@ src/
   agents/                     # Claude/Codex CLI adapters, registry, invocation
   channels/                   # ChannelStore, feed, decisions, ao-notifier
   integrations/               # AO plugins — tracker, scm, pr-poller, env-mutex
-  execution/                  # executor abstraction, verification-runner, k8s pod executor
+  execution/                  # executor abstraction, verification-runner
   storage/                    # HarnessStore interface + file / postgres backends
   domain/                     # shared types + zod schemas
   mcp/                        # MCP server + tool definitions
@@ -472,7 +467,6 @@ A **`CLAUDE.md`** at the repo root (when present) tells any Claude agent working
 - **Spawn is macOS-only.** Linux/Windows users launch associated-repo agents manually.
 - **Cost guardrails not yet implemented.** Token usage isn't tracked or capped. Use `RELAY_AUTO_APPROVE=1` with care.
 - **Postgres backend is opt-in, file-only is default.** The coordination features (`LISTEN/NOTIFY` cross-agent decision broadcasts) activate when Postgres is configured.
-- **Pod executor is feature-flagged.** Needs a Kubernetes cluster and kubeconfig; runs verifications in pods against per-workspace PVCs.
 
 ## License
 

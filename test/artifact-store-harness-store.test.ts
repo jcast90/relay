@@ -201,8 +201,7 @@ describe("LocalArtifactStore with HarnessStore injection", () => {
         suggestedSpecialties: [],
         estimatedTicketCount: 1,
         needsDesignDoc: false,
-        needsUserApproval: false,
-        crosslinkRepos: []
+        needsUserApproval: false
       }
     });
 

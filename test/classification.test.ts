@@ -19,8 +19,7 @@ describe("classification domain", () => {
       suggestedSpecialties: ["ui", "api_crud"],
       estimatedTicketCount: 5,
       needsDesignDoc: false,
-      needsUserApproval: true,
-      crosslinkRepos: []
+      needsUserApproval: true
     });
 
     expect(result.tier).toBe("feature_large");

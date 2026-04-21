@@ -51,7 +51,6 @@
     "@aoagents/ao-plugin-scm-github": "0.2.5",
     "@aoagents/ao-plugin-tracker-github": "0.2.5",
     "@aoagents/ao-plugin-tracker-linear": "0.2.5",
-    "@kubernetes/client-node": "^1.4.0",
     "pg": "^8.20.0",
     "tsx": "^4.20.6"
   }

@@ -20,7 +20,11 @@ export const ClassificationResultSchema = z.object({
   estimatedTicketCount: z.number().int().min(1).max(50),
   needsDesignDoc: z.boolean(),
   needsUserApproval: z.boolean(),
-  crosslinkRepos: z.array(z.string()).default([]),
+  // NOTE: orchestrator-level crosslink coordination is not wired — use the
+  // session-level crosslink MCP tools (src/mcp/) + session-discovery
+  // (src/crosslink/) instead. A prior draft of this schema carried a
+  // `crosslinkRepos` field produced by the classifier, but nothing downstream
+  // consumed it; it has been removed.
   /**
    * Branch name suggested by a tracker plugin (GitHub/Linear) when the request
    * was an issue URL or bare Linear identifier. Purely advisory — callers may
@@ -72,11 +76,7 @@ export const classificationResultJsonSchema = {
       maximum: 50
     },
     needsDesignDoc: { type: "boolean" },
-    needsUserApproval: { type: "boolean" },
-    crosslinkRepos: {
-      type: "array",
-      items: { type: "string" }
-    }
+    needsUserApproval: { type: "boolean" }
   }
 } as const;
 

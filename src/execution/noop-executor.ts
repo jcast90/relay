@@ -101,8 +101,8 @@ class NoopExecutionHandle implements ExecutionHandle {
  * Test double implementing {@link AgentExecutor}. Produces a synthetic
  * success run with no side effects — use for scheduler unit tests and
  * smoke tests that do not need real process spawning. Not a reference
- * implementation; see T-202 (LocalChildProcessExecutor) and T-403
- * (PodExecutor) for production impls.
+ * implementation; see T-202 (LocalChildProcessExecutor) for the
+ * production impl.
  */
 export class NoopExecutor implements AgentExecutor {
   private counter = 0;
