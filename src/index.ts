@@ -31,7 +31,8 @@ import {
 import { addProjectDir, readConfig, removeProjectDir } from "./cli/config.js";
 import { LocalArtifactStore } from "./execution/artifact-store.js";
 import { getHarnessStore } from "./storage/factory.js";
-import { startMcpServer } from "./mcp/server.js";
+import { buildMcpMessageHandler, startMcpServer } from "./mcp/server.js";
+import { startHttpMcpServer } from "./mcp/http-transport.js";
 import { VerificationRunner } from "./execution/verification-runner.js";
 import { Orchestrator } from "./orchestrator/orchestrator.js";
 import { OrchestratorV2 } from "./orchestrator/orchestrator-v2.js";
@@ -179,6 +180,11 @@ export async function main(): Promise<void> {
 
   if (command === "mcp-server") {
     await startMcpServer(resolveWorkspaceRoot(cwd, args));
+    return;
+  }
+
+  if (command === "serve") {
+    await handleServeCommand(cwd, args);
     return;
   }
 
@@ -1448,6 +1454,143 @@ async function readPackageVersion(): Promise<string> {
 
 function resolveCliEntrypoint(): string {
   return fileURLToPath(new URL("../dist/cli.js", import.meta.url));
+}
+
+async function handleServeCommand(cwd: string, args: string[]): Promise<void> {
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log("Usage: rly serve [--port <n>] [--host <host>] [--token <token>] [--workspace <id>]");
+    console.log("");
+    console.log("Starts an HTTP/SSE MCP server exposing Relay's tool surface.");
+    console.log("");
+    console.log("Options:");
+    console.log("  --port <n>                         TCP port to bind (env: RELAY_PORT, default: 7420)");
+    console.log("  --host <host>                      Host/interface (default: 127.0.0.1 / loopback only)");
+    console.log("  --token <token>                    Require Authorization: Bearer <token> (env: RELAY_TOKEN)");
+    console.log("  --workspace <id>                   Workspace id (required unless the current repo is registered via `rly up`)");
+    console.log("  --allow-unauthenticated-remote     Opt-in: allow non-loopback --host without --token (DANGEROUS)");
+    console.log("");
+    console.log("For multi-host deployments pass BOTH --host 0.0.0.0 AND --token explicitly.");
+    return;
+  }
+
+  try {
+    await runServeCommand(cwd, args);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    const code = err?.code;
+    if (code === "EADDRINUSE") {
+      // Port already bound — user needs to pick a different one or stop the
+      // conflicting process. Don't dump the raw stack.
+      const port = parseNamedArg(args, "--port") ?? process.env.RELAY_PORT ?? "7420";
+      console.error(`[rly serve] Port ${port} is already in use. Try --port <n>.`);
+    } else if (code === "EACCES") {
+      const port = parseNamedArg(args, "--port") ?? process.env.RELAY_PORT ?? "7420";
+      const host = parseNamedArg(args, "--host") ?? "127.0.0.1";
+      console.error(
+        `[rly serve] Permission denied binding to ${host}:${port}. Try --port > 1024 or run with sudo.`
+      );
+    } else {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[rly serve] Failed to start MCP server: ${msg}`);
+    }
+    process.exit(1);
+  }
+}
+
+async function runServeCommand(cwd: string, args: string[]): Promise<void> {
+  const portArg = parseNamedArg(args, "--port") ?? process.env.RELAY_PORT;
+  const port = portArg ? Number(portArg) : 7420;
+  if (!Number.isFinite(port) || port < 0 || port > 65535) {
+    console.error(`Invalid port: ${portArg}`);
+    process.exit(1);
+  }
+
+  // Loopback-by-default: MCP surface exposes sensitive tools (harness_dispatch,
+  // plan approval). Opt-in to non-loopback via --host.
+  const host = parseNamedArg(args, "--host") ?? "127.0.0.1";
+  const token = parseNamedArg(args, "--token") ?? process.env.RELAY_TOKEN;
+  const allowUnauthenticatedRemote = args.includes("--allow-unauthenticated-remote");
+
+  let workspaceId = parseNamedArg(args, "--workspace");
+  if (!workspaceId) {
+    const workspaces = await listRegisteredWorkspaces();
+    const match = workspaces.find((w) => w.repoPath === cwd);
+    if (!match) {
+      console.error(
+        "No workspace id. Register the current repo with `rly up` or pass --workspace <id>."
+      );
+      process.exit(1);
+    }
+    workspaceId = match.workspaceId;
+  }
+
+  const isLoopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
+
+  if (!isLoopback && !token && !allowUnauthenticatedRemote) {
+    // Refuse to start: a non-loopback bind with no auth token is effectively
+    // "the internet can use your dispatch surface". Require explicit opt-in.
+    console.error(
+      `[rly serve] Refusing to start: --host ${host} is non-loopback and no --token was provided.`
+    );
+    console.error(
+      "           Either pass --token <token> (recommended) or --allow-unauthenticated-remote to override."
+    );
+    process.exit(1);
+  }
+
+  if (!token) {
+    console.warn(
+      "[rly serve] WARNING: no auth token — anyone who can reach this host:port can use the MCP server."
+    );
+    console.warn("           Set RELAY_TOKEN or pass --token <token> to require a Bearer token.");
+  }
+
+  if (!isLoopback && !token && allowUnauthenticatedRemote) {
+    console.warn(
+      `[rly serve] WARNING: listening on non-loopback host "${host}" without auth (--allow-unauthenticated-remote). This is dangerous.`
+    );
+  }
+
+  const handle = await startHttpMcpServer(
+    async () => {
+      const { handler, context } = await buildMcpMessageHandler(cwd);
+      return { handler, cleanup: context.cleanup };
+    },
+    { port, host, authToken: token, workspaceId }
+  );
+
+  console.log(`Serving MCP at ${handle.url}`);
+  console.log(`Workspace: ${workspaceId}`);
+  console.log(`Auth: ${token ? "Bearer token required" : "none (loopback only recommended)"}`);
+  console.log("Press Ctrl+C to stop.");
+
+  let stopping = false;
+  const shutdown = async (signal: string): Promise<void> => {
+    if (stopping) return;
+    stopping = true;
+    console.log(`\n[rly serve] received ${signal}, shutting down...`);
+    try {
+      await handle.stop();
+    } catch (error) {
+      console.error("[rly serve] stop failed:", error instanceof Error ? error.message : error);
+    }
+    process.exit(0);
+  };
+
+  const onSignal = (signal: "SIGINT" | "SIGTERM") => (): void => {
+    // Run the async shutdown and log any terminal error rather than letting
+    // the promise reject into an unhandledRejection.
+    shutdown(signal).catch((err) => {
+      console.error(
+        "[rly serve] shutdown failed:",
+        err instanceof Error ? err.message : String(err)
+      );
+      process.exit(1);
+    });
+  };
+
+  process.on("SIGINT", onSignal("SIGINT"));
+  process.on("SIGTERM", onSignal("SIGTERM"));
 }
 
 function resolveWorkspaceRoot(cwd: string, args: string[]): string {

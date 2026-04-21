@@ -122,8 +122,23 @@ The **TUI** (`rly tui`, built with `--with-tui`) and **GUI** (built with `--with
 | `rly gui` | Launch the Tauri desktop app (auto-builds on first run; `--dev` for hot reload) |
 | `rly rebuild` | Rebuild the TS dist; `--tui` / `--gui` / `--all` to rebuild more |
 | `rly welcome` | 6-step interactive tour of Relay's concepts and commands |
+| `rly serve [--port N] [--host H] [--token T] [--workspace ID]` | Expose the Relay MCP server over HTTP/SSE (loopback-only by default) |
 
 `agent-harness <cmd>` is accepted as a legacy alias for `rly <cmd>` — both binaries are shipped so existing scripts don't break. `rly` reads current TypeScript source by default (via `tsx`), so a rebuild is **not** required after `git pull`. Set `RELAY_USE_DIST=1` for the compiled dist if you want slightly faster startup.
+
+### `rly serve` — HTTP/SSE MCP transport
+
+`rly serve` exposes the same MCP tool surface as `rly mcp-server` (which runs over stdio), but over HTTP with Server-Sent Events. Useful when you want to drive Relay from a remote agent, browser client, or multi-process local setup.
+
+```bash
+rly serve --port 7420                       # loopback, no auth
+rly serve --token $(openssl rand -hex 16)   # loopback, bearer-token required
+RELAY_TOKEN=... rly serve --host 0.0.0.0    # bound to all interfaces — ONLY with a token
+```
+
+Clients open `GET /sse` to receive a session endpoint, then `POST /message?sessionId=...` with JSON-RPC payloads; server responses arrive as `event: message` frames on the SSE stream. This matches the `SSEServerTransport` pattern from the official MCP SDK.
+
+**Security:** `rly serve` binds to `127.0.0.1` by default — the server is only reachable from the same machine. Never bind to a public interface (`--host 0.0.0.0`) without also passing `--token <secret>` (or `RELAY_TOKEN`): the MCP surface includes `harness_dispatch` and plan-approval tools that can kick off agent runs, so unauthenticated exposure on the network is a real risk. Rate limiting and audit logging are intentionally out of scope — put `rly serve` behind a reverse proxy if you need them.
 
 ## MCP tools (15)
 
