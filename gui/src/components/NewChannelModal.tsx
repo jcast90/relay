@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import type { WorkspaceEntry } from "../types";
 
@@ -18,13 +18,18 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [repos, setRepos] = useState<RepoRow[]>([]);
+  const [filter, setFilter] = useState("");
+  const [highlightIdx, setHighlightIdx] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const filterRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
     setName("");
     setDescription("");
+    setFilter("");
+    setHighlightIdx(0);
     setError(null);
     api.listWorkspaces().then((ws) => {
       setRepos(
@@ -37,7 +42,73 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
     });
   }, [open]);
 
+  // Visible rows after filter. `origIndex` keeps a pointer back to the master
+  // `repos` array so toggles / alias edits never corrupt non-visible
+  // selections when the filter changes.
+  const visible = useMemo(() => {
+    const tokens = filter.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return repos
+      .map((r, origIndex) => ({ row: r, origIndex }))
+      .filter(({ row }) => {
+        if (tokens.length === 0) return true;
+        const haystack = [
+          row.workspace.repoPath,
+          row.workspace.workspaceId,
+          row.alias,
+        ]
+          .join(" ")
+          .toLowerCase();
+        return tokens.every((tok) => haystack.includes(tok));
+      });
+  }, [repos, filter]);
+
+  useEffect(() => {
+    if (highlightIdx >= visible.length) {
+      setHighlightIdx(Math.max(0, visible.length - 1));
+    }
+  }, [visible.length, highlightIdx]);
+
   if (!open) return null;
+
+  const toggleSelected = (origIndex: number) => {
+    setRepos((prev) =>
+      prev.map((row, j) =>
+        j === origIndex ? { ...row, selected: !row.selected } : row,
+      ),
+    );
+  };
+
+  const updateAlias = (origIndex: number, alias: string) => {
+    setRepos((prev) =>
+      prev.map((row, j) => (j === origIndex ? { ...row, alias } : row)),
+    );
+  };
+
+  const onFilterKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlightIdx((i) => Math.min(visible.length - 1, i + 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlightIdx((i) => Math.max(0, i - 1));
+    } else if (e.key === " ") {
+      // Space toggles the currently highlighted row when the filter field has
+      // focus. Avoids the built-in "space in a text input" conflict by only
+      // intercepting when there's a highlighted visible row.
+      const target = visible[highlightIdx];
+      if (target) {
+        e.preventDefault();
+        toggleSelected(target.origIndex);
+      }
+    } else if (e.key === "Escape") {
+      if (filter.length > 0) {
+        e.preventDefault();
+        setFilter("");
+      }
+    }
+  };
+
+  const selectedCount = repos.filter((r) => r.selected).length;
 
   const submit = async () => {
     if (!name.trim()) {
@@ -87,43 +158,60 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
             />
           </label>
           <div className="repo-list">
-            <div className="modal-subhead">Repos</div>
-            {repos.length === 0 && (
+            <div className="repo-list-head">
+              <span className="modal-subhead">
+                Repos ({visible.length}/{repos.length}
+                {selectedCount > 0 ? ` · ${selectedCount} selected` : ""})
+              </span>
+            </div>
+            {repos.length === 0 ? (
               <div className="empty">
                 No registered workspaces. Run `rly up` in a repo first.
               </div>
+            ) : (
+              <>
+                <input
+                  ref={filterRef}
+                  className="repo-filter"
+                  value={filter}
+                  onChange={(e) => setFilter(e.target.value)}
+                  onKeyDown={onFilterKeyDown}
+                  placeholder="filter by path, alias, or workspace id · ↑↓ navigate · Space toggle · Esc clear"
+                />
+                <div className="repo-rows">
+                  {visible.length === 0 ? (
+                    <div className="empty">No repos match “{filter}”.</div>
+                  ) : (
+                    visible.map(({ row, origIndex }, i) => (
+                      <div
+                        key={row.workspace.workspaceId}
+                        className={`repo-row ${i === highlightIdx ? "highlighted" : ""}`}
+                        onClick={() => setHighlightIdx(i)}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={row.selected}
+                          onChange={() => toggleSelected(origIndex)}
+                        />
+                        <span
+                          className="repo-path"
+                          title={row.workspace.repoPath}
+                        >
+                          {basename(row.workspace.repoPath)}
+                        </span>
+                        <input
+                          className="alias-input"
+                          value={row.alias}
+                          onChange={(e) => updateAlias(origIndex, e.target.value)}
+                          placeholder="alias"
+                          disabled={!row.selected}
+                        />
+                      </div>
+                    ))
+                  )}
+                </div>
+              </>
             )}
-            {repos.map((r, i) => (
-              <div key={r.workspace.workspaceId} className="repo-row">
-                <input
-                  type="checkbox"
-                  checked={r.selected}
-                  onChange={(e) =>
-                    setRepos((prev) =>
-                      prev.map((row, j) =>
-                        i === j ? { ...row, selected: e.target.checked } : row,
-                      ),
-                    )
-                  }
-                />
-                <span className="repo-path" title={r.workspace.repoPath}>
-                  {basename(r.workspace.repoPath)}
-                </span>
-                <input
-                  className="alias-input"
-                  value={r.alias}
-                  onChange={(e) =>
-                    setRepos((prev) =>
-                      prev.map((row, j) =>
-                        i === j ? { ...row, alias: e.target.value } : row,
-                      ),
-                    )
-                  }
-                  placeholder="alias"
-                  disabled={!r.selected}
-                />
-              </div>
-            ))}
           </div>
           {error && <div className="error">{error}</div>}
         </div>
