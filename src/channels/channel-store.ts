@@ -84,10 +84,21 @@ export class ChannelStore {
     description: string;
     workspaceIds?: string[];
     repoAssignments?: RepoAssignment[];
+    primaryWorkspaceId?: string;
   }): Promise<Channel> {
     await mkdir(this.channelsDir, { recursive: true });
 
     const now = new Date().toISOString();
+    // Only keep primaryWorkspaceId when it actually points at one of the
+    // provided assignments. Silently drop a dangling id so callers don't
+    // end up with a "primary" that resolves to nothing on the next read.
+    const assignments = input.repoAssignments;
+    const primaryWorkspaceId =
+      input.primaryWorkspaceId &&
+      assignments?.some((a) => a.workspaceId === input.primaryWorkspaceId)
+        ? input.primaryWorkspaceId
+        : undefined;
+
     const channel: Channel = {
       channelId: buildChannelId(),
       name: input.name,
@@ -96,7 +107,8 @@ export class ChannelStore {
       workspaceIds: input.workspaceIds ?? [],
       members: [],
       pinnedRefs: [],
-      repoAssignments: input.repoAssignments,
+      repoAssignments: assignments,
+      primaryWorkspaceId,
       createdAt: now,
       updatedAt: now
     };
@@ -144,7 +156,17 @@ export class ChannelStore {
 
   async updateChannel(
     channelId: string,
-    patch: Partial<Pick<Channel, "name" | "description" | "status" | "workspaceIds" | "repoAssignments">>
+    patch: Partial<
+      Pick<
+        Channel,
+        | "name"
+        | "description"
+        | "status"
+        | "workspaceIds"
+        | "repoAssignments"
+        | "primaryWorkspaceId"
+      >
+    >
   ): Promise<Channel | null> {
     const channel = await this.getChannel(channelId);
     if (!channel) return null;
@@ -155,8 +177,61 @@ export class ChannelStore {
       updatedAt: new Date().toISOString()
     };
 
+    // Reconcile primaryWorkspaceId against the (possibly updated) repo list.
+    // Rules:
+    //   - If primaryWorkspaceId points at a workspace still present in
+    //     repoAssignments, keep it.
+    //   - If the caller explicitly set primaryWorkspaceId to undefined in
+    //     the patch (i.e. the key is present but the value is undefined),
+    //     respect that as "clear primary".
+    //   - Otherwise, if the current primary no longer matches any
+    //     assignment (e.g. because it was removed from the repos list),
+    //     fall back to the first remaining assignment, or clear the field
+    //     when no assignments remain.
+    const primaryExplicitlyCleared =
+      Object.prototype.hasOwnProperty.call(patch, "primaryWorkspaceId") &&
+      patch.primaryWorkspaceId === undefined;
+    const assignments = updated.repoAssignments ?? [];
+    const currentPrimary = updated.primaryWorkspaceId;
+    const primaryStillValid =
+      !!currentPrimary &&
+      assignments.some((a) => a.workspaceId === currentPrimary);
+
+    if (primaryExplicitlyCleared) {
+      updated.primaryWorkspaceId = undefined;
+    } else if (!primaryStillValid) {
+      updated.primaryWorkspaceId = assignments[0]?.workspaceId;
+    }
+
     await this.writeChannel(updated);
     return updated;
+  }
+
+  /**
+   * Return the `RepoAssignment` that should be treated as the channel's
+   * primary repo. Resolution order:
+   *   1. `channel.primaryWorkspaceId` matches an entry in `repoAssignments`.
+   *   2. Fall back to `repoAssignments[0]` (first registered repo).
+   *   3. `null` when the channel has no repo assignments at all.
+   *
+   * Back-compat: a `primaryWorkspaceId` that doesn't match any assignment
+   * is ignored in favor of the first-repo fallback, so a stale id from an
+   * older channel file never strands the channel.
+   */
+  getPrimaryAssignment(channel: Channel): RepoAssignment | null {
+    const assignments = channel.repoAssignments ?? [];
+    if (assignments.length === 0) {
+      return null;
+    }
+
+    if (channel.primaryWorkspaceId) {
+      const match = assignments.find(
+        (a) => a.workspaceId === channel.primaryWorkspaceId
+      );
+      if (match) return match;
+    }
+
+    return assignments[0] ?? null;
   }
 
   async archiveChannel(channelId: string): Promise<Channel | null> {

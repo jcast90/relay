@@ -237,6 +237,36 @@ button.primary { background: var(--accent-dim); border-color: var(--accent); }
 }
 .ticket .ticket-meta { color: var(--text-muted); font-size: 10px; margin-top: 4px; }
 
+/* Small "@alias" pill on ticket cards + inline in other surfaces. Uses the
+   sapphire accent at low opacity so it reads as secondary metadata, not a
+   status signal. */
+.ticket-alias-chip {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  border-radius: 10px;
+  background: var(--accent-dim);
+  color: var(--text);
+}
+
+/* PRIMARY tag — rendered next to the selected primary row in the new-channel
+   modal and in the right pane's repo list. Mauve keeps it distinct from the
+   alias chip (sapphire) and from the accent-blue used for active channels. */
+.primary-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  border-radius: 3px;
+  background: var(--system);
+  color: var(--bg);
+  vertical-align: middle;
+}
+
 /* Ticket detail modal */
 .ticket-modal {
   width: 520px;
@@ -518,14 +548,38 @@ button.primary { background: var(--accent-dim); border-color: var(--accent); }
   padding-right: 4px;
 }
 .repo-row {
+  /* Columns: selected checkbox · path (grows) · alias input · primary radio
+     · spawn checkbox. The primary/spawn slots use fixed widths so rows
+     line up across checked/unchecked states (placeholders fill the gap
+     when the row is unselected). */
   display: grid;
-  grid-template-columns: auto 1fr 110px;
+  grid-template-columns: auto 1fr 110px 72px 68px;
   gap: 8px;
   align-items: center;
   font-size: 12px;
   padding: 4px 6px;
   border-radius: 3px;
   cursor: default;
+}
+.repo-primary-radio,
+.repo-spawn-toggle {
+  font-size: 10px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.repo-primary-radio input,
+.repo-spawn-toggle input {
+  margin: 0;
+}
+.repo-primary-radio.placeholder,
+.repo-spawn-toggle.placeholder {
+  visibility: hidden;
 }
 .repo-row.highlighted {
   background: var(--bg-hover);
@@ -549,4 +603,55 @@ button.primary { background: var(--accent-dim); border-color: var(--accent); }
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* Non-fatal warning — used in the new-channel modal when the channel is
+   created but one or more spawn calls failed. Warmer than .error and not
+   blocking. */
+.warning {
+  color: var(--warn);
+  font-size: 12px;
+  padding: 6px 8px;
+  background: rgba(250, 179, 135, 0.1);
+  border-radius: 4px;
+}
+
+/* Spawned-agents panel (RightPane). Mirrors .repo-row spacing so it reads
+   as peer visual weight to the Repos section just above it. */
+.spawn-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.spawn-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  padding: 3px 0;
+}
+.spawn-row .spawn-alias { color: var(--accent); font-weight: 500; }
+.spawn-row .spawn-repo {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kill-button {
+  padding: 2px 8px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  background: transparent;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.kill-button:hover {
+  color: var(--error);
+  border-color: var(--error);
+  background: rgba(243, 139, 168, 0.08);
 }

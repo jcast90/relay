@@ -8,6 +8,7 @@ import type {
   Decision,
   PersistedChatMessage,
   RunIndexEntry,
+  Spawn,
   TicketLedgerEntry,
   WorkspaceEntry,
   AgentNameEntry,
@@ -49,11 +50,13 @@ export const api = {
     name: string,
     description: string,
     repos: { alias: string; workspaceId: string; repoPath: string }[],
+    primaryWorkspaceId?: string,
   ) =>
     invoke<{ channelId: string }>("create_channel", {
       name,
       description,
       repos,
+      primaryWorkspaceId,
     }),
   archiveChannel: (channelId: string) =>
     invoke<unknown>("archive_channel", { channelId }),
@@ -102,6 +105,19 @@ export const api = {
     claudeSessionId?: string;
     autoApprove: boolean;
   }) => invoke<number>("start_chat", params),
+
+  // Task #24 contract. These invoke wrappers are thin passthroughs that
+  // assume the Rust side registers `spawn_agent`, `list_spawns`, and
+  // `kill_spawned_agent` commands that accept / return camelCase via
+  // serde rename_all. Until that lands, calls here will reject at runtime
+  // with a "command not found"-style error — which surfaces inline in the
+  // spawn UI rather than crashing the app.
+  spawnAgent: (channelId: string, alias: string, repoPath: string) =>
+    invoke<Spawn>("spawn_agent", { channelId, alias, repoPath }),
+  listSpawns: (channelId: string) =>
+    invoke<Spawn[]>("list_spawns", { channelId }),
+  killSpawnedAgent: (channelId: string, alias: string) =>
+    invoke<void>("kill_spawned_agent", { channelId, alias }),
 };
 
 export type ChatEvent =

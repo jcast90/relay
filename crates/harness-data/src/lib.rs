@@ -56,6 +56,11 @@ pub struct TicketLedgerEntry {
     pub assigned_agent_name: Option<String>,
     pub verification: String,
     pub attempt: u32,
+    /// Alias of the channel repo assignment this ticket should be routed
+    /// to. Optional and `#[serde(default)]`-backed so ticket files written
+    /// before per-repo routing existed still deserialize.
+    #[serde(default)]
+    pub assigned_alias: Option<String>,
 }
 
 // --- Channel ---
@@ -80,6 +85,14 @@ pub struct Channel {
     pub pinned_refs: Vec<ChannelRef>,
     #[serde(default)]
     pub repo_assignments: Vec<RepoAssignment>,
+    /// When set, identifies the `workspace_id` of the entry in
+    /// `repo_assignments` that is this channel's primary repo. Back-compat
+    /// via `#[serde(default)]` — channel files predating the
+    /// primary/associated model omit this field and deserialize with
+    /// `None`, in which case consumers fall back to the first entry in
+    /// `repo_assignments`.
+    #[serde(default)]
+    pub primary_workspace_id: Option<String>,
     /// ISO 8601 timestamps. Optional for back-compat with channel files
     /// written before these fields were tracked.
     #[serde(default)]

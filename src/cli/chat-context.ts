@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { ChannelStore } from "../channels/channel-store.js";
+import type { Channel, RepoAssignment } from "../domain/channel.js";
 import { getHarnessStore } from "../storage/factory.js";
 import { getRelayDir } from "./paths.js";
 import { SessionStore } from "./session-store.js";
@@ -56,6 +57,57 @@ function collectRepoContext(repoPath: string): string {
   return lines.length > 0 ? lines.join("\n") : "";
 }
 
+/**
+ * Read up to `limit` lines of AGENTS.md from a repo root. Checks common
+ * case variants (`AGENTS.md`, `Agents.md`, `agents.md`) so we work on
+ * case-sensitive filesystems without silently missing a differently-cased
+ * file. Returns `null` when no variant exists or any read error occurs —
+ * callers render a short placeholder in that case so the system prompt
+ * never blows up on a missing doc.
+ */
+export function readAgentsMdSummary(repoPath: string, limit = 40): string | null {
+  const variants = ["AGENTS.md", "Agents.md", "agents.md"];
+  for (const name of variants) {
+    const path = join(repoPath, name);
+    if (!existsSync(path)) continue;
+    try {
+      const head = readFileSync(path, "utf8")
+        .split("\n")
+        .slice(0, limit)
+        .join("\n")
+        .trimEnd();
+      return head.length > 0 ? head : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Resolve the primary repo assignment for a channel. Prefers the repo whose
+ * workspaceId matches `channel.primaryWorkspaceId` (set by Task #22 when the
+ * user picks a primary in the GUI); falls back to the first assignment so
+ * pre-migration channels and channels created before the field existed keep
+ * working. Returns `null` only when there are no assignments at all.
+ *
+ * Inlined here instead of imported from `ChannelStore` so this file stays
+ * the single source of truth for the primary/associated rule in the chat
+ * prompt layer — and so we don't hard-depend on a helper that may not have
+ * landed yet in a sibling task.
+ */
+function getPrimaryAssignment(channel: Channel): RepoAssignment | null {
+  const assignments = channel.repoAssignments ?? [];
+  if (assignments.length === 0) return null;
+  const primaryWorkspaceId = (channel as Channel & { primaryWorkspaceId?: string })
+    .primaryWorkspaceId;
+  if (primaryWorkspaceId) {
+    const match = assignments.find((r) => r.workspaceId === primaryWorkspaceId);
+    if (match) return match;
+  }
+  return assignments[0] ?? null;
+}
+
 export async function buildSystemPrompt(input: {
   channelId: string;
   repoPath?: string;
@@ -63,60 +115,122 @@ export async function buildSystemPrompt(input: {
 }): Promise<string> {
   const parts: string[] = [];
 
-  // Always pull the channel so we can surface ALL attached repos, not just
-  // the one the user prefixed with @alias. Previously a message with no alias
-  // prefix gave the agent zero channel-repo awareness — it would fall back to
-  // whatever context the global CLAUDE.md describes (e.g. a different stack).
   const channelStore = new ChannelStore();
   const channel = await channelStore.getChannel(input.channelId).catch(() => null);
   const assignments = channel?.repoAssignments ?? [];
+  const primary = channel ? getPrimaryAssignment(channel) : null;
 
-  if (assignments.length > 0) {
-    const focused = input.alias
-      ? assignments.find((r) => r.alias === input.alias) ?? null
-      : null;
+  if (channel && primary && assignments.length > 0) {
+    const associated = assignments.filter((r) => r.workspaceId !== primary.workspaceId);
 
-    if (focused) {
-      const focusedName = focused.repoPath.split("/").pop() ?? focused.repoPath;
+    // Role resolution: the session is "associated" only when an alias prefix
+    // identifies one of the non-primary repos. Any other case (no alias, or
+    // alias matches the primary) is treated as the primary role so the
+    // default unprefixed chat continues to speak from the primary repo.
+    const isAssociated = Boolean(
+      input.alias &&
+        assignments.some(
+          (r) => r.alias === input.alias && r.workspaceId !== primary.workspaceId
+        )
+    );
+
+    if (isAssociated) {
+      // input.alias is guaranteed truthy inside this branch; the `!` just
+      // lets TS narrow without an extra conditional.
+      const selfAlias = input.alias!;
+      const self = assignments.find((r) => r.alias === selfAlias)!;
+      const selfName = self.repoPath.split("/").pop() ?? self.repoPath;
+
       parts.push(
-        `You are working in the '${focusedName}' repository (alias: @${focused.alias}) at: ${focused.repoPath}. ` +
+        `You are an associated agent for channel '${channel.name}', attached as \`@${selfAlias}\`. ` +
+          `You work in \`${selfName}\` at: ${self.repoPath}. ` +
           `Your working directory is already set to this repo — do NOT search for it elsewhere. ` +
           `All file operations should be relative to this directory.`
       );
-      const focusedCtx = collectRepoContext(focused.repoPath);
-      if (focusedCtx) {
+
+      const selfCtx = collectRepoContext(self.repoPath);
+      if (selfCtx) {
         parts.push(
-          "\nFocused repo context (read at session start — may be stale after long runs):\n" +
-            focusedCtx
+          "\nYour repo context (read at session start — may be stale after long runs):\n" +
+            selfCtx
         );
       }
-      const others = assignments.filter((r) => r.alias !== focused.alias);
-      if (others.length > 0) {
-        parts.push(
-          "\nOther repos attached to this channel (prefix a message with the alias to switch focus):\n" +
-            others.map((r) => `  - @${r.alias}: ${r.repoPath}`).join("\n")
-        );
-      }
+
+      parts.push(
+        `\nPrimary agent: \`@${primary.alias}\` at ${primary.repoPath}. ` +
+          `You may receive crosslink messages from them and should reply promptly.`
+      );
+
+      const channelDir = join(getRelayDir(), "channels", channel.channelId);
+      const ticketsPath = join(channelDir, "tickets.json");
+      parts.push(
+        `\n### Ticket polling\n` +
+          `Read \`${ticketsPath}\` at the start of every prompt. Tickets where ` +
+          `\`assignedAlias === '${selfAlias}'\` and \`status === 'ready'\` are yours to work. ` +
+          `Claim a ticket by setting \`status\` to \`executing\` and \`startedAt\` to the current ISO-8601 timestamp. ` +
+          `When finished, set \`status\` to \`completed\` (or \`failed\` with a reason in your chat reply) and populate \`completedAt\`. ` +
+          `Use the full TicketLedgerEntry shape documented in the "Shared Ticket Board" section below — do not invent new fields.`
+      );
     } else {
-      // No focused alias — list every attached repo with git context so the
-      // agent knows what's in scope and picks the right one without asking.
+      // Primary role — default for unprefixed chat and for explicit
+      // @<primary-alias> prefixes.
+      const primaryName = primary.repoPath.split("/").pop() ?? primary.repoPath;
       parts.push(
-        `This channel is attached to ${assignments.length} repo${assignments.length === 1 ? "" : "s"}. ` +
-          `No specific repo was selected for this message (no @alias prefix), so treat all of them as in scope. ` +
-          `If the user's question is clearly about one, focus there; otherwise ask which.`
+        `You are the primary agent for channel '${channel.name}'. ` +
+          `You work in \`${primaryName}\` (alias: \`@${primary.alias}\`) at: ${primary.repoPath}. ` +
+          `Your working directory is already set to this repo — do NOT search for it elsewhere. ` +
+          `All file operations should be relative to this directory.`
       );
-      for (const r of assignments) {
-        const ctx = collectRepoContext(r.repoPath);
-        const ctxBlock = ctx ? `\n${ctx}` : "";
-        parts.push(`\n### @${r.alias} — ${r.repoPath}${ctxBlock}`);
+
+      const primaryCtx = collectRepoContext(primary.repoPath);
+      if (primaryCtx) {
+        parts.push(
+          "\nPrimary repo context (read at session start — may be stale after long runs):\n" +
+            primaryCtx
+        );
       }
-      parts.push(
-        "\nWhen the user prefixes a message with `@<alias> ...`, that repo becomes the active working directory."
-      );
+
+      if (associated.length > 0) {
+        const blocks: string[] = [
+          `\n### Associated repos`,
+          `These repos are attached to the channel but you do NOT work in them directly. ` +
+            `An associated agent is (or can be) attached to each one.`
+        ];
+        for (const r of associated) {
+          const aName = r.repoPath.split("/").pop() ?? r.repoPath;
+          const summary = readAgentsMdSummary(r.repoPath);
+          if (summary) {
+            blocks.push(
+              `\n- \`@${r.alias}\` — ${aName} at ${r.repoPath}\n` +
+                `  AGENTS.md (first 40 lines):\n\n` +
+                summary
+                  .split("\n")
+                  .map((line) => `  ${line}`)
+                  .join("\n")
+            );
+          } else {
+            blocks.push(
+              `\n- \`@${r.alias}\` — ${aName} at ${r.repoPath}\n` +
+                `  (no AGENTS.md found — primary agent may Read files directly if needed)`
+            );
+          }
+        }
+
+        blocks.push(
+          `\n### Delegating to associated agents\n` +
+            `For quick questions about an associated repo, use \`crosslink_send\` to message the agent there. ` +
+            `For long-running or multi-step work, write a ticket to the channel's \`tickets.json\` with ` +
+            `\`assignedAlias: '<alias>'\` set to the target associated repo's alias — the associated agent will pick it up on its next poll. ` +
+            `Do NOT modify files in associated repos directly; delegate instead.`
+        );
+
+        parts.push(blocks.join("\n"));
+      }
     }
   } else if (input.repoPath) {
-    // No channel-level assignments but an explicit --repo was passed (e.g.
-    // from the TUI / CLI flow). Fall back to the legacy single-repo path.
+    // Legacy single-repo path: no channel / no assignments, but an explicit
+    // --repo was passed (e.g. from the TUI / CLI flow before channels were
+    // created). Preserved verbatim from the pre-Task-#23 behavior.
     const repoName = input.repoPath.split("/").pop() ?? input.repoPath;
     if (input.alias) {
       parts.push(

@@ -12,6 +12,10 @@ type RepoRow = {
   workspace: WorkspaceEntry;
   selected: boolean;
   alias: string;
+  // Only one row can be primary at a time. We track it at the workspace-id
+  // level (see `primaryWorkspaceId` below) rather than on the row so the
+  // invariant "at most one primary" is centrally enforced.
+  spawn: boolean;
 };
 
 export function NewChannelModal({ open, onClose, onCreated }: Props) {
@@ -22,6 +26,16 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
   const [highlightIdx, setHighlightIdx] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Non-fatal warning shown after createChannel succeeds but one or more
+  // spawnAgent calls failed. We still navigate to the channel regardless.
+  const [spawnWarning, setSpawnWarning] = useState<string | null>(null);
+  // Which workspace is flagged primary. Null until the user checks the
+  // first row, at which point we auto-set to that row. If the current
+  // primary is later unchecked, we reassign to the earliest still-
+  // selected row (by master-array order, not visible order).
+  const [primaryWorkspaceId, setPrimaryWorkspaceId] = useState<string | null>(
+    null,
+  );
   const filterRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -31,12 +45,15 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
     setFilter("");
     setHighlightIdx(0);
     setError(null);
+    setSpawnWarning(null);
+    setPrimaryWorkspaceId(null);
     api.listWorkspaces().then((ws) => {
       setRepos(
         ws.map((w) => ({
           workspace: w,
           selected: false,
           alias: defaultAlias(w.repoPath),
+          spawn: false,
         })),
       );
     });
@@ -71,9 +88,59 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
   if (!open) return null;
 
   const toggleSelected = (origIndex: number) => {
+    // Compute next state based on current master array, then fold in the
+    // primary-assignment rule in a single pass so we don't race with React
+    // batching two setState calls.
+    setRepos((prev) => {
+      const next = prev.map((row, j) => {
+        if (j !== origIndex) return row;
+        const nowSelected = !row.selected;
+        // Deselecting also clears spawn so we don't carry a stale opt-in
+        // forward if the user re-selects later.
+        return {
+          ...row,
+          selected: nowSelected,
+          spawn: nowSelected ? row.spawn : false,
+        };
+      });
+      // Auto-assign / reassign primary:
+      //   - If nothing is currently primary and we just selected a row,
+      //     that row becomes primary.
+      //   - If the current primary just got unchecked, hand primary to the
+      //     earliest still-selected row (master-array order).
+      //   - If no selected rows remain, clear primary.
+      setPrimaryWorkspaceId((currentPrimary) => {
+        const selectedRows = next.filter((r) => r.selected);
+        if (selectedRows.length === 0) return null;
+        if (
+          currentPrimary &&
+          selectedRows.some((r) => r.workspace.workspaceId === currentPrimary)
+        ) {
+          return currentPrimary;
+        }
+        return selectedRows[0].workspace.workspaceId;
+      });
+      return next;
+    });
+  };
+
+  const setPrimary = (workspaceId: string) => {
+    // Radio-click: assumes the row is already selected (the radio is only
+    // rendered on selected rows). Defensive: verify and no-op otherwise.
+    setRepos((prev) => {
+      const match = prev.find(
+        (r) => r.workspace.workspaceId === workspaceId && r.selected,
+      );
+      if (!match) return prev;
+      setPrimaryWorkspaceId(workspaceId);
+      return prev;
+    });
+  };
+
+  const toggleSpawn = (origIndex: number) => {
     setRepos((prev) =>
       prev.map((row, j) =>
-        j === origIndex ? { ...row, selected: !row.selected } : row,
+        j === origIndex ? { ...row, spawn: !row.spawn } : row,
       ),
     );
   };
@@ -117,15 +184,57 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
     }
     setBusy(true);
     setError(null);
+    setSpawnWarning(null);
     try {
-      const selected = repos
-        .filter((r) => r.selected)
-        .map((r) => ({
-          alias: r.alias.trim() || defaultAlias(r.workspace.repoPath),
-          workspaceId: r.workspace.workspaceId,
-          repoPath: r.workspace.repoPath,
-        }));
-      const result = await api.createChannel(name.trim(), description.trim(), selected);
+      const selectedRows = repos.filter((r) => r.selected);
+      const selected = selectedRows.map((r) => ({
+        alias: r.alias.trim() || defaultAlias(r.workspace.repoPath),
+        workspaceId: r.workspace.workspaceId,
+        repoPath: r.workspace.repoPath,
+      }));
+      const effectivePrimary =
+        primaryWorkspaceId ?? selectedRows[0]?.workspace.workspaceId ?? undefined;
+      const result = await api.createChannel(
+        name.trim(),
+        description.trim(),
+        selected,
+        effectivePrimary,
+      );
+
+      // Spawn all non-primary rows that were opted-in. Run in parallel; a
+      // spawn failure surfaces as a warning but doesn't block navigation —
+      // the channel was created successfully, and the user can still
+      // launch agents later from the right pane.
+      const toSpawn = selectedRows.filter(
+        (r) =>
+          r.spawn &&
+          r.workspace.workspaceId !== effectivePrimary,
+      );
+      if (toSpawn.length > 0) {
+        const results = await Promise.all(
+          toSpawn.map(async (r) => {
+            const alias = r.alias.trim() || defaultAlias(r.workspace.repoPath);
+            try {
+              await api.spawnAgent(
+                result.channelId,
+                alias,
+                r.workspace.repoPath,
+              );
+              return { alias, ok: true as const };
+            } catch (e) {
+              return { alias, ok: false as const, error: String(e) };
+            }
+          }),
+        );
+        const failures = results.filter((x) => !x.ok);
+        if (failures.length > 0) {
+          setSpawnWarning(
+            `Channel created, but ${failures.length}/${results.length} spawn(s) failed: ` +
+              failures.map((f) => `@${f.alias}`).join(", "),
+          );
+        }
+      }
+
       onCreated(result.channelId);
       onClose();
     } catch (e) {
@@ -182,38 +291,88 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
                   {visible.length === 0 ? (
                     <div className="empty">No repos match “{filter}”.</div>
                   ) : (
-                    visible.map(({ row, origIndex }, i) => (
-                      <div
-                        key={row.workspace.workspaceId}
-                        className={`repo-row ${i === highlightIdx ? "highlighted" : ""}`}
-                        onClick={() => setHighlightIdx(i)}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={row.selected}
-                          onChange={() => toggleSelected(origIndex)}
-                        />
-                        <span
-                          className="repo-path"
-                          title={row.workspace.repoPath}
+                    visible.map(({ row, origIndex }, i) => {
+                      const isPrimary =
+                        row.selected &&
+                        primaryWorkspaceId === row.workspace.workspaceId;
+                      return (
+                        <div
+                          key={row.workspace.workspaceId}
+                          className={`repo-row ${i === highlightIdx ? "highlighted" : ""}`}
+                          onClick={() => setHighlightIdx(i)}
                         >
-                          {basename(row.workspace.repoPath)}
-                        </span>
-                        <input
-                          className="alias-input"
-                          value={row.alias}
-                          onChange={(e) => updateAlias(origIndex, e.target.value)}
-                          placeholder="alias"
-                          disabled={!row.selected}
-                        />
-                      </div>
-                    ))
+                          <input
+                            type="checkbox"
+                            checked={row.selected}
+                            onChange={() => toggleSelected(origIndex)}
+                            title="Include this repo in the channel"
+                          />
+                          <span
+                            className="repo-path"
+                            title={row.workspace.repoPath}
+                          >
+                            {basename(row.workspace.repoPath)}
+                            {isPrimary && (
+                              <span className="primary-badge">PRIMARY</span>
+                            )}
+                          </span>
+                          <input
+                            className="alias-input"
+                            value={row.alias}
+                            onChange={(e) => updateAlias(origIndex, e.target.value)}
+                            placeholder="alias"
+                            disabled={!row.selected}
+                          />
+                          {/* Primary radio: only rendered on selected rows.
+                              The label is the clickable surface; clicking the
+                              radio explicitly promotes this repo to primary. */}
+                          {row.selected ? (
+                            <label
+                              className="repo-primary-radio"
+                              title="Primary agent runs in the GUI main chat"
+                            >
+                              <input
+                                type="radio"
+                                name="primary-workspace"
+                                checked={isPrimary}
+                                onChange={() =>
+                                  setPrimary(row.workspace.workspaceId)
+                                }
+                              />
+                              primary
+                            </label>
+                          ) : (
+                            <span className="repo-primary-radio placeholder" />
+                          )}
+                          {/* Spawn checkbox: opt-in, visible only for
+                              non-primary selected rows. The primary agent
+                              runs in the main chat, so "spawn" doesn't
+                              apply to it. */}
+                          {row.selected && !isPrimary ? (
+                            <label
+                              className="repo-spawn-toggle"
+                              title="Launch an external Terminal agent for this repo on channel create"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={row.spawn}
+                                onChange={() => toggleSpawn(origIndex)}
+                              />
+                              spawn
+                            </label>
+                          ) : (
+                            <span className="repo-spawn-toggle placeholder" />
+                          )}
+                        </div>
+                      );
+                    })
                   )}
                 </div>
               </>
             )}
           </div>
           {error && <div className="error">{error}</div>}
+          {spawnWarning && <div className="warning">{spawnWarning}</div>}
         </div>
         <div className="modal-footer">
           <button onClick={onClose} disabled={busy}>
