@@ -8,7 +8,149 @@ export interface CommandInvocation {
   cwd: string;
   stdin?: string;
   timeoutMs?: number;
+  /**
+   * Explicit key/value overrides layered on top of the sanitized parent env.
+   * Keys here are NOT filtered by the secret regex — the caller has made an
+   * explicit decision to set them. Use this for values the caller synthesizes
+   * (e.g. `AGENT_HARNESS_HOME`, per-invocation overlays).
+   */
   env?: Record<string, string | undefined>;
+  /**
+   * Parent-env variable names to forward into the child. The sanitizer strips
+   * everything not on the default whitelist by default — including
+   * `ANTHROPIC_API_KEY`, `GITHUB_TOKEN`, AWS creds, etc. Callers that
+   * legitimately need a secret forwarded (e.g. a claude/codex CLI that reads
+   * `ANTHROPIC_API_KEY`, a subprocess that calls `gh` via `GITHUB_TOKEN`)
+   * opt-in per-name here.
+   *
+   * Values are copied from `process.env` at spawn time. Names not present in
+   * `process.env` are silently skipped.
+   */
+  passEnv?: string[];
+}
+
+/**
+ * Exact-match env vars the sanitizer always forwards from the parent process.
+ * Kept conservative — if a subprocess needs more, route it through
+ * {@link CommandInvocation.passEnv} or {@link CommandInvocation.env}.
+ */
+export const DEFAULT_ENV_WHITELIST: ReadonlySet<string> = new Set([
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "LANG",
+  "TZ",
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+  "TERM",
+  "PWD",
+  "NODE_ENV"
+]);
+
+/**
+ * Prefix families whose members are forwarded verbatim. `LC_*` covers the
+ * full locale family; `HARNESS_*` / `RELAY_*` / `AGENT_HARNESS_*` are the
+ * harness's own namespace for wiring workspace paths + feature flags into
+ * dispatched subprocesses.
+ */
+const DEFAULT_PREFIX_WHITELIST: readonly string[] = [
+  "LC_",
+  "HARNESS_",
+  "RELAY_",
+  "AGENT_HARNESS_"
+];
+
+/**
+ * Matches env var names that look like credentials. Covers suffix forms
+ * (`FOO_TOKEN`, `API_KEY`) and prefix forms (`TOKEN_FOO`, `KEY_BAR`). Used as
+ * a second-pass filter so a well-meaning addition to the whitelist can't
+ * accidentally leak a secret — the strip pass runs after the allow pass.
+ */
+const SECRET_NAME_PATTERN =
+  /(?:^|_)(TOKEN|KEY|SECRET|PASSWORD|PASSWD|CREDENTIAL|CREDS|AUTH)S?(?:_|$)/i;
+
+/** True if the variable name looks credential-shaped. */
+export function isSecretEnvName(name: string): boolean {
+  return SECRET_NAME_PATTERN.test(name);
+}
+
+export interface SanitizeEnvOptions {
+  /**
+   * Extra env-var names to forward from the parent process, in addition to
+   * {@link DEFAULT_ENV_WHITELIST}. These bypass the secret filter — use only
+   * for values the caller explicitly needs (e.g. `ANTHROPIC_API_KEY`).
+   */
+  passEnv?: string[];
+  /**
+   * Explicit key/value overrides layered on top of the sanitized parent env.
+   * These bypass the secret filter — the caller has made an explicit
+   * decision to set them.
+   */
+  env?: Record<string, string | undefined>;
+}
+
+/**
+ * Build the env map for a spawned subprocess.
+ *
+ *   1. Start from the default whitelist (plus the `*_` prefix families).
+ *   2. Add anything named in `opts.passEnv` that exists in `parentEnv`.
+ *   3. Strip any key matching the secret regex that wasn't explicitly
+ *      allowlisted via `passEnv` or `env` — defense in depth against
+ *      whitelist mistakes.
+ *   4. Layer `opts.env` on top (explicit overrides, not filtered).
+ *
+ * Returns a fresh object with no references back into `parentEnv`.
+ */
+export function sanitizeEnv(
+  parentEnv: NodeJS.ProcessEnv,
+  opts: SanitizeEnvOptions = {}
+): Record<string, string> {
+  const passEnvSet = new Set(opts.passEnv ?? []);
+  const explicitKeys = new Set<string>([
+    ...passEnvSet,
+    ...Object.keys(opts.env ?? {})
+  ]);
+  const result: Record<string, string> = {};
+
+  for (const [key, value] of Object.entries(parentEnv)) {
+    if (value === undefined) continue;
+
+    const isAllowlisted =
+      DEFAULT_ENV_WHITELIST.has(key) ||
+      DEFAULT_PREFIX_WHITELIST.some((prefix) => key.startsWith(prefix)) ||
+      passEnvSet.has(key);
+
+    if (!isAllowlisted) continue;
+
+    // Second pass: strip anything secret-shaped unless the caller explicitly
+    // asked for it. Belt-and-suspenders against a careless addition to the
+    // whitelist.
+    if (SECRET_NAME_PATTERN.test(key) && !explicitKeys.has(key)) continue;
+
+    result[key] = value;
+  }
+
+  if (opts.env) {
+    for (const [key, value] of Object.entries(opts.env)) {
+      if (value === undefined) {
+        delete result[key];
+      } else {
+        result[key] = value;
+      }
+    }
+  }
+
+  return result;
+}
+
+function buildChildEnv(invocation: CommandInvocation): Record<string, string> {
+  return sanitizeEnv(process.env, {
+    passEnv: invocation.passEnv,
+    env: invocation.env
+  });
 }
 
 export interface CommandResult {
@@ -60,6 +202,14 @@ export interface CommandInvoker {
   spawn?(invocation: CommandInvocation): SpawnedProcess;
 }
 
+/**
+ * Default {@link CommandInvoker}. Every spawned child receives a sanitized
+ * environment — see {@link sanitizeEnv}. The parent process's secrets are
+ * NOT inherited by default; callers that need `ANTHROPIC_API_KEY`,
+ * `GITHUB_TOKEN`, etc. opt-in per-invocation via
+ * {@link CommandInvocation.passEnv} (pull by name from `process.env`) or
+ * {@link CommandInvocation.env} (explicit key/value).
+ */
 export class NodeCommandInvoker implements CommandInvoker {
   async exec(invocation: CommandInvocation): Promise<CommandResult> {
     return new Promise((resolve, reject) => {
@@ -67,12 +217,9 @@ export class NodeCommandInvoker implements CommandInvoker {
         invocation.command,
         invocation.args,
         {
-        cwd: invocation.cwd,
-        env: {
-          ...process.env,
-          ...invocation.env
-        },
-        stdio: "pipe"
+          cwd: invocation.cwd,
+          env: buildChildEnv(invocation),
+          stdio: "pipe"
         }
       );
 
@@ -139,10 +286,7 @@ export class NodeCommandInvoker implements CommandInvoker {
       invocation.args,
       {
         cwd: invocation.cwd,
-        env: {
-          ...process.env,
-          ...invocation.env
-        },
+        env: buildChildEnv(invocation),
         stdio: "pipe"
       }
     );

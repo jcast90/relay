@@ -33,6 +33,7 @@ import { LocalArtifactStore } from "./execution/artifact-store.js";
 import { getHarnessStore } from "./storage/factory.js";
 import { buildMcpMessageHandler, startMcpServer } from "./mcp/server.js";
 import { startHttpMcpServer } from "./mcp/http-transport.js";
+import { validateServeOptions } from "./mcp/serve-validation.js";
 import { VerificationRunner } from "./execution/verification-runner.js";
 import { Orchestrator } from "./orchestrator/orchestrator.js";
 import { OrchestratorV2 } from "./orchestrator/orchestrator-v2.js";
@@ -1709,31 +1710,16 @@ async function runServeCommand(cwd: string, args: string[]): Promise<void> {
     workspaceId = match.workspaceId;
   }
 
-  const isLoopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
-
-  if (!isLoopback && !token && !allowUnauthenticatedRemote) {
-    // Refuse to start: a non-loopback bind with no auth token is effectively
-    // "the internet can use your dispatch surface". Require explicit opt-in.
-    console.error(
-      `[rly serve] Refusing to start: --host ${host} is non-loopback and no --token was provided.`
-    );
-    console.error(
-      "           Either pass --token <token> (recommended) or --allow-unauthenticated-remote to override."
-    );
+  // Validation rules for the non-loopback + auth decision table live in
+  // `serve-validation.ts` so tests can exercise them without shelling out a
+  // CLI subprocess. This handler is responsible for surfacing the decision.
+  const validation = validateServeOptions({ host, token, allowUnauthenticatedRemote });
+  if (validation.kind === "error") {
+    console.error(validation.message);
     process.exit(1);
   }
-
-  if (!token) {
-    console.warn(
-      "[rly serve] WARNING: no auth token — anyone who can reach this host:port can use the MCP server."
-    );
-    console.warn("           Set RELAY_TOKEN or pass --token <token> to require a Bearer token.");
-  }
-
-  if (!isLoopback && !token && allowUnauthenticatedRemote) {
-    console.warn(
-      `[rly serve] WARNING: listening on non-loopback host "${host}" without auth (--allow-unauthenticated-remote). This is dangerous.`
-    );
+  for (const warning of validation.warnings) {
+    console.warn(warning);
   }
 
   const handle = await startHttpMcpServer(
