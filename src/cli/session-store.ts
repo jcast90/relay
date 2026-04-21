@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
@@ -26,6 +26,11 @@ interface SessionLockRecord {
   updatedAt: string;
   messageCount: number;
 }
+
+// Monotonic suffix so concurrent writers in the same process don't collide
+// on the tmp file used by `writeSessions`. Mirrors the `tmpCounter` in
+// `storage/file-store.ts`'s `writeJsonAtomic`.
+let sessionsTmpCounter = 0;
 
 function lockRecordId(channelId: string, sessionId: string): string {
   // HarnessStore ids can't contain `/` or `\` (path traversal guard in
@@ -95,13 +100,36 @@ export class SessionStore {
   }
 
   async listSessions(channelId: string): Promise<ChatSession[]> {
+    const path = this.sessionsIndexPath(channelId);
+    let raw: string;
+
     try {
-      const raw = await readFile(this.sessionsIndexPath(channelId), "utf8");
+      raw = await readFile(path, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return [];
+      }
+      // EACCES / EIO / anything else: surface with path + cause so the
+      // caller doesn't silently overwrite a real sessions index.
+      throw new Error(
+        `Failed to read sessions index at ${path}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        { cause: err }
+      );
+    }
+
+    try {
       const sessions = JSON.parse(raw) as ChatSession[];
       sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
       return sessions;
-    } catch {
-      return [];
+    } catch (err) {
+      throw new Error(
+        `Corrupt sessions index at ${path}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        { cause: err }
+      );
     }
   }
 
@@ -150,19 +178,39 @@ export class SessionStore {
     const filtered = sessions.filter((s) => s.sessionId !== sessionId);
     await this.writeSessions(channelId, filtered);
 
-    // Remove the chat file
+    // Remove the chat file. ENOENT is fine (nothing was written yet);
+    // anything else — EACCES, EBUSY, EIO — is a real problem the caller
+    // needs to see, not something to swallow silently.
+    const chatPath = this.sessionChatPath(channelId, sessionId);
     try {
-      await unlink(this.sessionChatPath(channelId, sessionId));
-    } catch {
-      // File may not exist
+      await unlink(chatPath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        console.warn(
+          `[session-store] failed to unlink chat file at ${chatPath}: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+        throw err;
+      }
     }
 
     // Drop the coordination record so watchers see the session go away.
-    // Tolerated to miss (no-op on ENOENT inside the store).
-    await this.store.deleteDoc(
-      STORE_NS.session,
-      lockRecordId(channelId, sessionId)
-    );
+    // Tolerated to miss (no-op on ENOENT inside the store). Advisory —
+    // swallow + warn so a coordination-store hiccup doesn't look like a
+    // failed session deletion to the caller.
+    try {
+      await this.store.deleteDoc(
+        STORE_NS.session,
+        lockRecordId(channelId, sessionId)
+      );
+    } catch (err) {
+      console.warn(
+        `[session-store] coordination-record delete failed (channelId=${channelId}, sessionId=${sessionId}): ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
   }
 
   async appendMessage(
@@ -192,19 +240,33 @@ export class SessionStore {
   ): Promise<void> {
     const path = this.sessionChatPath(channelId, sessionId);
 
+    let content: string;
     try {
-      const content = await readFile(path, "utf8");
-      const lines = content.trimEnd().split("\n");
-
-      if (lines.length > 0) {
-        lines[lines.length - 1] = JSON.stringify(msg);
+      content = await readFile(path, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        // No chat yet — fall through to append, same as the initial write.
+        await this.appendMessage(channelId, sessionId, msg);
+        return;
       }
-
-      await writeFile(path, lines.join("\n") + "\n", "utf8");
-    } catch {
-      // File doesn't exist — just append
-      await this.appendMessage(channelId, sessionId, msg);
+      // EACCES / EIO / anything else is a real I/O problem; silently falling
+      // through to `appendMessage` would duplicate the last message on the
+      // on-disk transcript. Surface the error instead.
+      throw new Error(
+        `Failed to read chat transcript at ${path}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        { cause: err }
+      );
     }
+
+    const lines = content.trimEnd().split("\n");
+
+    if (lines.length > 0) {
+      lines[lines.length - 1] = JSON.stringify(msg);
+    }
+
+    await writeFile(path, lines.join("\n") + "\n", "utf8");
   }
 
   async loadMessages(
@@ -219,11 +281,24 @@ export class SessionStore {
       const lines = content.trimEnd().split("\n").filter((l) => l.length > 0);
       const messages: PersistedChatMessage[] = [];
 
-      for (const line of lines.slice(-limit)) {
+      // Note on line numbering: `slice(-limit)` means the loop index is the
+      // offset within the tail window, not the true line number in the file.
+      // We compute the real 1-based line number for the warning so operators
+      // can jump directly to the corrupt entry without guesswork.
+      const startLineNumber = lines.length - Math.min(limit, lines.length) + 1;
+      const tail = lines.slice(-limit);
+      for (let i = 0; i < tail.length; i += 1) {
+        const line = tail[i];
         try {
           messages.push(JSON.parse(line) as PersistedChatMessage);
-        } catch {
-          // Skip malformed lines
+        } catch (err) {
+          // Surface corruption instead of silently dropping — caller needs
+          // to be able to see data loss / manual-edit damage.
+          console.warn(
+            `[session-store] skipping malformed JSONL line at ${path}:${
+              startLineNumber + i
+            }: ${err instanceof Error ? err.message : String(err)}`
+          );
         }
       }
 
@@ -237,9 +312,24 @@ export class SessionStore {
     const path = this.sessionsIndexPath(channelId);
     const dir = join(this.channelsDir, channelId);
     await mkdir(dir, { recursive: true });
-    const tmpPath = `${path}.tmp`;
+    // Include pid + counter so concurrent writers in the same process don't
+    // clobber each other's tmp file — matches `writeJsonAtomic` in file-store.
+    const tmpPath = `${path}.tmp.${process.pid}.${sessionsTmpCounter++}`;
     await writeFile(tmpPath, JSON.stringify(sessions, null, 2), "utf8");
-    await rename(tmpPath, path);
+    try {
+      await rename(tmpPath, path);
+    } catch (err) {
+      // Clean up the orphaned tmp on failure so the channel dir doesn't
+      // accumulate dead files. Best-effort — caller needs the original
+      // rename error, not a cleanup one.
+      await rm(tmpPath, { force: true }).catch(() => {});
+      throw new Error(
+        `Failed to commit sessions index at ${path}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        { cause: err }
+      );
+    }
   }
 
   /**
@@ -255,13 +345,27 @@ export class SessionStore {
     sessionId: string,
     messageCount: number
   ): Promise<void> {
-    await this.store.mutate<SessionLockRecord>(
-      STORE_NS.session,
-      lockRecordId(channelId, sessionId),
-      () => ({
-        updatedAt: new Date().toISOString(),
-        messageCount
-      })
-    );
+    // The on-disk session doc has already been written by the caller; this
+    // coordination record is advisory (nothing reads it today, T-402
+    // consumers layer on top). Swallow + warn rather than propagate so a
+    // coordination-store hiccup doesn't look like a failed session write to
+    // the caller. Mirrors the T-101 policy for channel-ticket coordination
+    // records.
+    try {
+      await this.store.mutate<SessionLockRecord>(
+        STORE_NS.session,
+        lockRecordId(channelId, sessionId),
+        () => ({
+          updatedAt: new Date().toISOString(),
+          messageCount
+        })
+      );
+    } catch (err) {
+      console.warn(
+        `[session-store] coordination-record mutate failed (channelId=${channelId}, sessionId=${sessionId}, messageCount=${messageCount}): ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
   }
 }

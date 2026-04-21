@@ -1,9 +1,9 @@
-import { cp, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SessionStore } from "../src/cli/session-store.js";
 import { FileHarnessStore } from "../src/storage/file-store.js";
@@ -192,6 +192,107 @@ describe("SessionStore with HarnessStore injection", () => {
     const defaulted = new SessionStore(channelsDir);
     const sessions = await defaulted.listSessions("channel-empty");
     expect(sessions).toEqual([]);
+  });
+
+  it("throws on a corrupt sessions.json instead of returning empty", async () => {
+    // Silently returning [] on parse failure would let the next write
+    // overwrite the damaged file, erasing any recoverable data.
+    const channelDir = join(channelsDir, "corrupt-channel");
+    await mkdir(channelDir, { recursive: true });
+    const indexPath = join(channelDir, "sessions.json");
+    await writeFile(indexPath, "this is not JSON", "utf8");
+
+    await expect(store.listSessions("corrupt-channel")).rejects.toThrow(
+      /Corrupt sessions index/
+    );
+    await expect(store.listSessions("corrupt-channel")).rejects.toThrow(
+      indexPath
+    );
+  });
+
+  it("swallows coordination-record mutate failures + logs (disk write still commits)", async () => {
+    // The on-disk sessions.json + JSONL chat are authoritative (Rust reader +
+    // GUI consume them). The HarnessStore coordination record is advisory —
+    // a mutate failure must not surface as a failed createSession, and the
+    // on-disk session index must still be committed.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mutateSpy = vi
+      .spyOn(fake, "mutate")
+      .mockRejectedValueOnce(new Error("coordination store exploded"));
+
+    try {
+      const session = await store.createSession(
+        "mutate-fails-channel",
+        "disk still commits"
+      );
+      expect(session.sessionId).toBeTruthy();
+
+      // Disk write committed — sessions.json has the entry.
+      const indexPath = join(
+        channelsDir,
+        "mutate-fails-channel",
+        "sessions.json"
+      );
+      const raw = JSON.parse(await readFile(indexPath, "utf8")) as Array<{
+        sessionId: string;
+      }>;
+      expect(raw.map((s) => s.sessionId)).toContain(session.sessionId);
+
+      // Operator-visible diagnostic was emitted.
+      const warnings = warnSpy.mock.calls.map((c) => c.join(" "));
+      expect(
+        warnings.some((w) => w.includes("coordination-record mutate failed"))
+      ).toBe(true);
+      expect(
+        warnings.some((w) => w.includes("coordination store exploded"))
+      ).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+      mutateSpy.mockRestore();
+    }
+  });
+
+  it("warns with path + line number on a malformed JSONL line instead of silently skipping", async () => {
+    const session = await store.createSession("jsonl-warn", "with garbage");
+    await store.appendMessage("jsonl-warn", session.sessionId, {
+      role: "user",
+      content: "valid",
+      timestamp: "2025-01-01T00:00:00.000Z",
+      agentAlias: null
+    });
+
+    // Manually append a garbage line to simulate data corruption /
+    // manual edit damage.
+    const chatPath = join(
+      channelsDir,
+      "jsonl-warn",
+      "sessions",
+      `${session.sessionId}.jsonl`
+    );
+    await writeFile(
+      chatPath,
+      (await readFile(chatPath, "utf8")) + "this is not JSON\n",
+      "utf8"
+    );
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const messages = await store.loadMessages("jsonl-warn", session.sessionId);
+      // The valid line still comes back; the garbage one is dropped but
+      // operator was told about it.
+      expect(messages).toHaveLength(1);
+      expect(messages[0].content).toBe("valid");
+
+      const warnings = warnSpy.mock.calls.map((c) => c.join(" "));
+      expect(
+        warnings.some((w) => w.includes("skipping malformed JSONL line"))
+      ).toBe(true);
+      expect(warnings.some((w) => w.includes(chatPath))).toBe(true);
+      // Line number should be present — 2 (second line is garbage).
+      expect(warnings.some((w) => /:2:/.test(w))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
 

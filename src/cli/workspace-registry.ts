@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { buildHarnessStore, getHarnessStore } from "../storage/factory.js";
@@ -87,16 +87,38 @@ export class WorkspaceRegistry {
   }
 
   async read(): Promise<WorkspaceRegistryDoc> {
+    const path = this.getRegistryPath();
+    let content: string;
+
     try {
-      const raw = JSON.parse(
-        await readFile(this.getRegistryPath(), "utf8")
-      ) as WorkspaceRegistryDoc;
+      content = await readFile(path, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return { updatedAt: new Date().toISOString(), workspaces: [] };
+      }
+      // EACCES / EIO / any other read error: surface with path + cause so
+      // callers don't silently overwrite real data via `write`.
+      throw new Error(
+        `Failed to read workspace registry at ${path}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        { cause: err }
+      );
+    }
+
+    try {
+      const raw = JSON.parse(content) as WorkspaceRegistryDoc;
       return {
         updatedAt: raw.updatedAt ?? new Date().toISOString(),
         workspaces: Array.isArray(raw.workspaces) ? raw.workspaces : []
       };
-    } catch {
-      return { updatedAt: new Date().toISOString(), workspaces: [] };
+    } catch (err) {
+      throw new Error(
+        `Corrupt workspace registry at ${path}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        { cause: err }
+      );
     }
   }
 
@@ -105,7 +127,19 @@ export class WorkspaceRegistry {
     const path = this.getRegistryPath();
     const tmpPath = `${path}.tmp.${process.pid}.${registryTmpCounter++}`;
     await writeFile(tmpPath, JSON.stringify(registry, null, 2));
-    await rename(tmpPath, path);
+    try {
+      await rename(tmpPath, path);
+    } catch (err) {
+      // Leftover tmp files accumulate disk over time otherwise. Cleanup is
+      // best-effort — we want to surface the original rename failure.
+      await rm(tmpPath, { force: true }).catch(() => {});
+      throw new Error(
+        `Failed to commit workspace registry at ${path}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        { cause: err }
+      );
+    }
 
     // Persist the coordination record through the HarnessStore. On
     // FileHarnessStore this is a plain JSON file at
@@ -113,14 +147,28 @@ export class WorkspaceRegistry {
     // (which only reads `workspace-registry.json`). On Postgres (T-402) this
     // executes under a transaction-scoped advisory lock keyed on the same
     // `(ns, id)`, giving us cross-process serialization for free.
-    await this.store.mutate<WorkspaceRegistryLockRecord>(
-      STORE_NS.workspace,
-      "registry",
-      () => ({
-        updatedAt: registry.updatedAt,
-        count: registry.workspaces.length
-      })
-    );
+    //
+    // The disk write has already succeeded; the coordination record is
+    // advisory (nothing reads it today, T-402 consumers layer on top).
+    // Swallow + warn rather than propagate so a coordination-store hiccup
+    // doesn't look like a failed registry write to the caller. Mirrors the
+    // T-101 policy for channel-ticket coordination records.
+    try {
+      await this.store.mutate<WorkspaceRegistryLockRecord>(
+        STORE_NS.workspace,
+        "registry",
+        () => ({
+          updatedAt: registry.updatedAt,
+          count: registry.workspaces.length
+        })
+      );
+    } catch (err) {
+      console.warn(
+        `[workspace-registry] coordination-record mutate failed (path=${path}, count=${registry.workspaces.length}): ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
   }
 
   async register(repoPath: string): Promise<WorkspaceRegistryEntry> {

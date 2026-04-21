@@ -3,13 +3,14 @@ import {
   mkdtemp,
   readFile,
   rm,
-  stat
+  stat,
+  writeFile
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   WorkspaceRegistry,
@@ -186,6 +187,87 @@ describe("WorkspaceRegistry with HarnessStore injection", () => {
     const defaulted = new WorkspaceRegistry(relayDir);
     const doc = await defaulted.read();
     expect(doc.workspaces).toEqual([]);
+  });
+
+  it("throws on a corrupt workspace-registry.json instead of returning empty", async () => {
+    // Writing garbage JSON used to be silently swallowed — the registry
+    // would return `{ workspaces: [] }`, and the next `register` call would
+    // overwrite the corrupt file, erasing any recoverable data. Now we
+    // surface the parse failure with file path + cause.
+    const registryPath = join(relayDir, "workspace-registry.json");
+    await writeFile(registryPath, "{ not valid json", "utf8");
+
+    await expect(registry.read()).rejects.toThrow(/Corrupt workspace registry/);
+    await expect(registry.read()).rejects.toThrow(registryPath);
+  });
+
+  it("swallows coordination-record mutate failures + logs (disk write still commits)", async () => {
+    // The on-disk registry is authoritative (Rust reader + GUI consume it);
+    // the HarnessStore coordination record is advisory (nothing reads it
+    // today, T-402 consumers layer on top). So a mutate failure must not
+    // surface to the caller as a failed register, and the disk write must
+    // still be durable.
+    const repoPath = join(relayDir, "mutate-fails-repo");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mutateSpy = vi
+      .spyOn(fake, "mutate")
+      .mockRejectedValueOnce(new Error("coordination store exploded"));
+
+    try {
+      const entry = await registry.register(repoPath);
+      expect(entry.repoPath).toBe(repoPath);
+
+      // Disk write committed — the registry file has the entry.
+      const onDisk = JSON.parse(
+        await readFile(join(relayDir, "workspace-registry.json"), "utf8")
+      ) as { workspaces: Array<{ repoPath: string }> };
+      expect(onDisk.workspaces.map((w) => w.repoPath)).toEqual([repoPath]);
+
+      // Operator-visible diagnostic was emitted.
+      const warnings = warnSpy.mock.calls.map((c) => c.join(" "));
+      expect(
+        warnings.some((w) => w.includes("coordination-record mutate failed"))
+      ).toBe(true);
+      expect(
+        warnings.some((w) => w.includes("coordination store exploded"))
+      ).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+      mutateSpy.mockRestore();
+    }
+  });
+
+  it("survives concurrent register() calls with distinct repo paths (at least one entry lands)", async () => {
+    // Latent last-writer-wins hazard: two concurrent `register()` calls
+    // race on `read → mutate → write`. This pins current behaviour —
+    // at least one entry is always committed, and we document whether
+    // both survive. If both survive consistently, good. If only one
+    // does, this test captures that as the current contract and flags
+    // follow-up T-102a for a proper key-locked write.
+    const pathX = join(relayDir, "concurrent-x");
+    const pathY = join(relayDir, "concurrent-y");
+
+    const [entryX, entryY] = await Promise.all([
+      registry.register(pathX),
+      registry.register(pathY)
+    ]);
+
+    expect(entryX.repoPath).toBe(pathX);
+    expect(entryY.repoPath).toBe(pathY);
+
+    const final = await registry.list();
+    const paths = final.map((w) => w.repoPath).sort();
+
+    // Contract: at least one is persisted (disk doesn't corrupt).
+    expect(paths.length).toBeGreaterThanOrEqual(1);
+
+    // Informational: if both survive, great; if not, T-102a tracks it.
+    if (paths.length < 2) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[test] concurrent register() lost an entry — only ${paths.length} survived. See T-102a.`
+      );
+    }
   });
 });
 
