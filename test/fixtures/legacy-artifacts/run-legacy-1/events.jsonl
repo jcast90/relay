@@ -1,0 +1,2 @@
+{"type":"TaskSubmitted","phaseId":"phase_00","details":{"featureRequest":"Legacy feature"},"createdAt":"2026-04-20T00:00:00.000Z"}
+{"type":"ClassificationComplete","phaseId":"phase_00","details":{"tier":"feature_small"},"createdAt":"2026-04-20T00:00:01.000Z"}

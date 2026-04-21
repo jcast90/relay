@@ -5,11 +5,13 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { LocalArtifactStore } from "../src/execution/artifact-store.js";
+import { FileHarnessStore } from "../src/storage/file-store.js";
 
 describe("artifact store", () => {
   it("persists and reads failure classification artifacts", async () => {
     const artifactRoot = await mkdtemp(join(tmpdir(), "agent-harness-artifacts-"));
-    const store = new LocalArtifactStore(artifactRoot);
+    const storeRoot = await mkdtemp(join(tmpdir(), "agent-harness-artifacts-hs-"));
+    const store = new LocalArtifactStore(artifactRoot, new FileHarnessStore(storeRoot));
 
     try {
       const artifact = await store.saveFailureClassification({
@@ -33,6 +35,10 @@ describe("artifact store", () => {
       expect(content.nextAction).toContain("Repair the tests");
     } finally {
       await rm(artifactRoot, {
+        recursive: true,
+        force: true
+      });
+      await rm(storeRoot, {
         recursive: true,
         force: true
       });

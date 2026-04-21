@@ -56,7 +56,7 @@ export async function main(): Promise<void> {
   const live = process.env.HARNESS_LIVE === "1";
   const packageVersion = await readPackageVersion();
   const workspace = await ensureHarnessWorkspace(cwd, packageVersion);
-  const artifactStore = new LocalArtifactStore(workspace.paths.artifactsDir);
+  const artifactStore = new LocalArtifactStore(workspace.paths.artifactsDir, getHarnessStore());
 
   if (command === "up") {
     await printUpStatus(workspace);
@@ -894,7 +894,8 @@ async function printRunningTasks(args: string[] = []): Promise<void> {
 
   for (const ws of workspaces) {
     const wsArtifactStore = new LocalArtifactStore(
-      `${getGlobalRoot()}/workspaces/${ws.workspaceId}/artifacts`
+      `${getGlobalRoot()}/workspaces/${ws.workspaceId}/artifacts`,
+      getHarnessStore()
     );
     const runs = await wsArtifactStore.readRunsIndex();
 
@@ -953,7 +954,8 @@ async function printTaskBoard(channelId: string, args: string[] = []): Promise<v
     runId
   ) => {
     const wsStore = new LocalArtifactStore(
-      `${getGlobalRoot()}/workspaces/${workspaceId}/artifacts`
+      `${getGlobalRoot()}/workspaces/${workspaceId}/artifacts`,
+      getHarnessStore()
     );
     return wsStore.readTicketLedger(runId);
   });

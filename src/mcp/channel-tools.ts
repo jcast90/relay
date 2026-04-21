@@ -6,6 +6,7 @@ import {
   getGlobalRoot,
   listRegisteredWorkspaces
 } from "../cli/workspace-registry.js";
+import { getHarnessStore } from "../storage/factory.js";
 
 export interface ChannelToolState {
   sessionId: string | null;
@@ -236,5 +237,5 @@ export async function callChannelTool(
 
 function buildArtifactStoreForWorkspace(workspaceId: string): LocalArtifactStore {
   const globalRoot = getGlobalRoot();
-  return new LocalArtifactStore(`${globalRoot}/workspaces/${workspaceId}/artifacts`);
+  return new LocalArtifactStore(`${globalRoot}/workspaces/${workspaceId}/artifacts`, getHarnessStore());
 }

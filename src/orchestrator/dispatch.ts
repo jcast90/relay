@@ -35,7 +35,7 @@ export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
   const { featureRequest, repoPath } = input;
   const workspaceId = buildWorkspaceId(repoPath);
   const artifactsDir = `${getWorkspaceDir(workspaceId)}/artifacts`;
-  const artifactStore = new LocalArtifactStore(artifactsDir);
+  const artifactStore = new LocalArtifactStore(artifactsDir, getHarnessStore());
   const channelStore = new ChannelStore(undefined, getHarnessStore());
 
   // Ensure agents are registered

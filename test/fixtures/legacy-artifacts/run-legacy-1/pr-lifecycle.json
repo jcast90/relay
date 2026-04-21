@@ -1,0 +1,20 @@
+{
+  "runId": "run-legacy-1",
+  "branch": "feature/legacy",
+  "baseBranch": "main",
+  "currentStage": "merged",
+  "prNumber": 42,
+  "prUrl": "https://github.com/org/repo/pull/42",
+  "events": [
+    {
+      "stage": "branch_created",
+      "timestamp": "2026-04-20T00:00:00.000Z",
+      "details": {}
+    },
+    {
+      "stage": "merged",
+      "timestamp": "2026-04-20T00:00:01.000Z",
+      "details": {}
+    }
+  ]
+}

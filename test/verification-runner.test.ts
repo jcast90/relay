@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import type { CommandInvocation, CommandInvoker } from "../src/agents/command-invoker.js";
 import { LocalArtifactStore } from "../src/execution/artifact-store.js";
+import { FileHarnessStore } from "../src/storage/file-store.js";
 import {
   selectVerificationCommands,
   VerificationRunner
@@ -35,7 +36,8 @@ describe("verification command selection", () => {
 describe("verification runner", () => {
   it("captures command results as artifacts", async () => {
     const artifactRoot = await mkdtemp(join(tmpdir(), "agent-harness-artifacts-"));
-    const artifactStore = new LocalArtifactStore(artifactRoot);
+    const storeRoot = await mkdtemp(join(tmpdir(), "agent-harness-artifacts-hs-"));
+    const artifactStore = new LocalArtifactStore(artifactRoot, new FileHarnessStore(storeRoot));
     const runner = new VerificationRunner(
       new FakeCommandInvoker(),
       artifactStore
@@ -58,6 +60,10 @@ describe("verification runner", () => {
       expect(file.stdout).toContain("simulated");
     } finally {
       await rm(artifactRoot, {
+        recursive: true,
+        force: true
+      });
+      await rm(storeRoot, {
         recursive: true,
         force: true
       });

@@ -1,0 +1,16 @@
+{
+  "updatedAt": "2026-04-20T00:00:00.000Z",
+  "runs": [
+    {
+      "runId": "run-legacy-1",
+      "featureRequest": "Legacy feature",
+      "state": "COMPLETE",
+      "startedAt": "2026-04-20T00:00:00.000Z",
+      "updatedAt": "2026-04-20T00:00:01.000Z",
+      "completedAt": "2026-04-20T00:00:01.000Z",
+      "channelId": null,
+      "phaseLedgerPath": "/tmp/run-legacy-1/phase-ledger.json",
+      "artifactsRoot": "/tmp/run-legacy-1"
+    }
+  ]
+}

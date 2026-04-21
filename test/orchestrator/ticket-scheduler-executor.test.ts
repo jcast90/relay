@@ -18,6 +18,7 @@ import {
   type TicketDefinition
 } from "../../src/domain/ticket.js";
 import { LocalArtifactStore } from "../../src/execution/artifact-store.js";
+import { FileHarnessStore } from "../../src/storage/file-store.js";
 import type { AgentExecutor, ExecutionHandle } from "../../src/execution/executor.js";
 import { NoopExecutor, NoopSandboxProvider } from "../../src/execution/noop-executor.js";
 import { VerificationRunner } from "../../src/execution/verification-runner.js";
@@ -92,7 +93,10 @@ async function buildBasics(repoRoot: string) {
     registry.register(agent);
   }
 
-  const artifactStore = new LocalArtifactStore(join(repoRoot, "artifacts"));
+  const artifactStore = new LocalArtifactStore(
+    join(repoRoot, "artifacts"),
+    new FileHarnessStore(join(repoRoot, "__hs__"))
+  );
   const verificationRunner = new VerificationRunner(
     new NodeCommandInvoker(),
     artifactStore

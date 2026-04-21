@@ -19,6 +19,7 @@ import {
 } from "../../src/domain/ticket.js";
 import { ChannelStore } from "../../src/channels/channel-store.js";
 import { LocalArtifactStore } from "../../src/execution/artifact-store.js";
+import { FileHarnessStore } from "../../src/storage/file-store.js";
 import { VerificationRunner } from "../../src/execution/verification-runner.js";
 import { TicketScheduler } from "../../src/orchestrator/ticket-scheduler.js";
 import { ScriptedInvoker } from "../../src/simulation/scripted-invoker.js";
@@ -116,7 +117,10 @@ async function buildScheduler(
     registry.register(agent);
   }
 
-  const artifactStore = new LocalArtifactStore(join(repoRoot, "artifacts"));
+  const artifactStore = new LocalArtifactStore(
+    join(repoRoot, "artifacts"),
+    new FileHarnessStore(join(repoRoot, "__hs__"))
+  );
   const verificationRunner = new VerificationRunner(
     new NodeCommandInvoker(),
     artifactStore

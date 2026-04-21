@@ -9,6 +9,7 @@ import { createLiveAgents } from "../src/agents/factory.js";
 import { NodeCommandInvoker } from "../src/agents/command-invoker.js";
 import { ChannelStore } from "../src/channels/channel-store.js";
 import { LocalArtifactStore } from "../src/execution/artifact-store.js";
+import { FileHarnessStore } from "../src/storage/file-store.js";
 import { VerificationRunner } from "../src/execution/verification-runner.js";
 import { OrchestratorV2 } from "../src/orchestrator/orchestrator-v2.js";
 import { ScriptedInvoker } from "../src/simulation/scripted-invoker.js";
@@ -28,7 +29,10 @@ function buildOrchestrator(
     registry.register(agent);
   }
 
-  const artifactStore = new LocalArtifactStore(artifactsDir);
+  const artifactStore = new LocalArtifactStore(
+    artifactsDir,
+    new FileHarnessStore(join(artifactsDir, "__hs__"))
+  );
   const verificationRunner = new VerificationRunner(
     new NodeCommandInvoker(),
     artifactStore
@@ -130,7 +134,10 @@ describe("OrchestratorV2 integration", () => {
     const artifactsDir = join(tmpDir, "artifacts");
 
     try {
-      const artifactStore = new LocalArtifactStore(artifactsDir);
+      const artifactStore = new LocalArtifactStore(
+    artifactsDir,
+    new FileHarnessStore(join(artifactsDir, "__hs__"))
+  );
       const orchestrator = buildOrchestrator(tmpDir, artifactsDir);
       const run = await orchestrator.run("Fix typo in README");
 
