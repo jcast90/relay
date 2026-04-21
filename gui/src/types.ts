@@ -146,3 +146,34 @@ export type Spawn = {
   terminalWindowId?: number;
   terminalTabId?: number;
 };
+
+// Persisted snapshot of a tracked PR row. Written by the CLI PR watcher;
+// read by the GUI's PR strip + TUI's Prs tab. Mirrors the Rust
+// `TrackedPrRow` struct (`crates/harness-data`). `ci`/`review`/`prState`
+// are null when the row has been tracked but not yet polled.
+export type TrackedPrRow = {
+  ticketId: string;
+  channelId: string;
+  owner: string;
+  name: string;
+  number: number;
+  url: string;
+  branch: string;
+  ci: string | null;
+  review: string | null;
+  prState: string | null;
+  updatedAt: string;
+};
+
+// A run whose plan is awaiting approval. Surfaced in the GUI's approval CTA
+// card. Collected from the workspace-level runs-index + per-run approval
+// record; see `src/index.ts` `handlePendingPlansCommand` for the matching
+// CLI view.
+export type PendingPlan = {
+  runId: string;
+  workspaceId: string;
+  featureRequest: string;
+  channelId?: string | null;
+  state: string;
+  updatedAt: string;
+};

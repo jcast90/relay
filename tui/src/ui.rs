@@ -68,6 +68,31 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.input_mode == InputMode::SessionSelect {
         draw_session_select_popup(frame, app, size);
     }
+
+    // Rewind picker popup
+    if app.input_mode == InputMode::RewindSelect {
+        draw_rewind_select_popup(frame, app, size);
+    }
+
+    // Approve-plan confirm popup
+    if app.input_mode == InputMode::ApprovePlan {
+        draw_approve_plan_popup(frame, app, size);
+    }
+
+    // Pending-plan banner — only show when not already in a modal flow so it
+    // doesn't fight with active popups for space. The banner draws over the
+    // bottom edge of the center panel.
+    let in_modal = matches!(
+        app.input_mode,
+        InputMode::NewChannel
+            | InputMode::RepoSelect
+            | InputMode::SessionSelect
+            | InputMode::RewindSelect
+            | InputMode::ApprovePlan
+    );
+    if !in_modal && !app.pending_plans.is_empty() {
+        draw_pending_plan_banner(frame, app, main_area);
+    }
 }
 
 fn border_style(app: &App, panel: FocusPanel) -> Style {
@@ -215,37 +240,27 @@ fn draw_center(frame: &mut Frame, app: &mut App, area: Rect) {
         Tab::Chat => draw_chat(frame, app, area),
         Tab::Board => draw_board(frame, app, &channel_name, area),
         Tab::Decisions => draw_decisions(frame, app, &channel_name, area),
+        Tab::Prs => draw_prs(frame, app, &channel_name, area),
     }
 }
 
 fn tab_bar_line(app: &App) -> Line<'static> {
+    let c_chat = if app.active_tab == Tab::Chat { Color::Cyan } else { Color::DarkGray };
+    let c_board = if app.active_tab == Tab::Board { Color::Cyan } else { Color::DarkGray };
+    let c_dec = if app.active_tab == Tab::Decisions { Color::Cyan } else { Color::DarkGray };
+    let c_prs = if app.active_tab == Tab::Prs { Color::Cyan } else { Color::DarkGray };
     Line::from(vec![
-        Span::styled(
-            " 1",
-            Style::default().fg(if app.active_tab == Tab::Chat { Color::Cyan } else { Color::DarkGray }),
-        ),
-        Span::styled(
-            ":Chat",
-            Style::default().fg(if app.active_tab == Tab::Chat { Color::Cyan } else { Color::DarkGray }),
-        ),
+        Span::styled(" 1", Style::default().fg(c_chat)),
+        Span::styled(":Chat", Style::default().fg(c_chat)),
         Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            "2",
-            Style::default().fg(if app.active_tab == Tab::Board { Color::Cyan } else { Color::DarkGray }),
-        ),
-        Span::styled(
-            ":Board",
-            Style::default().fg(if app.active_tab == Tab::Board { Color::Cyan } else { Color::DarkGray }),
-        ),
+        Span::styled("2", Style::default().fg(c_board)),
+        Span::styled(":Board", Style::default().fg(c_board)),
         Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            "3",
-            Style::default().fg(if app.active_tab == Tab::Decisions { Color::Cyan } else { Color::DarkGray }),
-        ),
-        Span::styled(
-            ":Decisions ",
-            Style::default().fg(if app.active_tab == Tab::Decisions { Color::Cyan } else { Color::DarkGray }),
-        ),
+        Span::styled("3", Style::default().fg(c_dec)),
+        Span::styled(":Decisions", Style::default().fg(c_dec)),
+        Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+        Span::styled("4", Style::default().fg(c_prs)),
+        Span::styled(":PRs ", Style::default().fg(c_prs)),
     ])
     .right_aligned()
 }
@@ -632,6 +647,88 @@ fn draw_decisions(frame: &mut Frame, app: &App, channel_name: &str, area: Rect) 
         state.select(Some(app.decisions_scroll));
     }
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+/// Mirror of `rly pr-status` for the currently-selected channel. Columns match
+/// the CLI (`TICKET / PR / STATE / CI / REVIEW`) so a user who knows the CLI
+/// output recognises the TUI pane instantly.
+fn draw_prs(frame: &mut Frame, app: &App, channel_name: &str, area: Rect) {
+    let focused = app.focus == FocusPanel::Center && app.active_tab == Tab::Prs;
+
+    let rows = &app.tracked_prs;
+    let items: Vec<ListItem> = if rows.is_empty() {
+        vec![ListItem::new(Line::from(vec![
+            Span::styled("  No tracked PRs for this channel yet.",
+                Style::default().fg(Color::DarkGray)),
+        ]))]
+    } else {
+        let mut out = Vec::with_capacity(rows.len() + 1);
+        // Header row
+        out.push(ListItem::new(Line::from(vec![
+            Span::styled(
+                "  TICKET             PR                                   STATE     CI        REVIEW",
+                Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+            ),
+        ])));
+        for (i, r) in rows.iter().enumerate() {
+            let is_selected = focused && i == app.prs_scroll;
+            let indicator = if is_selected { "▸ " } else { "  " };
+            let label = format!("{}/{}#{}", r.owner, r.name, r.number);
+            let state = r.pr_state.as_deref().unwrap_or("-");
+            let ci = r.ci.as_deref().unwrap_or("-");
+            let review = r.review.as_deref().unwrap_or("-");
+            let ci_color = match ci {
+                "failing" => Color::Red,
+                "passing" => Color::Green,
+                "pending" => Color::Yellow,
+                _ => Color::DarkGray,
+            };
+            let review_color = match review {
+                "changes_requested" => Color::Red,
+                "approved" => Color::Green,
+                "pending" => Color::Yellow,
+                _ => Color::DarkGray,
+            };
+            let state_color = match state {
+                "merged" => Color::Magenta,
+                "closed" => Color::DarkGray,
+                "open" => Color::Green,
+                _ => Color::DarkGray,
+            };
+            out.push(ListItem::new(Line::from(vec![
+                Span::styled(indicator, Style::default().fg(Color::Cyan)),
+                Span::styled(pad_right(&r.ticket_id, 18), Style::default().fg(Color::White)),
+                Span::raw(" "),
+                Span::styled(pad_right(&label, 36), Style::default().fg(Color::Cyan)),
+                Span::raw(" "),
+                Span::styled(pad_right(state, 9), Style::default().fg(state_color)),
+                Span::raw(" "),
+                Span::styled(pad_right(ci, 9), Style::default().fg(ci_color)),
+                Span::raw(" "),
+                Span::styled(review.to_string(), Style::default().fg(review_color)),
+            ])));
+        }
+        out
+    };
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(border_style(app, FocusPanel::Center))
+            .title(format!(" {} -- PRs ({}) ", channel_name, rows.len()))
+            .title_style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
+            .title_bottom(tab_bar_line(app)),
+    );
+    frame.render_widget(list, area);
+}
+
+fn pad_right(s: &str, width: usize) -> String {
+    if s.chars().count() >= width {
+        s.chars().take(width).collect()
+    } else {
+        let pad = width - s.chars().count();
+        format!("{}{}", s, " ".repeat(pad))
+    }
 }
 
 fn draw_right(frame: &mut Frame, app: &App, area: Rect) {
@@ -1152,6 +1249,136 @@ fn draw_session_select_popup(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(paragraph, popup_area);
 }
 
+/// Rewind picker — lists user messages in the active session that have a
+/// `rewindKey` metadata tag. Enter on one shells out to `rly chat rewind
+/// --to <timestamp>` to roll repos + transcript back to that turn.
+fn draw_rewind_select_popup(frame: &mut Frame, app: &App, area: Rect) {
+    let dim = Block::default().style(Style::default().bg(Color::Black));
+    frame.render_widget(dim, area);
+
+    let popup_width = 72.min(area.width.saturating_sub(4));
+    let popup_height = (app.rewind_candidates.len() as u16 + 6).min(area.height.saturating_sub(4)).max(8);
+    let popup_x = (area.width - popup_width) / 2;
+    let popup_y = (area.height - popup_height) / 2;
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+    frame.render_widget(Clear, popup_area);
+
+    let mut lines: Vec<Line> = Vec::new();
+    if app.rewind_candidates.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  No rewindable messages in the active session.",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        let max_preview = (popup_width as usize).saturating_sub(24);
+        for (i, (_, msg)) in app.rewind_candidates.iter().enumerate() {
+            let is_cursor = i == app.rewind_cursor;
+            let indicator = if is_cursor { "▸ " } else { "  " };
+            let preview = truncate(&msg.content.replace('\n', " "), max_preview);
+            let ts = msg.timestamp.get(11..19).unwrap_or(&msg.timestamp);
+            let line_style = if is_cursor {
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(indicator, Style::default().fg(Color::Cyan)),
+                Span::styled(format!("{} ", ts), Style::default().fg(Color::DarkGray)),
+                Span::styled(preview, line_style),
+            ]));
+        }
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow))
+        .border_type(BorderType::Double)
+        .title(" Rewind to message ")
+        .title_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        .title_bottom(
+            Line::from(" j/k:move  enter:rewind  esc:cancel ").right_aligned(),
+        )
+        .style(Style::default().bg(Color::Rgb(30, 25, 10)));
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, popup_area);
+}
+
+/// Approve-plan confirmation. Shown when the user presses `a` while a pending
+/// plan is highlighted. Keeps the approve path a 2-step interaction to avoid
+/// accidentally committing a plan with a single keystroke.
+fn draw_approve_plan_popup(frame: &mut Frame, app: &App, area: Rect) {
+    let dim = Block::default().style(Style::default().bg(Color::Black));
+    frame.render_widget(dim, area);
+
+    let popup_width = 64.min(area.width.saturating_sub(4));
+    let popup_height = 10u16.min(area.height.saturating_sub(4));
+    let popup_x = (area.width - popup_width) / 2;
+    let popup_y = (area.height - popup_height) / 2;
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+    frame.render_widget(Clear, popup_area);
+
+    let plan = app.pending_plans.get(app.pending_plan_cursor);
+    let mut lines: Vec<Line> = Vec::new();
+    if let Some(p) = plan {
+        lines.push(Line::from(Span::styled(
+            format!("  Run: {}", p.run_id),
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("  Workspace: {}", p.workspace_id),
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            format!("  \"{}\"", truncate(&p.feature_request, (popup_width as usize).saturating_sub(6))),
+            Style::default().fg(Color::Cyan),
+        )));
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            "  y/enter: approve   r: reject   n/esc: cancel",
+            Style::default().fg(Color::Yellow),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "  No pending plan under cursor.",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Green))
+        .border_type(BorderType::Double)
+        .title(" Approve plan? ")
+        .title_style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+        .style(Style::default().bg(Color::Rgb(10, 25, 15)));
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, popup_area);
+}
+
+/// Thin top banner notifying the user that one or more runs are awaiting a
+/// plan-approval decision. Renders over the very top of the main area so it
+/// doesn't disturb the rest of the layout.
+fn draw_pending_plan_banner(frame: &mut Frame, app: &App, main_area: Rect) {
+    let count = app.pending_plans.len();
+    let banner_area = Rect::new(main_area.x, main_area.y, main_area.width, 1);
+    // Clear the one line we're painting over so the underlying panel doesn't
+    // bleed through.
+    frame.render_widget(Clear, banner_area);
+
+    let msg = if count == 1 {
+        "▲ Plan awaiting approval — press 'a' to review.".to_string()
+    } else {
+        format!("▲ {} plans awaiting approval — press 'a' to review.", count)
+    };
+    let line = Line::from(vec![
+        Span::raw(" "),
+        Span::styled(msg, Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)),
+    ]);
+    let widget = Paragraph::new(line).style(Style::default().bg(Color::Yellow));
+    frame.render_widget(widget, banner_area);
+}
+
 fn draw_completion_popup(frame: &mut Frame, app: &App, input_area: Rect) {
     let items = &app.completion_items;
     if items.is_empty() {
@@ -1425,6 +1652,53 @@ fn detail_content<'a>(app: &'a App) -> (String, Vec<Line<'a>>) {
                     (format!("Decision: {}", d.title), lines)
                 } else {
                     ("No decision".to_string(), vec![])
+                }
+            }
+            Tab::Prs => {
+                if let Some(row) = app.tracked_prs.get(app.prs_scroll) {
+                    let lines = vec![
+                        Line::from(vec![
+                            Span::styled("Ticket: ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(&row.ticket_id, Style::default().fg(Color::White)),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("PR: ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(
+                                format!("{}/{}#{}", row.owner, row.name, row.number),
+                                Style::default().fg(Color::Cyan),
+                            ),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("URL: ", Style::default().fg(Color::DarkGray)),
+                            Span::raw(&row.url),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("Branch: ", Style::default().fg(Color::DarkGray)),
+                            Span::raw(&row.branch),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("State: ", Style::default().fg(Color::DarkGray)),
+                            Span::raw(row.pr_state.as_deref().unwrap_or("-")),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("CI: ", Style::default().fg(Color::DarkGray)),
+                            Span::raw(row.ci.as_deref().unwrap_or("-")),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("Review: ", Style::default().fg(Color::DarkGray)),
+                            Span::raw(row.review.as_deref().unwrap_or("-")),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("Last update: ", Style::default().fg(Color::DarkGray)),
+                            Span::raw(&row.updated_at),
+                        ]),
+                    ];
+                    (
+                        format!("PR {}/{}#{}", row.owner, row.name, row.number),
+                        lines,
+                    )
+                } else {
+                    ("No tracked PR".to_string(), vec![])
                 }
             }
         },

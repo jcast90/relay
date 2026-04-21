@@ -54,6 +54,8 @@ import { startDashboard } from "./tui/dashboard.js";
 import { SessionStore } from "./cli/session-store.js";
 import { buildSystemPrompt, resolveChannelRefs, findMcpConfig } from "./cli/chat-context.js";
 import { rewindApply, rewindSnapshot } from "./cli/chat-rewind.js";
+import { submitApproval } from "./orchestrator/approval-gate.js";
+import { getWorkspaceDir } from "./cli/workspace-registry.js";
 
 export async function main(): Promise<void> {
   const cwd = process.cwd();
@@ -181,6 +183,16 @@ export async function main(): Promise<void> {
 
   if (command === "pr-status") {
     await handlePrStatusCommand(args);
+    return;
+  }
+
+  if (command === "approve" || command === "reject") {
+    await handlePlanDecisionCommand(command, args, cwd);
+    return;
+  }
+
+  if (command === "pending-plans") {
+    await handlePendingPlansCommand(args, cwd);
     return;
   }
 
@@ -797,46 +809,212 @@ async function handlePrWatchCommand(args: string[]): Promise<void> {
 }
 
 /**
- * `rly pr-status` — table of currently tracked PRs. No active
- * watcher means no in-flight run — we print a single explanatory line rather
- * than exiting with an error so scripts can poll without special-casing.
+ * `rly pr-status` — table of currently tracked PRs. When an orchestrator is
+ * running in this process, read the live watcher; otherwise fall back to the
+ * persisted snapshot the watcher mirrors to `channels/<id>/tracked-prs.json`
+ * so the TUI and GUI (which are separate processes) see the same rows.
+ * A trailing `--channel <id>` narrows the readback; absent, we aggregate
+ * every channel.
  */
 async function handlePrStatusCommand(args: string[] = []): Promise<void> {
   const watcher = getActiveWatcher();
+  const channelFilter = parseNamedArg(args, "--channel");
 
-  if (!watcher) {
-    if (args.includes("--json")) {
-      jsonOut([]);
-    } else {
-      console.log("No active PR watcher (no running orchestrator, or GITHUB_TOKEN is unset).");
+  type Row = {
+    ticketId: string;
+    owner: string;
+    name: string;
+    number: number;
+    branch: string;
+    ci: string | null;
+    review: string | null;
+    prState: string | null;
+  };
+
+  let rows: Row[] = [];
+
+  if (watcher) {
+    rows = watcher
+      .listTracked()
+      .filter((t) => !channelFilter || t.channelId === channelFilter)
+      .map((t) => ({
+        ticketId: t.ticketId,
+        owner: t.repo.owner,
+        name: t.repo.name,
+        number: t.pr.number,
+        branch: t.pr.branch,
+        ci: t.last?.ci ?? null,
+        review: t.last?.review ?? null,
+        prState: t.last?.prState ?? null
+      }));
+  } else {
+    const channelStore = new ChannelStore(undefined, getHarnessStore());
+    const channelIds = channelFilter
+      ? [channelFilter]
+      : (await channelStore.listChannels()).map((c) => c.channelId);
+    for (const cid of channelIds) {
+      const persisted = await channelStore.readTrackedPrs(cid);
+      for (const p of persisted) {
+        rows.push({
+          ticketId: p.ticketId,
+          owner: p.owner,
+          name: p.name,
+          number: p.number,
+          branch: p.branch,
+          ci: p.ci,
+          review: p.review,
+          prState: p.prState
+        });
+      }
     }
-    return;
   }
-
-  const tracked = watcher.listTracked();
 
   if (args.includes("--json")) {
-    jsonOut(tracked);
+    jsonOut(rows);
     return;
   }
 
-  if (tracked.length === 0) {
-    console.log("No PRs currently tracked.");
+  if (rows.length === 0) {
+    console.log(
+      watcher
+        ? "No PRs currently tracked."
+        : "No tracked PRs on disk (no recent orchestrator run, or GITHUB_TOKEN was unset)."
+    );
     return;
   }
 
-  console.log(`Tracked PRs (${tracked.length}):`);
+  console.log(`Tracked PRs (${rows.length}):`);
   console.log("  TICKET             PR                                   STATE     CI        REVIEW");
 
-  for (const t of tracked) {
-    const label = `${t.repo.owner}/${t.repo.name}#${t.pr.number}`;
-    const state = t.last?.prState ?? "-";
-    const ci = t.last?.ci ?? "-";
-    const review = t.last?.review ?? "-";
+  for (const t of rows) {
+    const label = `${t.owner}/${t.name}#${t.number}`;
+    const state = t.prState ?? "-";
+    const ci = t.ci ?? "-";
+    const review = t.review ?? "-";
     console.log(
       `  ${t.ticketId.padEnd(18)} ${label.padEnd(36)} ${state.padEnd(9)} ${ci.padEnd(9)} ${review}`
     );
   }
+}
+
+/**
+ * `rly approve <runId>` / `rly reject <runId> [--feedback "text"]` — CLI
+ * parity for the `harness_approve_plan` / `harness_reject_plan` MCP tools.
+ * The TUI and GUI shell out here so there's exactly one place where an
+ * approval record is written (via `submitApproval` → artifact store). We
+ * discover which workspace owns the run by scanning the workspace-registry
+ * for one whose artifacts dir contains `<runId>__approval` territory; the
+ * `LocalArtifactStore` is then pointed at that workspace's artifacts dir.
+ */
+async function handlePlanDecisionCommand(
+  command: "approve" | "reject",
+  args: string[],
+  _cwd: string
+): Promise<void> {
+  const positionals = args.filter((a) => !a.startsWith("--"));
+  const runId = positionals[0];
+  const feedback = parseNamedArg(args, "--feedback") ?? undefined;
+
+  if (!runId) {
+    console.error(`Usage: rly ${command} <runId> [--feedback "text"]`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const workspaceId = await resolveWorkspaceIdForRun(runId);
+  if (!workspaceId) {
+    console.error(
+      `Could not locate workspace containing run ${runId}. Run \`rly list-runs\` from the workspace that owns the run.`
+    );
+    process.exitCode = 1;
+    return;
+  }
+  const artifactsDir = `${getWorkspaceDir(workspaceId)}/artifacts`;
+  const artifactStore = new LocalArtifactStore(artifactsDir, getHarnessStore());
+  const decision = command === "approve" ? "approved" : "rejected";
+
+  try {
+    const path = await submitApproval({
+      runId,
+      decision,
+      feedback,
+      artifactStore
+    });
+    jsonOut({ ok: true, runId, decision, feedback, workspaceId, path });
+  } catch (err) {
+    console.error(
+      `Failed to ${command} run ${runId}: ${err instanceof Error ? err.message : String(err)}`
+    );
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * `rly pending-plans [--json]` — list runs awaiting approval across every
+ * registered workspace. The TUI and GUI poll this to know when to show the
+ * plan-approval banner / CTA. A run is "pending" when its `state` is
+ * `AWAITING_APPROVAL` and no approval record has been written yet.
+ */
+async function handlePendingPlansCommand(
+  args: string[],
+  _cwd: string
+): Promise<void> {
+  const workspaces = await listRegisteredWorkspaces();
+  const pending: Array<{
+    runId: string;
+    workspaceId: string;
+    featureRequest: string;
+    channelId: string | null;
+    state: string;
+    updatedAt: string;
+  }> = [];
+  for (const ws of workspaces) {
+    const artifactsDir = `${getWorkspaceDir(ws.workspaceId)}/artifacts`;
+    const artifactStore = new LocalArtifactStore(artifactsDir, getHarnessStore());
+    const runs = await artifactStore.readRunsIndex();
+    for (const r of runs) {
+      if (r.state !== "AWAITING_APPROVAL") continue;
+      const existing = await artifactStore.readApprovalRecord(r.runId);
+      if (existing) continue; // already decided, orchestrator just hasn't advanced yet
+      pending.push({
+        runId: r.runId,
+        workspaceId: ws.workspaceId,
+        featureRequest: r.featureRequest,
+        channelId: r.channelId,
+        state: r.state,
+        updatedAt: r.updatedAt
+      });
+    }
+  }
+
+  if (args.includes("--json")) {
+    jsonOut(pending);
+    return;
+  }
+
+  if (pending.length === 0) {
+    console.log("No runs awaiting approval.");
+    return;
+  }
+
+  console.log(`Runs awaiting approval (${pending.length}):`);
+  for (const p of pending) {
+    const channel = p.channelId ? ` channel=${p.channelId}` : "";
+    console.log(`  ${p.runId}  workspace=${p.workspaceId}${channel}  "${p.featureRequest.slice(0, 60)}"`);
+  }
+  console.log("\nApprove with: rly approve <runId>");
+  console.log("Reject with:  rly reject <runId> [--feedback \"…\"]");
+}
+
+async function resolveWorkspaceIdForRun(runId: string): Promise<string | null> {
+  const workspaces = await listRegisteredWorkspaces();
+  for (const ws of workspaces) {
+    const artifactsDir = `${getWorkspaceDir(ws.workspaceId)}/artifacts`;
+    const artifactStore = new LocalArtifactStore(artifactsDir, getHarnessStore());
+    const runs = await artifactStore.readRunsIndex();
+    if (runs.some((r) => r.runId === runId)) return ws.workspaceId;
+  }
+  return null;
 }
 
 /**
@@ -1404,8 +1582,145 @@ async function handleChatCommand(
     return;
   }
 
-  console.error("Usage: rly chat <system-prompt|resolve-refs|mcp-config|rewind-snapshot|rewind-apply>");
+  if (sub === "rewind") {
+    await handleChatRewindCommand(args);
+    return;
+  }
+
+  console.error("Usage: rly chat <system-prompt|resolve-refs|mcp-config|rewind|rewind-snapshot|rewind-apply>");
   process.exitCode = 1;
+}
+
+/**
+ * `rly chat rewind --channel <id> --session <id> [--to <iso> | --interactive]`
+ *
+ * End-to-end rewind driver. Lists user messages with recorded `rewindKey`
+ * metadata (the only kind we can roll back to), lets the caller pick one,
+ * then chains the existing `rewindSnapshot`→`rewindApply` functions.
+ * Matches what the GUI's `RewindConfirmModal` does, but with a
+ * readline-based picker so scripts can also drive it via `--to`.
+ *
+ * Non-interactive mode (`--to`) takes a message timestamp (the exact ISO8601
+ * stored on the persisted message), not a `rewindKey`. Timestamps are
+ * visible in `rly session messages --json`; keys are an implementation
+ * detail that only rewind ever touches.
+ */
+async function handleChatRewindCommand(args: string[]): Promise<void> {
+  const channelId = parseNamedArg(args, "--channel");
+  const sessionId = parseNamedArg(args, "--session");
+  const toTimestamp = parseNamedArg(args, "--to");
+  const interactive = args.includes("--interactive");
+
+  if (!channelId || !sessionId) {
+    console.error(
+      "Usage: rly chat rewind --channel <id> --session <id> [--to <messageTimestamp> | --interactive]"
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const sessionStore = new SessionStore();
+  const messages = await sessionStore.loadMessages(channelId, sessionId, 500);
+  // Only user messages with a stored `rewindKey` can actually be rewound —
+  // that's the metadata tag that pairs the message with a git ref.
+  const candidates = messages
+    .map((m, index) => ({ message: m, index }))
+    .filter(
+      (c) =>
+        c.message.role === "user" &&
+        typeof c.message.metadata?.rewindKey === "string" &&
+        c.message.metadata.rewindKey.length > 0
+    );
+
+  if (candidates.length === 0) {
+    console.error(
+      "No rewindable messages found. Rewind only works for user turns written with a `rewindKey` metadata tag."
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  let chosen: (typeof candidates)[number] | null = null;
+
+  if (toTimestamp) {
+    chosen = candidates.find((c) => c.message.timestamp === toTimestamp) ?? null;
+    if (!chosen) {
+      console.error(
+        `No rewindable message with timestamp ${toTimestamp}. Available timestamps: ${candidates
+          .map((c) => c.message.timestamp)
+          .join(", ")}`
+      );
+      process.exitCode = 1;
+      return;
+    }
+  } else if (interactive) {
+    const { createInterface } = await import("node:readline/promises");
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    try {
+      const recent = candidates.slice(-20);
+      console.log("Rewindable user messages (most recent last):");
+      for (let i = 0; i < recent.length; i += 1) {
+        const c = recent[i];
+        const preview = c.message.content
+          .replace(/\s+/g, " ")
+          .slice(0, 60);
+        console.log(`  [${i + 1}] ${c.message.timestamp}  ${preview}`);
+      }
+      const raw = (await rl.question("Pick a number (or Enter to cancel): ")).trim();
+      if (!raw) {
+        console.error("Cancelled.");
+        process.exitCode = 1;
+        return;
+      }
+      const picked = Number(raw);
+      if (!Number.isInteger(picked) || picked < 1 || picked > recent.length) {
+        console.error(`Invalid selection: ${raw}`);
+        process.exitCode = 1;
+        return;
+      }
+      chosen = recent[picked - 1];
+    } finally {
+      rl.close();
+    }
+  } else {
+    console.error(
+      "Specify --to <messageTimestamp> or --interactive. Recent candidates:"
+    );
+    for (const c of candidates.slice(-10)) {
+      const preview = c.message.content.replace(/\s+/g, " ").slice(0, 60);
+      console.error(`  ${c.message.timestamp}  ${preview}`);
+    }
+    process.exitCode = 1;
+    return;
+  }
+
+  const key = String(chosen.message.metadata?.rewindKey ?? "");
+  if (!key) {
+    console.error("Chosen message is missing rewindKey metadata (data corruption?).");
+    process.exitCode = 1;
+    return;
+  }
+
+  // Snapshot first (captures current HEADs under the same key, so a later
+  // rewind-undo could theoretically replay — today the key is the one on
+  // the message, but fresh snapshots ensure refs exist even if the original
+  // ones were GC'd). The GUI path skips re-snapshotting; we follow suit
+  // and only apply.
+  const result = await rewindApply(
+    channelId,
+    sessionId,
+    key,
+    chosen.message.timestamp
+  );
+  jsonOut({
+    ok: true,
+    target: {
+      timestamp: chosen.message.timestamp,
+      rewindKey: key,
+      preview: chosen.message.content.slice(0, 120)
+    },
+    ...result
+  });
 }
 
 async function printRunsIndex(

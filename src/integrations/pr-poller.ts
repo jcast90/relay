@@ -44,11 +44,32 @@ export interface FollowUpDispatcher {
   enqueueFollowUp(request: FollowUpRequest): Promise<string>;
 }
 
+/**
+ * Snapshot of a single tracked entry — exactly what `listTracked()` returns.
+ * Declared at module scope so callers outside this file (pr-watcher-factory)
+ * can type their `onSnapshot` mirror sinks.
+ */
+export type TrackedPrSnapshot = {
+  ticketId: string;
+  channelId: string;
+  pr: TrackedPr["pr"];
+  repo: TrackedPr["repo"];
+  last: EnrichedPR | null;
+};
+
 export interface PrPollerOptions {
   scm: HarnessScm;
   channelStore: ChannelStore;
   scheduler: FollowUpDispatcher;
   intervalMs?: number;
+  /**
+   * Optional mirror sink. Fired after every tick, and on `track`/`untrack`,
+   * with the full set of current tracked rows. Used by the CLI to persist
+   * a disk copy that the TUI and GUI can read (`tracked-prs.json`). The
+   * poller does not await the return — sinks run in the background and
+   * are swallowed on failure so polling stays crash-free.
+   */
+  onSnapshot?: (rows: TrackedPrSnapshot[]) => void;
 }
 
 interface TrackedState {
@@ -64,6 +85,7 @@ export class PrPoller {
   private readonly scheduler: FollowUpDispatcher;
   private readonly intervalMs: number;
   private readonly tracked = new Map<string, TrackedState>();
+  private readonly onSnapshot?: (rows: TrackedPrSnapshot[]) => void;
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
@@ -73,33 +95,42 @@ export class PrPoller {
     this.channelStore = options.channelStore;
     this.scheduler = options.scheduler;
     this.intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
+    this.onSnapshot = options.onSnapshot;
   }
 
   track(entry: TrackedPr): void {
     this.tracked.set(entry.ticketId, { entry, last: null });
+    this.fireSnapshot();
   }
 
   untrack(ticketId: string): void {
     this.tracked.delete(ticketId);
+    this.fireSnapshot();
   }
 
   /**
    * Read-only snapshot of tracked PRs and their last-seen enriched state.
    * Used by the `pr-status` CLI command to render a table without reaching
-   * into the private `tracked` map.
+   * into the private `tracked` map, and by the mirror sink to persist a
+   * disk copy for TUI/GUI readers.
    */
-  listTracked(): ReadonlyArray<{
-    ticketId: string;
-    pr: TrackedPr["pr"];
-    repo: TrackedPr["repo"];
-    last: EnrichedPR | null;
-  }> {
+  listTracked(): ReadonlyArray<TrackedPrSnapshot> {
     return Array.from(this.tracked.values()).map((state) => ({
       ticketId: state.entry.ticketId,
+      channelId: state.entry.channelId,
       pr: state.entry.pr,
       repo: state.entry.repo,
       last: state.last,
     }));
+  }
+
+  private fireSnapshot(): void {
+    if (!this.onSnapshot) return;
+    try {
+      this.onSnapshot(Array.from(this.listTracked()));
+    } catch (err) {
+      console.warn("[pr-poller] snapshot sink threw; ignoring", err);
+    }
   }
 
   start(): void {
@@ -145,6 +176,9 @@ export class PrPoller {
       }
     } finally {
       this.running = false;
+      // Fire even when `this.running` blocked the tick — readers want a
+      // fresh snapshot on every attempt so stale data doesn't linger.
+      this.fireSnapshot();
     }
   }
 

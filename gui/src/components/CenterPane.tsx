@@ -5,6 +5,7 @@ import type {
   ChannelEntry,
   ChatSession,
   Decision,
+  PendingPlan,
   PersistedChatMessage,
   TicketLedgerEntry,
 } from "../types";
@@ -110,6 +111,11 @@ export function CenterPane({
 
   return (
     <div className="panel">
+      <PendingPlanCta
+        channel={channel}
+        refreshTick={refreshTick}
+        onChanged={onRefresh}
+      />
       <div className="tabs">
         <div
           className={`tab ${tab === "chat" ? "active" : ""}`}
@@ -849,4 +855,100 @@ function formatTime(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+/**
+ * Approval CTA shown above the tabs whenever a run tied to the current
+ * channel is `AWAITING_APPROVAL`. Clicking Approve/Reject shells out to
+ * `rly approve` / `rly reject` via the Tauri bridge — the same code path
+ * the TUI and CLI hit, so there's only one surface that writes approval
+ * records.
+ */
+function PendingPlanCta({
+  channel,
+  refreshTick,
+  onChanged,
+}: {
+  channel: Channel | null;
+  refreshTick: number;
+  onChanged: () => void;
+}) {
+  const [plans, setPlans] = useState<PendingPlan[]>([]);
+  const [busyRunId, setBusyRunId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listPendingPlans()
+      .then((p) => {
+        if (!cancelled) setPlans(p);
+      })
+      .catch(() => {
+        if (!cancelled) setPlans([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshTick]);
+
+  const relevant = plans.filter((p) =>
+    channel ? !p.channelId || p.channelId === channel.channelId : true,
+  );
+  if (relevant.length === 0) return null;
+
+  const act = async (plan: PendingPlan, decision: "approve" | "reject") => {
+    setBusyRunId(plan.runId);
+    setError(null);
+    try {
+      if (decision === "approve") {
+        await api.approvePlan(plan.runId);
+      } else {
+        await api.rejectPlan(plan.runId);
+      }
+      // Nudge the app-wide refresh so the banner disappears once the
+      // approval record lands.
+      onChanged();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusyRunId(null);
+    }
+  };
+
+  return (
+    <div className="plan-cta" role="status" aria-live="polite">
+      {relevant.map((p) => (
+        <div key={p.runId} className="plan-cta-row">
+          <div className="plan-cta-body">
+            <strong>Plan awaiting approval</strong>
+            <span className="plan-cta-feature">
+              {p.featureRequest.slice(0, 80)}
+            </span>
+            <span className="plan-cta-meta">
+              run {p.runId.slice(0, 12)}… · workspace {p.workspaceId}
+            </span>
+          </div>
+          <div className="plan-cta-buttons">
+            <button
+              type="button"
+              className="primary"
+              disabled={busyRunId === p.runId}
+              onClick={() => act(p, "approve")}
+            >
+              {busyRunId === p.runId ? "…" : "Approve"}
+            </button>
+            <button
+              type="button"
+              disabled={busyRunId === p.runId}
+              onClick={() => act(p, "reject")}
+            >
+              Reject
+            </button>
+          </div>
+        </div>
+      ))}
+      {error && <div className="composer-error">{error}</div>}
+    </div>
+  );
 }

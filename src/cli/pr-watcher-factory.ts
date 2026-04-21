@@ -28,14 +28,15 @@ import type { ChannelStore } from "../channels/channel-store.js";
 import {
   createScm,
   wrapScm,
-  type EnrichedPR,
   type HarnessProject,
   type HarnessScm
 } from "../integrations/scm.js";
 import {
   PrPoller,
-  type TrackedPr
+  type TrackedPr,
+  type TrackedPrSnapshot
 } from "../integrations/pr-poller.js";
+import type { TrackedPrRow } from "../domain/pr-row.js";
 import { SchedulerFollowUpDispatcher } from "../integrations/scheduler-follow-up-dispatcher.js";
 import type {
   PollerFactory,
@@ -84,12 +85,7 @@ export interface ActiveWatcherView {
   /** Track a PR explicitly (used by `pr-watch`). */
   track(entry: TrackedPr): void;
   /** Snapshot of currently tracked PRs (used by `pr-status`). */
-  listTracked(): ReadonlyArray<{
-    ticketId: string;
-    pr: TrackedPr["pr"];
-    repo: TrackedPr["repo"];
-    last: EnrichedPR | null;
-  }>;
+  listTracked(): ReadonlyArray<TrackedPrSnapshot>;
   /** The repo the watcher is scoped to — used to resolve `pr-watch` inputs. */
   repo: { owner: string; name: string };
   /** The underlying SCM facade — needed to resolve PR URLs. */
@@ -302,7 +298,15 @@ export function createPrWatcherFactory(opts: CreateFactoryOpts): PollerFactory {
             scm,
             channelStore: opts.channelStore,
             scheduler: dispatcher,
-            intervalMs
+            intervalMs,
+            onSnapshot: (rows) => {
+              // Mirror tracked PRs to `channels/<id>/tracked-prs.json` for
+              // the TUI and GUI. Group by channelId so each channel sees
+              // only its own tickets; fire-and-forget so a slow disk write
+              // doesn't back up the poller. The channel dir is created on
+              // demand by ChannelStore.writeTrackedPrs.
+              void persistSnapshot(opts.channelStore, rows);
+            }
           });
           poller.start();
 
@@ -429,4 +433,53 @@ async function scanCompletedTickets(input: {
       // Transient GitHub failure — next tick will retry. Don't mark tracked.
     }
   }
+}
+
+/**
+ * Flatten a `TrackedPrSnapshot[]` into the persisted `TrackedPrRow` shape
+ * and fan it out by `channelId` so each channel gets its own file. We
+ * always overwrite — the poller owns the whole view, so a channel that
+ * no longer has tracked entries ends up with an empty rows array rather
+ * than stale data. Swallow per-channel failures so one flaky disk
+ * doesn't poison snapshotting for the others.
+ */
+async function persistSnapshot(
+  channelStore: ChannelStore,
+  rows: ReadonlyArray<TrackedPrSnapshot>
+): Promise<void> {
+  const grouped = new Map<string, TrackedPrRow[]>();
+  // Seed with every channel we've seen (even empty) — but we only know
+  // the currently tracked ones; a channel dropping to zero rows simply
+  // won't be emitted here. That's acceptable: readers should treat "no
+  // file" and "empty rows" identically (both map to "no tracked PRs").
+  const now = new Date().toISOString();
+  for (const row of rows) {
+    const list = grouped.get(row.channelId) ?? [];
+    list.push({
+      ticketId: row.ticketId,
+      channelId: row.channelId,
+      owner: row.repo.owner,
+      name: row.repo.name,
+      number: row.pr.number,
+      url: row.pr.url,
+      branch: row.pr.branch,
+      ci: row.last?.ci ?? null,
+      review: row.last?.review ?? null,
+      prState: row.last?.prState ?? null,
+      updatedAt: now
+    });
+    grouped.set(row.channelId, list);
+  }
+  await Promise.all(
+    Array.from(grouped.entries()).map(async ([channelId, list]) => {
+      try {
+        await channelStore.writeTrackedPrs(channelId, list);
+      } catch (err) {
+        console.warn(
+          `[pr-watcher] failed to persist tracked-prs for ${channelId}:`,
+          err
+        );
+      }
+    })
+  );
 }

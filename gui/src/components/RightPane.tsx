@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { Channel, ChannelRunLink, RunIndexEntry, Spawn } from "../types";
+import type {
+  Channel,
+  ChannelRunLink,
+  RunIndexEntry,
+  Spawn,
+  TrackedPrRow,
+} from "../types";
 import { SessionList } from "./SessionList";
 
 type Props = {
@@ -98,6 +104,77 @@ export function RightPane({
           </div>
         ))}
       </div>
+
+      <TrackedPrs channelId={channel.channelId} refreshTick={refreshTick} />
+    </div>
+  );
+}
+
+/**
+ * Tracked PRs strip — mirrors `rly pr-status` for the current channel.
+ * Hidden when the channel has never tracked a PR. Columns collapse in the
+ * narrow right pane: state / CI / review get a colored dot instead of
+ * text (kept accessible via `title`).
+ */
+function TrackedPrs({
+  channelId,
+  refreshTick,
+}: {
+  channelId: string;
+  refreshTick: number;
+}) {
+  const [rows, setRows] = useState<TrackedPrRow[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listTrackedPrs(channelId)
+      .then((r) => {
+        if (!cancelled) setRows(r);
+      })
+      .catch(() => {
+        if (!cancelled) setRows([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [channelId, refreshTick]);
+
+  if (rows.length === 0) return null;
+
+  return (
+    <div className="section">
+      <h4>Tracked PRs ({rows.length})</h4>
+      {rows.map((r) => (
+        <div key={`${r.ticketId}-${r.number}`} className="row tracked-pr-row">
+          <span title={r.ticketId} className="tracked-pr-ticket">
+            {r.ticketId.slice(0, 10)}
+          </span>
+          <a
+            href={r.url}
+            className="tracked-pr-link"
+            title={r.branch}
+            target="_blank"
+            rel="noreferrer noopener"
+          >
+            #{r.number}
+          </a>
+          <span className="right tracked-pr-badges">
+            <span
+              className={`pr-dot pr-state-${r.prState ?? "unknown"}`}
+              title={`state: ${r.prState ?? "-"}`}
+            />
+            <span
+              className={`pr-dot pr-ci-${r.ci ?? "unknown"}`}
+              title={`ci: ${r.ci ?? "-"}`}
+            />
+            <span
+              className={`pr-dot pr-review-${r.review ?? "unknown"}`}
+              title={`review: ${r.review ?? "-"}`}
+            />
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
