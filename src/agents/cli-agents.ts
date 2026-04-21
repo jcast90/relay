@@ -22,6 +22,15 @@ interface CliAgentOptions {
   cwd: string;
   model?: string;
   invoker: CommandInvoker;
+  /**
+   * Optional streaming observer — when supplied (and the invoker exposes
+   * `spawn`), the Claude adapter switches from buffered `--output-format
+   * json` to `stream-json --verbose` and feeds every stdout line to this
+   * callback so the CLI can render tool-use activity inline as it happens.
+   * The TUI and GUI have their own streaming paths; this is how `rly run`
+   * achieves the same parity. (OSS-06)
+   */
+  onStreamLine?: (line: string) => void;
 }
 
 interface ParsedProviderResult {
@@ -44,6 +53,7 @@ abstract class CliAgentBase implements Agent {
   protected readonly cwd: string;
   protected readonly model?: string;
   protected readonly invoker: CommandInvoker;
+  protected readonly onStreamLine?: (line: string) => void;
 
   constructor(options: CliAgentOptions) {
     this.id = options.id;
@@ -53,6 +63,7 @@ abstract class CliAgentBase implements Agent {
     this.cwd = options.cwd;
     this.model = options.model;
     this.invoker = options.invoker;
+    this.onStreamLine = options.onStreamLine;
   }
 
   async run(request: WorkRequest) {
@@ -158,6 +169,15 @@ export class ClaudeCliAgent extends CliAgentBase {
       process.env.RELAY_AUTO_APPROVE === "true" ||
       process.env.RELAY_AUTO_APPROVE === "yes";
 
+    // Streaming path: only reachable when the caller wired an onStreamLine
+    // hook AND the invoker exposes `spawn`. ScriptedInvoker doesn't
+    // implement spawn; live test runs that want streaming must use
+    // NodeCommandInvoker. We fall back to the buffered path otherwise so
+    // no call site breaks just because streaming wasn't configured.
+    if (this.onStreamLine && typeof this.invoker.spawn === "function") {
+      return this.invokeStreaming(prompt, autoApprove);
+    }
+
     const args = [
       "-p",
       "--output-format",
@@ -192,6 +212,106 @@ export class ClaudeCliAgent extends CliAgentBase {
     return {
       rawResponse: result.stdout,
       parsed: this.normalizePayload(JSON.parse(result.stdout))
+    };
+  }
+
+  /**
+   * Stream-json variant of the Claude call. Drives the onStreamLine hook on
+   * every newline so CLI renderers can visualise tool_use blocks live. The
+   * final agent-result JSON (schema-shaped) is reassembled from the
+   * concatenated text blocks emitted before the stream closes — this mirrors
+   * the TUI worker's logic in tui/src/main.rs.
+   */
+  private async invokeStreaming(
+    prompt: string,
+    autoApprove: boolean
+  ): Promise<ParsedProviderResult> {
+    const args: string[] = [
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--json-schema",
+      JSON.stringify(agentResultJsonSchema)
+    ];
+    if (autoApprove) args.push("--dangerously-skip-permissions");
+    else args.push("--permission-mode", "default");
+    if (this.model) args.push("--model", this.model);
+    args.push(prompt);
+
+    const spawnFn = this.invoker.spawn!;
+    const handle = spawnFn({
+      command: "claude",
+      args,
+      cwd: this.cwd,
+      timeoutMs: 300_000
+    });
+
+    let stdoutBuf = "";
+    let stderrBuf = "";
+    let accumText = "";
+    let resultText: string | null = null;
+    const onLine = this.onStreamLine!;
+
+    const processLine = (line: string) => {
+      if (!line) return;
+      onLine(line);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        return;
+      }
+      if (!parsed || typeof parsed !== "object") return;
+      const obj = parsed as Record<string, unknown>;
+      if (obj.type === "assistant") {
+        const msg = obj.message as { content?: unknown } | undefined;
+        const blocks = Array.isArray(msg?.content) ? msg?.content : null;
+        if (!blocks) return;
+        for (const block of blocks) {
+          if (block && typeof block === "object") {
+            const b = block as Record<string, unknown>;
+            if (b.type === "text" && typeof b.text === "string") {
+              accumText += b.text;
+            }
+          }
+        }
+      } else if (obj.type === "result" && typeof obj.result === "string") {
+        resultText = obj.result;
+      }
+    };
+
+    handle.onStdout((chunk) => {
+      stdoutBuf += chunk;
+      let newlineIdx: number;
+      while ((newlineIdx = stdoutBuf.indexOf("\n")) >= 0) {
+        const line = stdoutBuf.slice(0, newlineIdx).trim();
+        stdoutBuf = stdoutBuf.slice(newlineIdx + 1);
+        if (line) processLine(line);
+      }
+    });
+    handle.onStderr((chunk) => {
+      stderrBuf += chunk;
+    });
+
+    const exitCode: number = await new Promise((resolve, reject) => {
+      handle.onError((err) => reject(err));
+      handle.onExit((code) => resolve(code ?? 1));
+    });
+    const tail = stdoutBuf.trim();
+    if (tail) processLine(tail);
+
+    if (exitCode !== 0) {
+      throw new Error(stderrBuf || stdoutBuf || "Claude execution failed.");
+    }
+
+    const raw = resultText ?? accumText;
+    if (!raw) {
+      throw new Error("Claude stream produced no parseable JSON body.");
+    }
+    return {
+      rawResponse: raw,
+      parsed: this.normalizePayload(JSON.parse(raw))
     };
   }
 }

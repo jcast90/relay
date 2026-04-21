@@ -369,45 +369,85 @@ fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect) {
                 }
             }
             ChatRole::Activity => {
-                // Stacked activity: content may have multiple lines
+                // Stacked activity layout — mirrors the GUI's ActivityStreamCard.
+                // First content line is a status header ("N actions · thinking"),
+                // subsequent lines are per-tool entries formatted "[HH:MM:SS] desc",
+                // and trailing "+N more" / "last update" lines are de-emphasised.
                 let activity_lines: Vec<&str> = msg.content.lines().collect();
-                let alias_label = msg.agent_alias.as_ref().map(|a| format!("@{}", a)).unwrap_or_else(|| "agent".to_string());
+                let alias_label = msg
+                    .agent_alias
+                    .as_ref()
+                    .map(|a| format!("@{}", a))
+                    .unwrap_or_else(|| "agent".to_string());
+                let last_idx = activity_lines.len().saturating_sub(1);
+                let mut newest_shown = false;
                 for (li, aline) in activity_lines.iter().enumerate() {
                     if li == 0 {
-                        // First line: show agent badge + icon
-                        let mut spans = vec![
+                        // Header: agent badge + live status
+                        let spans = vec![
                             Span::styled("    ", Style::default()),
                             Span::styled(
                                 format!(" {} ", alias_label),
                                 Style::default().fg(Color::Black).bg(Color::Rgb(80, 80, 100)),
                             ),
-                            Span::styled(" ", Style::default()),
-                        ];
-                        // Prefix icon for the newest (first) entry
-                        spans.push(Span::styled(
-                            "⚙ ",
-                            Style::default().fg(Color::Rgb(120, 120, 150)),
-                        ));
-                        spans.push(Span::styled(
-                            aline.to_string(),
-                            Style::default().fg(Color::Rgb(120, 120, 150)).add_modifier(Modifier::ITALIC),
-                        ));
-                        lines.push(Line::from(spans));
-                    } else {
-                        // Subsequent stacked entries (indented)
-                        let prefix = if aline.starts_with("  +") {
-                            // "+N more" summary
-                            "      "
-                        } else {
-                            "      ⚙ "
-                        };
-                        lines.push(Line::from(vec![
+                            Span::raw("  "),
                             Span::styled(
-                                format!("{}{}", prefix, aline),
-                                Style::default().fg(Color::Rgb(80, 80, 100)).add_modifier(Modifier::ITALIC),
+                                if app.chat_streaming { "● " } else { "○ " },
+                                Style::default().fg(if app.chat_streaming {
+                                    Color::Green
+                                } else {
+                                    Color::DarkGray
+                                }),
                             ),
-                        ]));
+                            Span::styled(
+                                aline.to_string(),
+                                Style::default()
+                                    .fg(Color::Rgb(160, 160, 180))
+                                    .add_modifier(Modifier::ITALIC),
+                            ),
+                        ];
+                        lines.push(Line::from(spans));
+                        continue;
                     }
+
+                    let is_meta = aline.starts_with("  +") || aline.starts_with("last update ");
+                    if is_meta {
+                        lines.push(Line::from(vec![Span::styled(
+                            format!("      {}", aline.trim_start()),
+                            Style::default()
+                                .fg(Color::Rgb(80, 80, 100))
+                                .add_modifier(Modifier::ITALIC),
+                        )]));
+                        continue;
+                    }
+
+                    // Entry line. The last entry line (just before the meta lines
+                    // if any) is the newest — highlight it so the user can track
+                    // what's happening *right now*, matching the GUI's `newest`
+                    // class treatment.
+                    let is_newest = !newest_shown
+                        && (li == last_idx
+                            || (li + 1 <= last_idx
+                                && {
+                                    let next = activity_lines[li + 1];
+                                    next.starts_with("  +") || next.starts_with("last update ")
+                                }));
+                    if is_newest {
+                        newest_shown = true;
+                    }
+                    let (entry_color, icon_color) = if is_newest {
+                        (Color::Rgb(180, 180, 200), Color::Rgb(150, 150, 200))
+                    } else {
+                        (Color::Rgb(100, 100, 120), Color::Rgb(90, 90, 110))
+                    };
+                    lines.push(Line::from(vec![
+                        Span::raw("      "),
+                        Span::styled("⚙ ", Style::default().fg(icon_color)),
+                        Span::styled(
+                            aline.to_string(),
+                            Style::default().fg(entry_color).add_modifier(Modifier::ITALIC),
+                        ),
+                    ]));
                 }
             }
             ChatRole::System => {
