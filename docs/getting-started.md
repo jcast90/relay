@@ -68,7 +68,7 @@ The primary is told **not** to grep or edit `web/` directly. Instead:
 - **Quick question** → `crosslink_send` to the live `web` agent ("does `/auth/login` still return a JWT?")
 - **Long task** → file a ticket with `assignedAlias: "web"`. The `web` agent polls `tickets.json` and picks it up.
 
-If no `web` agent is live, the primary sees `no_session` and (on macOS) can spawn one: Relay `osascript`s a new Terminal tab and runs `rly claude` in the `web` repo. Tracked in `spawns.json`. Kill it from the GUI and the tab closes.
+If no `web` agent is live, the primary sees `no_session` and can spawn one from the GUI. Relay opens a terminal tab in the `web` repo running `rly claude`, tracked in `spawns.json`: macOS uses Terminal.app via `osascript` (window/tab ids tracked for targeted close); Linux probes `$TERMINAL` then a chain (`x-terminal-emulator`, `gnome-terminal`, `konsole`, `xterm`, `alacritty`, `kitty`, `wezterm`); Windows prefers `wt.exe`, falls back to `powershell.exe` / `cmd.exe`. Kill closes the tab on macOS and SIGTERMs the crosslink session on Linux/Windows. If no supported terminal is found, spawn surfaces an error and posts a channel-feed entry telling you to `rly claude` in the repo manually.
 
 ## Mental model (reference)
 
@@ -128,7 +128,7 @@ All three dashboards (CLI / TUI / GUI) read the same files. No synchronisation l
     runs.json                 # linked orchestrator runs
     decisions/<id>.json       # one file per decision (atomic temp-rename)
     sessions/<sessionId>.jsonl
-    spawns.json               # spawned-agent tracking (macOS GUI)
+    spawns.json               # spawned-agent tracking (GUI, all platforms)
   crosslink/
     sessions/<sessionId>.json # live session heartbeats
     mailboxes/<sessionId>/    # pending crosslink messages
@@ -152,7 +152,7 @@ Opting in to Postgres (`PostgresHarnessStore`) keeps the same on-disk layout and
 | `rly tui` / `rly gui` fails on first run | Install `cargo` (rustup). The auto-build needs it. |
 | TUI shows no channels | Register at least one workspace with `rly up` and create a channel (or launch a session, which creates one). |
 | GUI shows stale data | `rly gui --rebuild` to refresh the bundle after a code change. |
-| Crosslink `no_session` when spawning an associated agent | macOS-only today. On Linux/Windows, run `rly claude` in the associated repo manually — crosslink picks it up. |
+| Crosslink `no_session` when spawning an associated agent | The GUI spawns a terminal tab on macOS/Linux/Windows. If spawn fails (no supported terminal detected), a system entry lands in the channel feed — run `rly claude` in the repo manually and crosslink will pick it up. |
 | PR watcher never updates | Check `rly pr-status` for errors. Usually a scoping issue on `GITHUB_TOKEN` (needs `repo` scope for private repos). |
 
 ## Next

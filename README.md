@@ -171,9 +171,9 @@ Live agents in different repos (each a `rly claude` session) discover each other
 
 ### Spawning associated agents
 
-Opt-in per associated repo at channel creation, or on demand when the primary hits a `no_session` error. **macOS only** today — Relay shells `osascript` to open a Terminal tab and runs `rly claude` in it. Tracked per channel in `spawns.json`; kill from the GUI closes the tab and SIGTERMs the pid. Self-heals against dead crosslink heartbeats.
+Opt-in per associated repo at channel creation, or on demand when the primary hits a `no_session` error. The GUI opens a terminal tab running `rly claude` in the repo. Per platform: macOS uses Terminal.app via `osascript` (window/tab ids tracked for targeted close); Linux probes `$TERMINAL` then a chain (`x-terminal-emulator`, `gnome-terminal`, `konsole`, `xterm`, `alacritty`, `kitty`, `wezterm`); Windows prefers `wt.exe`, falls back to `powershell.exe` / `cmd.exe`. Tracked per channel in `spawns.json`; kill from the GUI closes the tab on macOS and SIGTERMs (or `taskkill /T /F`) the crosslink session on Linux/Windows. Self-heals against dead crosslink heartbeats.
 
-On Linux / Windows, run `rly claude` in the associated repo manually — crosslink picks it up the same way.
+If no supported terminal is detected, spawn surfaces an error **and** posts a system entry to the channel feed — run `rly claude` in the repo manually and crosslink will pick it up.
 
 ### Tickets
 
@@ -380,7 +380,7 @@ Verification commands run through an `Executor` abstraction (`src/execution/exec
     runs.json                 # linked orchestrator runs
     decisions/<id>.json       # one file per decision (atomic writes)
     sessions/<sessionId>.jsonl
-    spawns.json               # spawned-agent tracking (macOS GUI)
+    spawns.json               # spawned-agent tracking (GUI, all platforms)
   crosslink/
     sessions/<sessionId>.json # live session heartbeats
     mailboxes/<sessionId>/    # pending crosslink messages
@@ -464,7 +464,7 @@ A **`CLAUDE.md`** at the repo root (when present) tells any Claude agent working
 
 ## Known limits / roadmap
 
-- **Spawn is macOS-only.** Linux/Windows users launch associated-repo agents manually.
+- **Spawn is cross-platform but lightly tested off macOS.** macOS is daily-driven; Linux and Windows branches are compile-checked and unit-tested but real-device integration testing is still the gate before tagging a release.
 - **Cost guardrails not yet implemented.** Token usage isn't tracked or capped. Use `RELAY_AUTO_APPROVE=1` with care.
 - **Postgres backend is opt-in, file-only is default.** The coordination features (`LISTEN/NOTIFY` cross-agent decision broadcasts) activate when Postgres is configured.
 
