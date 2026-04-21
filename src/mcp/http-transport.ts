@@ -18,11 +18,30 @@ export interface HttpMcpServerHandle {
   host: string;
 }
 
+/**
+ * Thrown by `readBody` when the POST body exceeds MAX_BYTES. Exported so the
+ * outer request handler can distinguish it from other errors and map to 413
+ * (Payload Too Large) instead of a generic 500.
+ */
+export class BodyTooLargeError extends Error {
+  public readonly byteCount: number;
+  public readonly limit: number;
+
+  constructor(byteCount: number, limit: number) {
+    super(`request body too large: ${byteCount} bytes exceeds ${limit} byte limit`);
+    this.name = "BodyTooLargeError";
+    this.byteCount = byteCount;
+    this.limit = limit;
+  }
+}
+
 interface SseSession {
   sessionId: string;
   response: ServerResponse;
   handler: McpMessageHandler;
   cleanup: () => void;
+  /** Promises for in-flight POST handler invocations. Drained on stop(). */
+  inflight: Set<Promise<unknown>>;
 }
 
 /**
@@ -42,6 +61,8 @@ export async function startHttpMcpServer(
   buildHandler: () => Promise<{ handler: McpMessageHandler; cleanup: () => void }>,
   opts: HttpMcpServerOptions
 ): Promise<HttpMcpServerHandle> {
+  // Loopback-by-default: MCP surface exposes sensitive tools (harness_dispatch,
+  // plan approval). Opt-in to non-loopback via --host.
   const host = opts.host ?? "127.0.0.1";
   const sessions = new Map<string, SseSession>();
 
@@ -63,6 +84,24 @@ export async function startHttpMcpServer(
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ error: "not_found", path: url.pathname }));
     } catch (error) {
+      if (error instanceof BodyTooLargeError) {
+        // eslint-disable-next-line no-console
+        console.warn(`[http-mcp] rejecting oversized body: ${error.message}`);
+        if (!res.headersSent) {
+          res.statusCode = 413;
+          res.setHeader("Content-Type", "application/json");
+          res.end(
+            JSON.stringify({
+              error: "payload_too_large",
+              error_detail: `body exceeded ${error.limit} byte limit (received ${error.byteCount} bytes)`
+            })
+          );
+        } else {
+          res.end();
+        }
+        return;
+      }
+
       // Defensive: never leak a stack trace to a remote client, but keep a
       // trace on the server side.
       // eslint-disable-next-line no-console
@@ -89,16 +128,31 @@ export async function startHttpMcpServer(
   const boundPort = typeof address === "object" && address ? address.port : opts.port;
 
   const stop = async (): Promise<void> => {
+    // Drain in-flight handler invocations across all sessions so their results
+    // get a last chance to write to the SSE stream before we close it. Without
+    // this, a SIGINT during an in-flight tool call silently drops the response.
+    const inflight: Array<Promise<unknown>> = [];
+    for (const session of sessions.values()) {
+      for (const p of session.inflight) inflight.push(p);
+    }
+    if (inflight.length > 0) {
+      await Promise.allSettled(inflight);
+    }
+
     for (const session of sessions.values()) {
       try {
         session.cleanup();
-      } catch {
-        // best-effort
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // eslint-disable-next-line no-console
+        console.warn(`[http-mcp] session cleanup failed (sessionId=${session.sessionId}): ${msg}`);
       }
       try {
         session.response.end();
-      } catch {
-        // best-effort
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // eslint-disable-next-line no-console
+        console.warn(`[http-mcp] stream close failed (sessionId=${session.sessionId}): ${msg}`);
       }
     }
     sessions.clear();
@@ -129,6 +183,9 @@ async function handleSse(
   buildHandler: () => Promise<{ handler: McpMessageHandler; cleanup: () => void }>,
   opts: HttpMcpServerOptions
 ): Promise<void> {
+  // Check auth before upgrading the SSE stream to avoid leaking the
+  // session-endpoint frame to unauthenticated clients; also re-check on POST
+  // because sessionId alone is not a credential.
   if (!authorizeRequest(req, res, opts.authToken)) return;
 
   const sessionId = randomUUID();
@@ -147,11 +204,18 @@ async function handleSse(
   const messagePath = `/message?sessionId=${encodeURIComponent(sessionId)}`;
   res.write(`event: endpoint\ndata: ${messagePath}\n\n`);
 
+  // 25s beats common proxy idle timeouts (nginx default 60s, CDNs ~30s) to
+  // prevent connection drops on long-lived SSE streams.
   const keepAlive = setInterval(() => {
     try {
       res.write(`: keep-alive\n\n`);
-    } catch {
-      // Socket likely closed; session cleanup handles teardown.
+    } catch (err) {
+      // If this fires it likely means the client disconnected; the session
+      // close handler below will tear down state shortly. Logging is still
+      // useful for diagnosing unexpected write failures.
+      const msg = err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line no-console
+      console.warn(`[http-mcp] keep-alive write failed (sessionId=${sessionId}): ${msg}`);
     }
   }, 25_000);
 
@@ -161,7 +225,13 @@ async function handleSse(
     cleanup();
   };
 
-  const session: SseSession = { sessionId, response: res, handler, cleanup: sessionCleanup };
+  const session: SseSession = {
+    sessionId,
+    response: res,
+    handler,
+    cleanup: sessionCleanup,
+    inflight: new Set()
+  };
   sessions.set(sessionId, session);
 
   req.on("close", () => {
@@ -179,6 +249,8 @@ async function handleMessagePost(
   sessions: Map<string, SseSession>,
   opts: HttpMcpServerOptions
 ): Promise<void> {
+  // Re-check auth on POST even though the SSE endpoint already checked it:
+  // sessionId alone is not a credential and must not be treated as one.
   if (!authorizeRequest(req, res, opts.authToken)) return;
 
   const sessionId = url.searchParams.get("sessionId");
@@ -197,8 +269,11 @@ async function handleMessagePost(
   let message: JsonRpcMessage;
   try {
     message = JSON.parse(raw) as JsonRpcMessage;
-  } catch {
-    respondJson(res, 400, { error: "invalid_json" });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    // eslint-disable-next-line no-console
+    console.warn(`[http-mcp] invalid JSON body on POST /message: ${detail}`);
+    respondJson(res, 400, { error: "invalid_json", error_detail: detail });
     return;
   }
 
@@ -208,21 +283,34 @@ async function handleMessagePost(
   res.setHeader("Content-Type", "application/json");
   res.end(JSON.stringify({ status: "accepted" }));
 
-  try {
-    const response = await session.handler(message);
-    if (response) {
-      writeSseMessage(session.response, response);
-    }
-  } catch (error) {
-    writeSseMessage(session.response, {
-      jsonrpc: "2.0",
-      id: message.id ?? null,
-      error: {
-        code: -32603,
-        message: error instanceof Error ? error.message : "Internal error"
+  // Track the handler promise so stop() can drain it. Removed on settle so the
+  // set doesn't grow unbounded for long-lived sessions.
+  const work = (async () => {
+    try {
+      const response = await session.handler(message);
+      if (response) {
+        writeSseMessage(session.response, response, sessionId);
       }
-    });
-  }
+    } catch (error) {
+      writeSseMessage(
+        session.response,
+        {
+          jsonrpc: "2.0",
+          id: message.id ?? null,
+          error: {
+            code: -32603,
+            message: error instanceof Error ? error.message : "Internal error"
+          }
+        },
+        sessionId
+      );
+    }
+  })();
+
+  session.inflight.add(work);
+  work.finally(() => {
+    session.inflight.delete(work);
+  });
 }
 
 function authorizeRequest(
@@ -251,24 +339,28 @@ function respondJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
-function writeSseMessage(res: ServerResponse, message: JsonRpcMessage): void {
+function writeSseMessage(res: ServerResponse, message: JsonRpcMessage, sessionId: string): void {
   try {
     res.write(`event: message\ndata: ${JSON.stringify(message)}\n\n`);
-  } catch {
-    // Stream likely gone; the close handler will clean up.
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // eslint-disable-next-line no-console
+    console.warn(`[http-mcp] SSE write failed on session ${sessionId}: ${msg}`);
   }
 }
 
 async function readBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   let total = 0;
-  const MAX_BYTES = 1_000_000; // 1 MB guard against runaway POSTs.
+  // 1 MB generous headroom for large tool-call arguments; MCP messages are
+  // typically <10 KB. Adjust if a real use case demands it.
+  const MAX_BYTES = 1_000_000;
 
   for await (const chunk of req) {
     const buf = chunk instanceof Buffer ? chunk : Buffer.from(chunk);
     total += buf.length;
     if (total > MAX_BYTES) {
-      throw new Error("request body too large");
+      throw new BodyTooLargeError(total, MAX_BYTES);
     }
     chunks.push(buf);
   }

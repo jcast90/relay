@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { startHttpMcpServer } from "../../src/mcp/http-transport.js";
+import { BodyTooLargeError, startHttpMcpServer } from "../../src/mcp/http-transport.js";
 import type { JsonRpcMessage, McpMessageHandler } from "../../src/mcp/server.js";
 
 /**
@@ -188,5 +188,116 @@ describe("startHttpMcpServer", () => {
     handle = null;
 
     await expect(fetch(url)).rejects.toThrow();
+  });
+
+  it("returns 400 with error_detail when the POST body is not valid JSON", async () => {
+    handle = await startHttpMcpServer(async () => stubHandler(), { port: 0 });
+
+    const sse = await openSse(handle.url);
+    const endpointFrame = await sse.readFrame();
+    const messagePath = endpointFrame?.data ?? "";
+
+    const postRes = await fetch(`http://${handle.host}:${handle.port}${messagePath}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{not valid json,"
+    });
+    expect(postRes.status).toBe(400);
+    const body = (await postRes.json()) as { error?: string; error_detail?: string };
+    expect(body.error).toBe("invalid_json");
+    // The parser-emitted detail must be surfaced, not just a generic tag.
+    expect(typeof body.error_detail).toBe("string");
+    expect((body.error_detail ?? "").length).toBeGreaterThan(0);
+
+    sse.close();
+  });
+
+  it("returns 413 (not 500) when the POST body exceeds the 1 MB cap", async () => {
+    handle = await startHttpMcpServer(async () => stubHandler(), { port: 0 });
+
+    const sse = await openSse(handle.url);
+    const endpointFrame = await sse.readFrame();
+    const messagePath = endpointFrame?.data ?? "";
+
+    // 1.1 MB payload — safely above the 1 MB cap.
+    const oversized = "x".repeat(1_100_000);
+    const postRes = await fetch(`http://${handle.host}:${handle.port}${messagePath}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "foo", params: { blob: oversized } })
+    });
+    expect(postRes.status).toBe(413);
+    const body = (await postRes.json()) as { error?: string; error_detail?: string };
+    expect(body.error).toBe("payload_too_large");
+    expect(body.error_detail).toMatch(/byte limit/);
+
+    sse.close();
+  });
+
+  it("drains in-flight handlers on stop() so responses are not silently dropped", async () => {
+    // Handler blocks until we tell it to resolve; gives us a controllable
+    // "in-flight" window to exercise the drain path.
+    let release!: () => void;
+    const handlerCall = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const handler: McpMessageHandler = async (message) => {
+      await handlerCall;
+      return {
+        jsonrpc: "2.0",
+        id: message.id ?? null,
+        result: { ok: true }
+      };
+    };
+
+    const unhandled: unknown[] = [];
+    const onRejection = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onRejection);
+
+    try {
+      handle = await startHttpMcpServer(
+        async () => ({ handler, cleanup: () => {} }),
+        { port: 0 }
+      );
+
+      const sse = await openSse(handle.url);
+      const endpointFrame = await sse.readFrame();
+      const messagePath = endpointFrame?.data ?? "";
+
+      const postRes = await fetch(`http://${handle.host}:${handle.port}${messagePath}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 42, method: "slow", params: {} })
+      });
+      expect(postRes.status).toBe(202);
+      await postRes.text();
+
+      // Kick off stop() but release the handler mid-flight. stop() must wait
+      // for the in-flight handler promise before the server closes.
+      const stopPromise = handle.stop();
+      // Give stop() a moment to start draining before we release the handler.
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      release();
+      await stopPromise;
+      handle = null;
+
+      // Give the event loop a tick to surface any rejection.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(unhandled).toEqual([]);
+
+      sse.close();
+    } finally {
+      process.removeListener("unhandledRejection", onRejection);
+    }
+  });
+
+  it("exports BodyTooLargeError with byteCount and limit for callers that need to disambiguate", () => {
+    const err = new BodyTooLargeError(1_500_000, 1_000_000);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.name).toBe("BodyTooLargeError");
+    expect(err.byteCount).toBe(1_500_000);
+    expect(err.limit).toBe(1_000_000);
   });
 });
