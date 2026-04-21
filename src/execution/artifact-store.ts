@@ -135,14 +135,66 @@ function buildBlobUri(id: string): string {
   return `${BLOB_URI_PREFIX}${STORE_NS.runArtifacts}/${id}`;
 }
 
+/**
+ * Parse a `blob://<ns>/<id>` URI or signal legacy-path fallback.
+ *
+ * Three possible outcomes:
+ * - Input starts with `blob://` and is well-formed → returns `{ ns, id }`.
+ * - Input starts with `blob://` but is malformed (missing slash, empty ns,
+ *   or empty id) → throws with the offending URI included in the message.
+ *   We do NOT silently treat a half-baked blob URI as a filesystem path;
+ *   that would mask a real bug in whoever produced the URI.
+ * - Input does not start with `blob://` → returns `null`, signaling that
+ *   the caller should fall through to the pre-T-103 legacy absolute-path
+ *   read. Existing run histories still carry absolute paths in `run.json`.
+ */
 function parseBlobUri(
   uri: string
 ): { ns: string; id: string } | null {
   if (!uri.startsWith(BLOB_URI_PREFIX)) return null;
   const rest = uri.slice(BLOB_URI_PREFIX.length);
   const slash = rest.indexOf("/");
-  if (slash < 0) return null;
-  return { ns: rest.slice(0, slash), id: rest.slice(slash + 1) };
+  if (slash < 0) {
+    throw new Error(
+      `Invalid blob URI (missing '/'): ${uri}`
+    );
+  }
+  const ns = rest.slice(0, slash);
+  const id = rest.slice(slash + 1);
+  if (!ns) {
+    throw new Error(`Invalid blob URI (empty namespace): ${uri}`);
+  }
+  if (!id) {
+    throw new Error(`Invalid blob URI (empty id): ${uri}`);
+  }
+  return { ns, id };
+}
+
+// Warn once per distinct legacy absolute path so operators know that an
+// older run history is driving a direct-file read rather than the
+// HarnessStore blob path.
+const legacyPathWarned = new Set<string>();
+function warnLegacyArtifactPath(path: string): void {
+  if (legacyPathWarned.has(path)) return;
+  legacyPathWarned.add(path);
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[artifact-store] Reading artifact via legacy absolute-path fallback: ${path}. ` +
+      `This run predates T-103 and should be regenerated to migrate onto the HarnessStore blob backend.`
+  );
+}
+
+async function readLegacyArtifactFile(path: string): Promise<string> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(
+        `Artifact not found at ${path} (legacy absolute-path fallback). Artifact may have been cleaned or written by a run on another machine.`
+      );
+    }
+    throw err;
+  }
 }
 
 export class LocalArtifactStore implements ArtifactStore {
@@ -224,7 +276,8 @@ export class LocalArtifactStore implements ArtifactStore {
     // Legacy: pre-T-103 artifacts stored as loose files under `<runId>/<phaseId>/<artifactId>.json`.
     // Existing run histories still carry those absolute paths in `run.json`,
     // so we fall back to a direct read when the path isn't a blob URI.
-    return JSON.parse(await readFile(path, "utf8")) as CommandArtifactContent;
+    warnLegacyArtifactPath(path);
+    return JSON.parse(await readLegacyArtifactFile(path)) as CommandArtifactContent;
   }
 
   async saveFailureClassification(input: {
@@ -276,8 +329,9 @@ export class LocalArtifactStore implements ArtifactStore {
         new TextDecoder().decode(bytes)
       ) as FailureClassificationArtifactContent;
     }
+    warnLegacyArtifactPath(path);
     return JSON.parse(
-      await readFile(path, "utf8")
+      await readLegacyArtifactFile(path)
     ) as FailureClassificationArtifactContent;
   }
 
@@ -340,14 +394,30 @@ export class LocalArtifactStore implements ArtifactStore {
 
   async readRunsIndex(): Promise<RunIndexEntry[]> {
     const path = join(this.rootDir, "runs-index.json");
+    let content: string;
 
     try {
-      const raw = JSON.parse(await readFile(path, "utf8")) as {
-        runs?: RunIndexEntry[];
-      };
+      content = await readFile(path, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return [];
+      }
+      throw new Error(
+        `Failed to read runs index at ${path}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+
+    try {
+      const raw = JSON.parse(content) as { runs?: RunIndexEntry[] };
       return raw.runs ?? [];
-    } catch {
-      return [];
+    } catch (err) {
+      throw new Error(
+        `Failed to parse runs index at ${path}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
     }
   }
 
@@ -381,11 +451,29 @@ export class LocalArtifactStore implements ArtifactStore {
 
   async readRunSnapshot(runId: string): Promise<RunSnapshot | null> {
     const path = join(this.rootDir, runId, "run.json");
+    let content: string;
 
     try {
-      return JSON.parse(await readFile(path, "utf8")) as RunSnapshot;
-    } catch {
-      return null;
+      content = await readFile(path, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return null;
+      }
+      throw new Error(
+        `Failed to read run snapshot at ${path}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+
+    try {
+      return JSON.parse(content) as RunSnapshot;
+    } catch (err) {
+      throw new Error(
+        `Failed to parse run snapshot at ${path}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
     }
   }
 
@@ -400,16 +488,33 @@ export class LocalArtifactStore implements ArtifactStore {
 
   async readEventLog(runId: string): Promise<RunEvent[]> {
     const path = join(this.rootDir, runId, "events.jsonl");
+    let raw: string;
 
     try {
-      const raw = await readFile(path, "utf8");
+      raw = await readFile(path, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return [];
+      }
+      throw new Error(
+        `Failed to read event log at ${path}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+
+    try {
       return raw
         .trim()
         .split("\n")
         .filter(Boolean)
         .map((line) => JSON.parse(line) as RunEvent);
-    } catch {
-      return [];
+    } catch (err) {
+      throw new Error(
+        `Failed to parse event log at ${path}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
     }
   }
 
@@ -425,11 +530,29 @@ export class LocalArtifactStore implements ArtifactStore {
 
   async readPrLifecycle(runId: string): Promise<PrLifecycle | null> {
     const path = join(this.rootDir, runId, "pr-lifecycle.json");
+    let content: string;
 
     try {
-      return JSON.parse(await readFile(path, "utf8")) as PrLifecycle;
-    } catch {
-      return null;
+      content = await readFile(path, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return null;
+      }
+      throw new Error(
+        `Failed to read PR lifecycle at ${path}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+
+    try {
+      return JSON.parse(content) as PrLifecycle;
+    } catch (err) {
+      throw new Error(
+        `Failed to parse PR lifecycle at ${path}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
     }
   }
 
@@ -465,14 +588,30 @@ export class LocalArtifactStore implements ArtifactStore {
 
   async readTicketLedger(runId: string): Promise<TicketLedgerEntry[] | null> {
     const path = join(this.rootDir, runId, "ticket-ledger.json");
+    let content: string;
 
     try {
-      const raw = JSON.parse(await readFile(path, "utf8")) as {
-        tickets?: TicketLedgerEntry[];
-      };
+      content = await readFile(path, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return null;
+      }
+      throw new Error(
+        `Failed to read ticket ledger at ${path}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+
+    try {
+      const raw = JSON.parse(content) as { tickets?: TicketLedgerEntry[] };
       return raw.tickets ?? null;
-    } catch {
-      return null;
+    } catch (err) {
+      throw new Error(
+        `Failed to parse ticket ledger at ${path}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
     }
   }
 

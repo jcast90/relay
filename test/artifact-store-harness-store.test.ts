@@ -1,16 +1,19 @@
 import {
   cp,
+  mkdir,
   mkdtemp,
   readFile,
   rm,
-  stat
+  stat,
+  writeFile
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createPrLifecycle } from "../src/domain/pr-lifecycle.js";
 import { LocalArtifactStore } from "../src/execution/artifact-store.js";
 import { FileHarnessStore } from "../src/storage/file-store.js";
 import { STORE_NS } from "../src/storage/namespaces.js";
@@ -389,6 +392,216 @@ describe("LocalArtifactStore reads legacy Rust-layout fixtures", () => {
       expect(content.stdout).toContain("legacy stdout");
     } finally {
       await rm(storeRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("LocalArtifactStore error handling (malformed URIs & missing legacy paths)", () => {
+  let artifactsDir: string;
+  let fake: FakeHarnessStore;
+  let store: LocalArtifactStore;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    artifactsDir = await mkdtemp(join(tmpdir(), "as-err-"));
+    fake = new FakeHarnessStore();
+    store = new LocalArtifactStore(artifactsDir, fake);
+    // Silence the legacy-path warn so test output stays clean; tests that
+    // care about the warning message assert against the spy explicitly.
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(async () => {
+    warnSpy.mockRestore();
+    await rm(artifactsDir, { recursive: true, force: true });
+  });
+
+  it("throws on a blob:// URI missing a slash", async () => {
+    await expect(
+      store.readCommandResult("blob://run-artifacts")
+    ).rejects.toThrow(/Invalid blob URI.*blob:\/\/run-artifacts/);
+  });
+
+  it("throws on a blob:// URI with an empty namespace", async () => {
+    await expect(
+      store.readCommandResult("blob:///abc")
+    ).rejects.toThrow(/Invalid blob URI.*empty namespace/);
+  });
+
+  it("throws on a blob:// URI with an empty id", async () => {
+    await expect(
+      store.readCommandResult("blob://run-artifacts/")
+    ).rejects.toThrow(/Invalid blob URI.*empty id/);
+  });
+
+  it("throws on a malformed blob:// URI passed to readFailureClassification", async () => {
+    await expect(
+      store.readFailureClassification("blob://bogus")
+    ).rejects.toThrow(/Invalid blob URI.*blob:\/\/bogus/);
+  });
+
+  it("wraps ENOENT on a legacy absolute path with contextual error", async () => {
+    const missing = join(artifactsDir, "run-x", "phase_01", "missing.json");
+    await expect(store.readCommandResult(missing)).rejects.toThrow(
+      /Artifact not found at .*missing\.json.*legacy absolute-path fallback/
+    );
+  });
+
+  it("warns once per distinct legacy path (but still reads the artifact)", async () => {
+    // Seed a legacy artifact that can actually be read back so the call
+    // resolves normally; we only care that the warn was triggered.
+    const legacyDir = join(artifactsDir, "run-warn-1", "phase_00");
+    await mkdir(legacyDir, { recursive: true });
+    const legacyPath = join(legacyDir, "artifact-warn-1.json");
+    await writeFile(
+      legacyPath,
+      JSON.stringify({
+        artifactId: "artifact-warn-1",
+        phaseId: "phase_00",
+        command: "pnpm run x",
+        cwd: "/tmp",
+        exitCode: 0,
+        stdout: "",
+        stderr: "",
+        capturedAt: "2026-04-20T00:00:00.000Z"
+      })
+    );
+
+    await store.readCommandResult(legacyPath);
+    await store.readCommandResult(legacyPath);
+    const legacyCalls = warnSpy.mock.calls.filter((args) =>
+      String(args[0]).includes("legacy absolute-path fallback")
+    );
+    expect(legacyCalls).toHaveLength(1);
+  });
+
+  it("throws (not silent null) on corrupt runs-index.json", async () => {
+    await writeFile(join(artifactsDir, "runs-index.json"), "not json at all");
+    await expect(store.readRunsIndex()).rejects.toThrow(
+      /Failed to parse runs index at .*runs-index\.json/
+    );
+  });
+
+  it("throws (not silent null) on corrupt run.json snapshot", async () => {
+    await mkdir(join(artifactsDir, "run-bad"), { recursive: true });
+    await writeFile(join(artifactsDir, "run-bad", "run.json"), "{broken");
+    await expect(store.readRunSnapshot("run-bad")).rejects.toThrow(
+      /Failed to parse run snapshot at .*run\.json/
+    );
+  });
+
+  it("throws (not silent empty) on corrupt events.jsonl", async () => {
+    await mkdir(join(artifactsDir, "run-bad-events"), { recursive: true });
+    await writeFile(
+      join(artifactsDir, "run-bad-events", "events.jsonl"),
+      "{not json}\n"
+    );
+    await expect(store.readEventLog("run-bad-events")).rejects.toThrow(
+      /Failed to parse event log at .*events\.jsonl/
+    );
+  });
+
+  it("throws (not silent null) on corrupt pr-lifecycle.json", async () => {
+    await mkdir(join(artifactsDir, "run-bad-pr"), { recursive: true });
+    await writeFile(
+      join(artifactsDir, "run-bad-pr", "pr-lifecycle.json"),
+      "nope"
+    );
+    await expect(store.readPrLifecycle("run-bad-pr")).rejects.toThrow(
+      /Failed to parse PR lifecycle at .*pr-lifecycle\.json/
+    );
+  });
+
+  it("throws (not silent null) on corrupt ticket-ledger.json", async () => {
+    await mkdir(join(artifactsDir, "run-bad-tickets"), { recursive: true });
+    await writeFile(
+      join(artifactsDir, "run-bad-tickets", "ticket-ledger.json"),
+      "still not json"
+    );
+    await expect(store.readTicketLedger("run-bad-tickets")).rejects.toThrow(
+      /Failed to parse ticket ledger at .*ticket-ledger\.json/
+    );
+  });
+
+  it("still returns [] for missing runs-index and null for missing snapshot/ledger/lifecycle", async () => {
+    // ENOENT path must remain the original sentinel-return behavior; only
+    // non-ENOENT errors are expected to throw.
+    expect(await store.readRunsIndex()).toEqual([]);
+    expect(await store.readRunSnapshot("run-nope")).toBeNull();
+    expect(await store.readEventLog("run-nope")).toEqual([]);
+    expect(await store.readPrLifecycle("run-nope")).toBeNull();
+    expect(await store.readTicketLedger("run-nope")).toBeNull();
+  });
+});
+
+describe("LocalArtifactStore blob round-trip (saveCommandResult -> readCommandResult)", () => {
+  let artifactsDir: string;
+  let fake: FakeHarnessStore;
+  let store: LocalArtifactStore;
+
+  beforeEach(async () => {
+    artifactsDir = await mkdtemp(join(tmpdir(), "as-rt-"));
+    fake = new FakeHarnessStore();
+    store = new LocalArtifactStore(artifactsDir, fake);
+  });
+
+  afterEach(async () => {
+    await rm(artifactsDir, { recursive: true, force: true });
+  });
+
+  it("writes a blob under the right ns/id and round-trips the exact bytes", async () => {
+    const record = await store.saveCommandResult({
+      runId: "run-rt-1",
+      phaseId: "phase_07",
+      command: "pnpm run build",
+      result: { exitCode: 1, stdout: "line one\nline two", stderr: "boom" },
+      cwd: "/work"
+    });
+
+    // The returned path is a blob URI with the expected ns prefix.
+    expect(record.path).toMatch(/^blob:\/\/run-artifacts\/run-rt-1__phase_07__artifact-/);
+
+    // Exactly one putBlob call landed under the run-artifacts ns.
+    expect(fake.blobCalls).toHaveLength(1);
+    expect(fake.blobCalls[0].ns).toBe(STORE_NS.runArtifacts);
+    expect(fake.blobCalls[0].id).toMatch(/^run-rt-1__phase_07__artifact-/);
+
+    // Round-trip recovers the original fields verbatim.
+    const read = await store.readCommandResult(record.path);
+    expect(read.command).toBe("pnpm run build");
+    expect(read.cwd).toBe("/work");
+    expect(read.exitCode).toBe(1);
+    expect(read.stdout).toBe("line one\nline two");
+    expect(read.stderr).toBe("boom");
+    expect(read.phaseId).toBe("phase_07");
+  });
+});
+
+describe("LocalArtifactStore PR lifecycle coordination record", () => {
+  it("writes a coordination record through HarnessStore.mutate when savePrLifecycle runs", async () => {
+    const artifactsDir = await mkdtemp(join(tmpdir(), "as-pr-coord-"));
+    const fake = new FakeHarnessStore();
+    const store = new LocalArtifactStore(artifactsDir, fake);
+
+    try {
+      const lifecycle = createPrLifecycle({
+        runId: "run-pr-coord-1",
+        branch: "feature/x"
+      });
+      await store.savePrLifecycle(lifecycle);
+
+      expect(fake.mutateCalls).toContainEqual({
+        ns: STORE_NS.runArtifacts,
+        id: "run-pr-coord-1__pr-lifecycle"
+      });
+      const coord = await fake.getDoc<{ kind: string }>(
+        STORE_NS.runArtifacts,
+        "run-pr-coord-1__pr-lifecycle"
+      );
+      expect(coord).not.toBeNull();
+      expect(coord!.kind).toBe("pr-lifecycle");
+    } finally {
+      await rm(artifactsDir, { recursive: true, force: true });
     }
   });
 });
