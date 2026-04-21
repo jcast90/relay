@@ -816,16 +816,47 @@ fn cancel_chat_stream(stream_id: u64) -> Result<(), String> {
     Ok(())
 }
 
-// --- Terminal.app spawn/kill lifecycle (Task #24) ---
+// --- Terminal spawn/kill lifecycle (Task #24, OSS-10) ---
 //
 // Each channel tracks an associated-repo agent spawn in
-// `~/.relay/channels/<channelId>/spawns.json`. On macOS, "spawn" opens a new
-// Terminal.app tab running `rly claude` in the repo; we capture the window/tab
-// ids from the AppleScript return value so we can close them again later.
+// `~/.relay/channels/<channelId>/spawns.json`.
+//
+// Per platform:
+//   - macOS: `osascript` opens a Terminal.app tab running `rly claude` in the
+//     repo; we capture window/tab ids from the AppleScript return so we can
+//     close them again later.
+//   - Linux: probe a terminal-emulator chain (`$TERMINAL`, then
+//     x-terminal-emulator, gnome-terminal, konsole, xterm, alacritty, kitty,
+//     wezterm) and spawn `<term> -e bash -lc "cd <repo>; exec $SHELL"`. We
+//     don't track window/tab ids — there's no portable equivalent. Kill
+//     falls back to SIGTERM on the matching crosslink session.
+//   - Windows: prefer `wt.exe` (Windows Terminal), else `powershell.exe`,
+//     else `cmd.exe`. Spawn with `cd /d <repo>` and leave a live shell. Same
+//     SIGTERM-on-repo fallback as Linux.
+//
+// If no supported terminal is detected on Linux/Windows, we return a
+// descriptive error AND post a channel-feed entry so the user sees the
+// guidance ("run `rly claude` in the repo manually") in the feed too.
 //
 // We hardcode STALE_HEARTBEAT_MS here (matching the crosslink store) instead
 // of depending on the TS/crosslink side, so self-heal stays self-contained.
 const STALE_HEARTBEAT_MS: u64 = 120_000;
+
+/// Terminal emulator probe order for Linux. `$TERMINAL` is honored first.
+#[cfg(any(target_os = "linux", test))]
+const LINUX_TERMINAL_CHAIN: &[&str] = &[
+    "x-terminal-emulator",
+    "gnome-terminal",
+    "konsole",
+    "xterm",
+    "alacritty",
+    "kitty",
+    "wezterm",
+];
+
+/// Windows terminal probe order.
+#[cfg(any(target_os = "windows", test))]
+const WINDOWS_TERMINAL_CHAIN: &[&str] = &["wt.exe", "powershell.exe", "cmd.exe"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -946,24 +977,113 @@ fn applescript_string(s: &str) -> String {
     format!("\"{}\"", escaped)
 }
 
-#[tauri::command]
-fn spawn_agent(
-    channel_id: String,
-    alias: String,
-    repo_path: String,
-) -> Result<Spawn, String> {
-    validate_id_segment(&channel_id, "channelId")?;
-    validate_id_segment(&alias, "alias")?;
-    if std::env::consts::OS != "macos" {
-        return Err(
-            "spawn is macOS-only — run `rly claude` in the repo manually on this platform".into(),
-        );
+/// Windows cmd.exe quoting for a single argument embedded in a shell
+/// command string. Wraps in double quotes and escapes inner double quotes
+/// and backslashes per CommandLineToArgv rules — good enough for path
+/// interpolation into `cd /d <path>`. Backslashes before a quote are
+/// doubled; standalone backslashes are preserved verbatim.
+#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+fn windows_quote_path(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    let mut pending_bs: usize = 0;
+    for c in s.chars() {
+        match c {
+            '\\' => {
+                pending_bs += 1;
+            }
+            '"' => {
+                // Double all pending backslashes, then escape the quote.
+                for _ in 0..(pending_bs * 2) {
+                    out.push('\\');
+                }
+                pending_bs = 0;
+                out.push('\\');
+                out.push('"');
+            }
+            _ => {
+                for _ in 0..pending_bs {
+                    out.push('\\');
+                }
+                pending_bs = 0;
+                out.push(c);
+            }
+        }
     }
+    // Trailing backslashes before the closing quote must be doubled.
+    for _ in 0..(pending_bs * 2) {
+        out.push('\\');
+    }
+    out.push('"');
+    out
+}
 
+/// Find `name` on PATH. Calls `which` on POSIX and `where` on Windows. Stub
+/// returns `Some(path)` if found, `None` otherwise. This is separated from
+/// the caller so tests can substitute a fake probe.
+#[cfg(any(target_os = "linux", target_os = "windows", test))]
+#[cfg_attr(test, allow(dead_code))]
+fn which_on_path(name: &str) -> Option<String> {
+    let probe = if cfg!(target_os = "windows") {
+        "where"
+    } else {
+        "which"
+    };
+    let output = Command::new(probe)
+        .arg(name)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let line = String::from_utf8_lossy(&output.stdout);
+    let first = line.lines().next()?.trim();
+    if first.is_empty() {
+        None
+    } else {
+        Some(first.to_string())
+    }
+}
+
+/// Detect the first available entry in `chain` by probing via `probe`.
+/// `$TERMINAL` (when non-empty) takes precedence on Linux, and is injected
+/// by the caller as the first element of `chain` if appropriate. Returns
+/// the detected name (not the full path) so the caller can pass it to
+/// `Command::new`.
+#[cfg(any(target_os = "linux", target_os = "windows", test))]
+fn detect_terminal<F>(chain: &[&str], mut probe: F) -> Option<String>
+where
+    F: FnMut(&str) -> bool,
+{
+    for name in chain {
+        if probe(name) {
+            return Some((*name).to_string());
+        }
+    }
+    None
+}
+
+/// Post a channel-feed entry announcing that spawn fell back to the manual
+/// path (no supported terminal found). Best-effort; ignores CLI errors.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn post_spawn_fallback_entry(channel_id: &str, repo_path: &str, reason: &str) {
+    let content = format!(
+        "Agent spawn fell back to manual launch for {}. {} Run `rly claude` in the repo manually; crosslink will pick it up.",
+        repo_path, reason,
+    );
+    let _ = cli_run(&[
+        "channel", "post", channel_id, &content, "--from", "GUI", "--type", "system",
+    ]);
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_agent_macos(repo_path: &str) -> Result<(Option<u32>, Option<u32>), String> {
     // Build the shell command the Terminal tab should run. We single-quote
     // the path to survive spaces and most shell metacharacters, then wrap
     // the whole shell command as an AppleScript string literal.
-    let shell_cmd = format!("cd {} && rly claude", shell_single_quote(&repo_path));
+    let shell_cmd = format!("cd {} && rly claude", shell_single_quote(repo_path));
     let script = format!(
         r#"tell application "Terminal" to do script {}"#,
         applescript_string(&shell_cmd)
@@ -982,6 +1102,139 @@ fn spawn_agent(
             tab_id = Some(0);
         }
     }
+    Ok((window_id, tab_id))
+}
+
+/// Linux branch: honor `$TERMINAL`, then probe the chain. On success, spawn
+/// the detected emulator with arguments that run `rly claude` in the repo
+/// and leave a live shell. Fire-and-forget — we don't capture window ids
+/// because there's no portable way to get them.
+#[cfg(target_os = "linux")]
+fn spawn_agent_linux(channel_id: &str, repo_path: &str) -> Result<(), String> {
+    // `$TERMINAL` takes precedence if set and non-empty.
+    let env_term = std::env::var("TERMINAL").ok().filter(|s| !s.is_empty());
+    let mut chain: Vec<&str> = Vec::with_capacity(LINUX_TERMINAL_CHAIN.len() + 1);
+    if let Some(ref t) = env_term {
+        chain.push(t.as_str());
+    }
+    chain.extend_from_slice(LINUX_TERMINAL_CHAIN);
+
+    let chosen = detect_terminal(&chain, |n| which_on_path(n).is_some());
+    let Some(term) = chosen else {
+        let reason = "No supported terminal emulator detected on PATH.";
+        post_spawn_fallback_entry(channel_id, repo_path, reason);
+        return Err(format!(
+            "{} Tried: $TERMINAL, {}. Set $TERMINAL or install one of the supported emulators.",
+            reason,
+            LINUX_TERMINAL_CHAIN.join(", "),
+        ));
+    };
+
+    // Build the shell command per-argument — `Command::args` handles
+    // individual-argument escaping, so the path never needs shell quoting.
+    // We only need to single-quote inside the `bash -lc` string because
+    // that's a single composite argument interpreted by bash.
+    let bash_script = format!(
+        "cd {} && exec rly claude",
+        shell_single_quote(repo_path),
+    );
+
+    // Most emulators accept `-e <cmd...>`. gnome-terminal deprecated `-e`
+    // in favor of `--` but still accepts it. We pass `bash -lc <script>`
+    // so the path-quoting lives inside bash where we control it.
+    Command::new(&term)
+        .arg("-e")
+        .arg("bash")
+        .arg("-lc")
+        .arg(&bash_script)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("failed to launch {}: {}", term, e))?;
+    Ok(())
+}
+
+/// Windows branch: prefer Windows Terminal, then powershell, then cmd.
+/// Spawn with `cd /d <path>` and leave a live shell.
+#[cfg(target_os = "windows")]
+fn spawn_agent_windows(channel_id: &str, repo_path: &str) -> Result<(), String> {
+    let chosen = detect_terminal(WINDOWS_TERMINAL_CHAIN, |n| which_on_path(n).is_some());
+    let Some(term) = chosen else {
+        let reason = "No supported terminal (wt.exe, powershell.exe, cmd.exe) detected on PATH.";
+        post_spawn_fallback_entry(channel_id, repo_path, reason);
+        return Err(format!("{} Run `rly claude` in the repo manually.", reason));
+    };
+
+    // Each terminal expects the child-command shape differently. We build
+    // per-argument to avoid handing cmd.exe a shell-interpolated string.
+    let quoted = windows_quote_path(repo_path);
+    let shell_line = format!("cd /d {} && rly claude", quoted);
+
+    let mut cmd = Command::new(&term);
+    match term.as_str() {
+        "wt.exe" => {
+            // wt -d <dir> powershell/cmd keeps the shell live in <dir>.
+            cmd.arg("-d").arg(repo_path).arg("cmd.exe").arg("/k").arg("rly claude");
+        }
+        "powershell.exe" => {
+            // -NoExit keeps the shell alive after the command completes.
+            cmd.arg("-NoExit")
+                .arg("-Command")
+                .arg(format!("Set-Location -LiteralPath {}; rly claude", quoted));
+        }
+        _ => {
+            // cmd.exe /k <line>
+            cmd.arg("/k").arg(&shell_line);
+        }
+    }
+
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("failed to launch {}: {}", term, e))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn spawn_agent(
+    channel_id: String,
+    alias: String,
+    repo_path: String,
+) -> Result<Spawn, String> {
+    // IPC hardening (OSS-02): reject anything that could traverse the
+    // spawns-file path or smuggle shell metachars through alias.
+    validate_id_segment(&channel_id, "channelId")?;
+    validate_id_segment(&alias, "alias")?;
+
+    // Platform dispatch. Each branch populates terminal window/tab ids
+    // where it can (macOS only today); Linux/Windows leave them None and
+    // rely on the repo-path-based SIGTERM fallback in kill_spawned_agent.
+    #[cfg(target_os = "macos")]
+    let (window_id, tab_id) = spawn_agent_macos(&repo_path)?;
+
+    #[cfg(target_os = "linux")]
+    let (window_id, tab_id): (Option<u32>, Option<u32>) = {
+        spawn_agent_linux(&channel_id, &repo_path)?;
+        (None, None)
+    };
+
+    #[cfg(target_os = "windows")]
+    let (window_id, tab_id): (Option<u32>, Option<u32>) = {
+        spawn_agent_windows(&channel_id, &repo_path)?;
+        (None, None)
+    };
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    let (window_id, tab_id): (Option<u32>, Option<u32>) = {
+        let _ = &channel_id;
+        let _ = &repo_path;
+        return Err(
+            "spawn is not supported on this platform — run `rly claude` in the repo manually"
+                .into(),
+        );
+    };
 
     let spawn = Spawn {
         alias: alias.clone(),
@@ -1028,11 +1281,26 @@ fn try_sigterm_matching_session(repo_path: &str) {
         let Some(pid) = session.get("pid").and_then(|v| v.as_u64()) else {
             continue;
         };
-        // Shell out to `kill` — avoids pulling in libc/nix just for SIGTERM.
-        let _ = Command::new("kill")
-            .arg("-TERM")
-            .arg(pid.to_string())
-            .status();
+        // Shell out to the platform's kill primitive — avoids pulling in
+        // libc/nix just for a signal. On Windows we use `taskkill` with
+        // `/T` so the whole shell+child tree comes down with the
+        // spawned terminal.
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = Command::new("kill")
+                .arg("-TERM")
+                .arg(pid.to_string())
+                .status();
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let _ = Command::new("taskkill")
+                .arg("/PID")
+                .arg(pid.to_string())
+                .arg("/T")
+                .arg("/F")
+                .status();
+        }
         break;
     }
 }
@@ -1156,9 +1424,23 @@ fn load_live_crosslink_repos() -> std::collections::HashSet<String> {
     out
 }
 
+// -----------------------------------------------------------------------------
+// Unit tests
+// -----------------------------------------------------------------------------
+//
+// Covers:
+//   * OSS-02 IPC hardening — `validate_id_segment` + `check_run_cli_allowed`.
+//   * OSS-01 rewind hardening — `build_rewind_metadata_json` + cancel flag.
+//   * OSS-10 cross-platform spawn — `shell_single_quote`, `windows_quote_path`,
+//     `parse_terminal_tab_ref`, and `detect_terminal` via an injected probe.
+//
+// Detection tests simulate a fake `which` so we never actually probe the test
+// host's PATH — precedence assertions stay stable regardless of which
+// terminals the dev has installed. We never actually spawn a terminal.
+
 #[cfg(test)]
 mod tests {
-    use super::{check_run_cli_allowed, validate_id_segment};
+    use super::*;
 
     // --- validate_id_segment ---
 
@@ -1293,48 +1575,8 @@ mod tests {
         assert!(err.contains("destructive"), "got: {}", err);
         assert!(err.contains("archive"), "got: {}", err);
     }
-}
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![
-            list_workspaces,
-            list_channels,
-            get_channel,
-            list_feed,
-            list_sessions,
-            load_session,
-            list_channel_tickets,
-            list_channel_decisions,
-            list_channel_runs,
-            list_runs,
-            list_ticket_ledger,
-            list_agent_names,
-            run_cli,
-            create_channel,
-            archive_channel,
-            update_channel_repos,
-            post_to_channel,
-            create_session,
-            delete_session,
-            append_session_message,
-            rewind_snapshot,
-            rewind_apply,
-            start_chat,
-            cancel_chat_stream,
-            spawn_agent,
-            kill_spawned_agent,
-            list_spawns,
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
+    // --- OSS-01 rewind hardening ---
 
     /// Gap #1 regression: a `rewind_key` containing quotes, backslashes,
     /// newlines, or a `},"x":"y"` JSON fragment must round-trip through
@@ -1381,4 +1623,204 @@ mod tests {
         clear_stream_cancelled(sid);
         assert!(!is_stream_cancelled(sid));
     }
+
+    // --- OSS-10 shell_single_quote (POSIX) ---
+
+    #[test]
+    fn shell_single_quote_plain() {
+        assert_eq!(shell_single_quote("/home/user/repo"), "'/home/user/repo'");
+    }
+
+    #[test]
+    fn shell_single_quote_spaces() {
+        assert_eq!(
+            shell_single_quote("/path with spaces/repo"),
+            "'/path with spaces/repo'"
+        );
+    }
+
+    #[test]
+    fn shell_single_quote_embedded_single_quote() {
+        // Canonical POSIX trick: close, escaped-single, reopen.
+        assert_eq!(
+            shell_single_quote("/path/o'brien/repo"),
+            "'/path/o'\\''brien/repo'"
+        );
+    }
+
+    #[test]
+    fn shell_single_quote_embedded_double_quote() {
+        // Double quotes are harmless inside single quotes.
+        assert_eq!(
+            shell_single_quote(r#"/path/"quoted"/repo"#),
+            r#"'/path/"quoted"/repo'"#
+        );
+    }
+
+    #[test]
+    fn shell_single_quote_non_ascii() {
+        assert_eq!(shell_single_quote("/路径/仓库"), "'/路径/仓库'");
+    }
+
+    #[test]
+    fn shell_single_quote_backslashes_preserved() {
+        // Single quotes disable backslash interpretation — preserved verbatim.
+        assert_eq!(
+            shell_single_quote(r"/path/with\back\slashes"),
+            r"'/path/with\back\slashes'"
+        );
+    }
+
+    // --- OSS-10 windows_quote_path ---
+
+    #[test]
+    fn windows_quote_path_plain() {
+        assert_eq!(windows_quote_path(r"C:\Users\me\repo"), r#""C:\Users\me\repo""#);
+    }
+
+    #[test]
+    fn windows_quote_path_spaces() {
+        assert_eq!(
+            windows_quote_path(r"C:\Program Files\repo"),
+            r#""C:\Program Files\repo""#
+        );
+    }
+
+    #[test]
+    fn windows_quote_path_embedded_quote() {
+        // Inner " must be escaped as \" and any preceding backslashes doubled.
+        // Input:  C:\foo"bar   ->   "C:\foo\"bar"
+        assert_eq!(
+            windows_quote_path(r#"C:\foo"bar"#),
+            r#""C:\foo\"bar""#
+        );
+    }
+
+    #[test]
+    fn windows_quote_path_trailing_backslash() {
+        // Trailing backslash before the closing quote must be doubled to
+        // avoid escaping the closing quote. Input C:\repo\ -> "C:\repo\\"
+        assert_eq!(windows_quote_path(r"C:\repo\"), r#""C:\repo\\""#);
+    }
+
+    #[test]
+    fn windows_quote_path_backslash_before_quote() {
+        // Backslashes preceding an inner quote get doubled.
+        // Input: a\"b -> "a\\\"b"
+        assert_eq!(windows_quote_path(r#"a\"b"#), r#""a\\\"b""#);
+    }
+
+    #[test]
+    fn windows_quote_path_non_ascii() {
+        assert_eq!(windows_quote_path(r"C:\路径\仓库"), "\"C:\\路径\\仓库\"");
+    }
+
+    // --- OSS-10 parse_terminal_tab_ref ---
+
+    #[test]
+    fn parse_terminal_tab_ref_typical() {
+        let raw = "tab 3 of window id 12345";
+        assert_eq!(parse_terminal_tab_ref(raw), (Some(12345), Some(3)));
+    }
+
+    #[test]
+    fn parse_terminal_tab_ref_no_tab() {
+        assert_eq!(parse_terminal_tab_ref("window id 42"), (Some(42), None));
+    }
+
+    #[test]
+    fn parse_terminal_tab_ref_empty() {
+        assert_eq!(parse_terminal_tab_ref(""), (None, None));
+    }
+
+    // --- OSS-10 detect_terminal ---
+
+    #[test]
+    fn detect_terminal_picks_first_match() {
+        let chain = &["gnome-terminal", "konsole", "xterm"];
+        let present = ["konsole", "xterm"];
+        let got = detect_terminal(chain, |n| present.contains(&n));
+        assert_eq!(got.as_deref(), Some("konsole"));
+    }
+
+    #[test]
+    fn detect_terminal_honors_chain_order() {
+        let chain = &["alacritty", "gnome-terminal", "xterm"];
+        let present = ["xterm", "gnome-terminal", "alacritty"];
+        let got = detect_terminal(chain, |n| present.contains(&n));
+        // Order is *chain*, not `present`.
+        assert_eq!(got.as_deref(), Some("alacritty"));
+    }
+
+    #[test]
+    fn detect_terminal_none_found() {
+        let chain = &["gnome-terminal", "konsole"];
+        let got = detect_terminal(chain, |_| false);
+        assert!(got.is_none());
+    }
+
+    #[test]
+    fn detect_terminal_env_term_wins_on_linux() {
+        // Simulate the Linux-branch behavior where $TERMINAL is pushed to
+        // the front of the chain. If $TERMINAL is set to a weird-but-real
+        // emulator, detection should pick it before anything in the default
+        // chain — even if a default-chain entry is also present.
+        let env_term = "my-custom-term";
+        let mut chain: Vec<&str> = vec![env_term];
+        chain.extend_from_slice(LINUX_TERMINAL_CHAIN);
+        let present = ["my-custom-term", "xterm"];
+        let got = detect_terminal(&chain, |n| present.contains(&n));
+        assert_eq!(got.as_deref(), Some("my-custom-term"));
+    }
+
+    #[test]
+    fn detect_terminal_windows_chain_prefers_wt() {
+        let present = ["wt.exe", "cmd.exe"];
+        let got = detect_terminal(WINDOWS_TERMINAL_CHAIN, |n| present.contains(&n));
+        assert_eq!(got.as_deref(), Some("wt.exe"));
+    }
+
+    #[test]
+    fn detect_terminal_windows_chain_falls_through_to_cmd() {
+        let present = ["cmd.exe"];
+        let got = detect_terminal(WINDOWS_TERMINAL_CHAIN, |n| present.contains(&n));
+        assert_eq!(got.as_deref(), Some("cmd.exe"));
+    }
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
+        .invoke_handler(tauri::generate_handler![
+            list_workspaces,
+            list_channels,
+            get_channel,
+            list_feed,
+            list_sessions,
+            load_session,
+            list_channel_tickets,
+            list_channel_decisions,
+            list_channel_runs,
+            list_runs,
+            list_ticket_ledger,
+            list_agent_names,
+            run_cli,
+            create_channel,
+            archive_channel,
+            update_channel_repos,
+            post_to_channel,
+            create_session,
+            delete_session,
+            append_session_message,
+            rewind_snapshot,
+            rewind_apply,
+            start_chat,
+            cancel_chat_stream,
+            spawn_agent,
+            kill_spawned_agent,
+            list_spawns,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
 }
