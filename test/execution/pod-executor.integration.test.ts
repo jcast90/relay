@@ -44,7 +44,7 @@ describeOrSkip("PodExecutor integration (real cluster)", () => {
     };
 
     const sandbox = await sandboxes.create(
-      { root: "/tmp", remoteUrl: "https://github.com/jcast90/agent-harness.git" },
+      { root: "/tmp", remoteUrl: "https://github.com/jcast90/relay.git" },
       "main",
       { runId: "it1", ticketId: "integ" }
     );
