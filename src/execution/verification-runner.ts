@@ -12,6 +12,19 @@ export interface VerificationRunResult {
   success: boolean;
   executed: VerificationCommandResult[];
   rejected: string[];
+  /**
+   * True when the agent's proposed commands were all rejected (not on the
+   * allowlist) and we substituted the full allowlist instead of running the
+   * agent's choices. Callers should surface this to users — otherwise
+   * "verification passed" can hide the fact that none of the agent's
+   * intended checks actually ran.
+   */
+  overridden: boolean;
+  /**
+   * When `overridden` is true, the commands the runner actually executed in
+   * place of the agent's rejected proposals. Empty otherwise.
+   */
+  substitutedCommands: string[];
 }
 
 export interface VerificationRunInput {
@@ -53,7 +66,9 @@ export class VerificationRunner {
     return {
       success: executed.every((entry) => entry.result.exitCode === 0),
       executed,
-      rejected: selection.rejected
+      rejected: selection.rejected,
+      overridden: selection.overridden,
+      substitutedCommands: selection.overridden ? [...selection.commandsToRun] : []
     };
   }
 
@@ -93,18 +108,31 @@ export function selectVerificationCommands(
 ): {
   commandsToRun: string[];
   rejected: string[];
+  /**
+   * True when the agent proposed commands but none of them were on the
+   * allowlist, so we fell back to running the full allowlist instead of the
+   * agent's picks. Callers should surface this — otherwise the run appears
+   * "verification passed" when the agent's intended checks never ran.
+   */
+  overridden: boolean;
 } {
   const allowed = new Set(allowlistedCommands.map(normalizeCommand));
   const normalizedProposed = uniqueNormalizedCommands(proposedCommands);
   const approvedProposed = normalizedProposed.filter((command) => allowed.has(command));
   const rejected = normalizedProposed.filter((command) => !allowed.has(command));
 
+  // Substitution happens when the agent proposed *something* but nothing it
+  // proposed was approved, so we fall back to the allowlist. "No proposals"
+  // does not count as an override — that's the documented default path.
+  const overridden = normalizedProposed.length > 0 && approvedProposed.length === 0;
+
   return {
     commandsToRun:
       approvedProposed.length > 0
         ? approvedProposed
         : uniqueNormalizedCommands(allowlistedCommands),
-    rejected
+    rejected,
+    overridden
   };
 }
 

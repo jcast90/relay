@@ -21,14 +21,16 @@ describe("verification command selection", () => {
       )
     ).toEqual({
       commandsToRun: ["pnpm test", "pnpm typecheck"],
-      rejected: ["rm -rf /tmp/nope"]
+      rejected: ["rm -rf /tmp/nope"],
+      overridden: false
     });
   });
 
   it("falls back to allowlisted commands when tester proposes none", () => {
     expect(selectVerificationCommands([], ["pnpm typecheck"])).toEqual({
       commandsToRun: ["pnpm typecheck"],
-      rejected: []
+      rejected: [],
+      overridden: false
     });
   });
 });

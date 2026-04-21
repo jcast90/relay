@@ -142,11 +142,12 @@ Opting in to Postgres (`PostgresHarnessStore`) keeps the same on-disk layout and
 
 | Symptom | Likely cause / fix |
 |---|---|
-| `GITHUB_TOKEN not set — PR watching disabled` | Expected if you didn't set the token; PRs won't auto-track. |
+| `GITHUB_TOKEN not set — PR watching disabled` | Expected if you didn't set the token; PRs won't auto-track. Also posted once per channel to the feed (visible in TUI/GUI) so you see it even if you closed the terminal. |
 | Classifier can't resolve a Linear key like `ABC-123` | `LINEAR_API_KEY` (or `COMPOSIO_API_KEY`) not set, or the key doesn't match any issue visible to your token. |
 | Claude keeps prompting for permissions | Set `RELAY_AUTO_APPROVE=1` or pass `--yolo` / `--auto-approve`. |
 | Tickets stuck in `blocked` forever | Check `dependsOn` chain — a failed upstream ticket blocks everything downstream. `rly board <id>` shows the edges. |
 | Ticket retries exhausted (`failed`) | Verification commands kept failing past `maxTestFixLoops`. Feed shows the last verification output; fix manually, mark the ticket `completed`, and the scheduler unblocks downstream. |
+| `Verification override` in feed | The agent proposed commands that weren't on the ticket's allowlist, so the scheduler ran the allowlist instead. The feed entry lists `rejectedCommands` and `substitutedCommands` — if the substitution is wrong, update the ticket's `allowedCommands` / `verificationCommands`. |
 | `rly` runs stale code after `git pull` | Default reads current source via `tsx`, so this shouldn't happen. If you set `RELAY_USE_DIST=1`, run `rly rebuild`. |
 | `rly tui` / `rly gui` fails on first run | Install `cargo` (rustup). The auto-build needs it. |
 | TUI shows no channels | Register at least one workspace with `rly up` and create a channel (or launch a session, which creates one). |
