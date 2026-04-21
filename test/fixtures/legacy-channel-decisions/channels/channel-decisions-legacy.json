@@ -1,0 +1,12 @@
+{
+  "channelId": "channel-decisions-legacy",
+  "name": "#legacy-decisions",
+  "description": "Pre-migration fixture — decisions-only parity with legacy-channel/ and legacy-crosslink/.",
+  "status": "active",
+  "workspaceIds": ["ws-legacy-decisions"],
+  "members": [],
+  "pinnedRefs": [],
+  "repoAssignments": [],
+  "createdAt": "2025-01-01T12:00:00.000Z",
+  "updatedAt": "2025-01-02T09:30:00.000Z"
+}

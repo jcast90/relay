@@ -95,10 +95,14 @@ export async function setAgentName(
       REGISTRY_DOC_ID,
       () => entries
     );
-  } catch {
+  } catch (err) {
     // Never let a mirror failure shadow a successful primary write. The
     // Rust-visible file is already on disk; a future caller's `setAgentName`
     // will re-mirror the full registry so transient failures self-heal.
+    // Surface the failure at warn-level so operators aren't left guessing
+    // why the Postgres-backed coordination doc is stale.
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[agent-names] coordination mirror failed for registry: ${msg}`);
   }
 
   return entry;

@@ -424,3 +424,69 @@ describe("ChannelStore reads legacy Rust-layout fixtures", () => {
     }
   });
 });
+
+/**
+ * Decision-only parity fixture. `legacy-channel/` and `legacy-crosslink/`
+ * each covered their respective domains end-to-end; the review flagged
+ * that decisions had no dedicated fixture proving that pre-T-104
+ * on-disk files still round-trip through `ChannelStore`. This block
+ * covers that gap: copy the fixture into a scratch dir, bind a fresh
+ * ChannelStore with an isolated HarnessStore (so no coordination docs
+ * leak into the user's relay), and assert both `getDecision` and
+ * `listDecisions` read the JSON payloads untouched.
+ */
+describe("ChannelStore reads legacy decisions fixture", () => {
+  let workDir: string;
+
+  beforeEach(async () => {
+    workDir = await mkdtemp(join(tmpdir(), "ch-dec-legacy-"));
+    const src = fileURLToPath(
+      new URL("./fixtures/legacy-channel-decisions", import.meta.url)
+    );
+    await cp(src, workDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(workDir, { recursive: true, force: true });
+  });
+
+  it("reads pre-migration decisions through listDecisions and getDecision", async () => {
+    const storeRoot = await mkdtemp(join(tmpdir(), "ch-dec-legacy-store-"));
+    try {
+      const channelsDir = join(workDir, "channels");
+      const store = new ChannelStore(
+        channelsDir,
+        new FileHarnessStore(storeRoot)
+      );
+
+      const decisions = await store.listDecisions("channel-decisions-legacy");
+      // Sorted descending by createdAt in `listDecisions`, so the newer beta
+      // comes first.
+      expect(decisions.map((d) => d.decisionId)).toEqual([
+        "decision-legacy-beta",
+        "decision-legacy-alpha"
+      ]);
+      expect(decisions[0].title).toBe("JWT for v1 session tokens");
+      expect(decisions[0].linkedArtifacts).toHaveLength(1);
+      expect(decisions[1].alternatives).toContain("Redis SETNX");
+
+      const alpha = await store.getDecision(
+        "channel-decisions-legacy",
+        "decision-legacy-alpha"
+      );
+      expect(alpha).not.toBeNull();
+      expect(alpha!.decidedBy).toBe("planner-claude");
+      expect(alpha!.runId).toBe("run-legacy-alpha");
+
+      const beta = await store.getDecision(
+        "channel-decisions-legacy",
+        "decision-legacy-beta"
+      );
+      expect(beta).not.toBeNull();
+      expect(beta!.ticketId).toBe("ticket-legacy-auth");
+      expect(beta!.runId).toBeNull();
+    } finally {
+      await rm(storeRoot, { recursive: true, force: true });
+    }
+  });
+});

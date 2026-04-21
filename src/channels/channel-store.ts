@@ -699,11 +699,17 @@ export class ChannelStore {
         decisionStoreId(channelId, decision.decisionId),
         decision
       );
-    } catch {
+    } catch (err) {
       // Intentional: never let a coordination-mirror failure surface as a
       // decision-recording failure. The decision is durably persisted via
       // the atomic rename above; consumers reading through Rust / GUI see
-      // it immediately.
+      // it immediately. Warn so the divergence between the on-disk decision
+      // and the (now-stale) HarnessStore mirror is visible in logs.
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[channel-store] decision coordination mirror failed ` +
+          `channelId=${channelId} decisionId=${decision.decisionId}: ${msg}`
+      );
     }
 
     await this.postEntry(channelId, {

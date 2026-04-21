@@ -1,0 +1,16 @@
+{
+  "decisionId": "decision-legacy-beta",
+  "channelId": "channel-decisions-legacy",
+  "runId": null,
+  "ticketId": "ticket-legacy-auth",
+  "title": "JWT for v1 session tokens",
+  "description": "Pick JWT over opaque session cookies for the initial rollout.",
+  "rationale": "Stateless, already familiar to the team, and decouples auth from the DB.",
+  "alternatives": ["server-side session cookies", "opaque bearer tokens"],
+  "decidedBy": "executor-codex",
+  "decidedByName": "Codex (Executor)",
+  "linkedArtifacts": [
+    { "kind": "doc", "ref": "auth-v1-adr" }
+  ],
+  "createdAt": "2025-01-02T09:30:00.000Z"
+}

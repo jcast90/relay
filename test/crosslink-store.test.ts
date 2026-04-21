@@ -1,11 +1,14 @@
-import { cp, mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CrosslinkStore } from "../src/crosslink/store.js";
+import {
+  CrosslinkStore,
+  __resetLegacyLayoutWarnings
+} from "../src/crosslink/store.js";
 
 describe("crosslink store", () => {
   it("registers and discovers a session", async () => {
@@ -297,5 +300,81 @@ describe("crosslink store reads legacy canonical-layout fixture", () => {
     // Second poll should see nothing — the message is no longer pending.
     const empty = await store.pollMessages("session-legacy-alpha");
     expect(empty).toHaveLength(0);
+  });
+});
+
+/**
+ * T-104 dropped the `<relayDir>/crosslink/{sessions,mailboxes}/*.json`
+ * layout and moved everything to the HarnessStore namespaces. Any data
+ * that lived in the old tree becomes orphaned at upgrade time — there's
+ * no automatic migration because mailbox IDs were regenerated. Cover the
+ * one-shot detection warn so the feature doesn't silently regress.
+ */
+describe("crosslink store warns on legacy layout", () => {
+  let root: string;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    __resetLegacyLayoutWarnings();
+    root = await mkdtemp(join(tmpdir(), "xlink-legacy-warn-"));
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(async () => {
+    warnSpy.mockRestore();
+    await rm(root, { recursive: true, force: true });
+    __resetLegacyLayoutWarnings();
+  });
+
+  it("emits a one-shot warn when legacy sessions/ is non-empty", async () => {
+    const legacySessions = join(root, "crosslink", "sessions");
+    await mkdir(legacySessions, { recursive: true });
+    await writeFile(
+      join(legacySessions, "session-legacy.json"),
+      JSON.stringify({ sessionId: "session-legacy" })
+    );
+
+    // First ctor: warn fires.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const _s1 = new CrosslinkStore(root);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const [firstArg] = warnSpy.mock.calls[0];
+    expect(String(firstArg)).toContain("legacy layout detected");
+    expect(String(firstArg)).toContain(join(root, "crosslink"));
+    expect(String(firstArg)).toContain("PR #33");
+
+    // Second ctor against the same root: should NOT warn again — the
+    // warning is intentionally one-shot per legacy root per process.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const _s2 = new CrosslinkStore(root);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits a warn when legacy mailboxes/ is non-empty (even if sessions/ is absent)", async () => {
+    const legacyMailboxes = join(root, "crosslink", "mailboxes");
+    await mkdir(legacyMailboxes, { recursive: true });
+    await writeFile(
+      join(legacyMailboxes, "orphan-msg.json"),
+      JSON.stringify({ messageId: "orphan" })
+    );
+
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const _s1 = new CrosslinkStore(root);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not warn when the legacy tree is absent", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const _s1 = new CrosslinkStore(root);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when the legacy tree exists but is empty", async () => {
+    await mkdir(join(root, "crosslink", "sessions"), { recursive: true });
+    await mkdir(join(root, "crosslink", "mailboxes"), { recursive: true });
+
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const _s1 = new CrosslinkStore(root);
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 });

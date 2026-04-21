@@ -1,3 +1,4 @@
+import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { getRelayDir } from "../cli/paths.js";
@@ -38,6 +39,52 @@ function mailboxPrefix(toSessionId: string): string {
 
 function isMailboxFor(docId: string, toSessionId: string): boolean {
   return docId.startsWith(mailboxPrefix(toSessionId));
+}
+
+/**
+ * Paths we've already warned about in this process. T-104 moved crosslink
+ * state from `<relayDir>/crosslink/{sessions,mailboxes}/` to the flat
+ * HarnessStore namespaces (`crosslink-session/`, `crosslink-mailbox/`).
+ * Deployments upgrading past that change keep the legacy directories on
+ * disk as orphans; surface one warn per CrosslinkStore-root pair so the
+ * operator knows pending messages in the old tree will never reach agents.
+ * Exposed via `__resetLegacyLayoutWarnings` for tests.
+ */
+const warnedLegacyRoots = new Set<string>();
+
+export function __resetLegacyLayoutWarnings(): void {
+  warnedLegacyRoots.clear();
+}
+
+function hasNonEmptyDir(path: string): boolean {
+  try {
+    const st = statSync(path);
+    if (!st.isDirectory()) return false;
+    return readdirSync(path).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function warnIfLegacyLayoutPresent(baseDir: string): void {
+  const legacyRoot = join(baseDir, "crosslink");
+  if (warnedLegacyRoots.has(legacyRoot)) return;
+
+  const legacySessionsDir = join(legacyRoot, "sessions");
+  const legacyMailboxesDir = join(legacyRoot, "mailboxes");
+
+  if (
+    hasNonEmptyDir(legacySessionsDir) ||
+    hasNonEmptyDir(legacyMailboxesDir)
+  ) {
+    warnedLegacyRoots.add(legacyRoot);
+    console.warn(
+      `[crosslink] legacy layout detected at ${legacyRoot}. ` +
+        `T-104 moved crosslink state to HarnessStore namespaces. ` +
+        `Existing sessions and pending messages will not be migrated ` +
+        `automatically — they become orphans. See PR #33 for context.`
+    );
+  }
 }
 
 export class CrosslinkStore {
@@ -81,6 +128,17 @@ export class CrosslinkStore {
     } else {
       this.store = buildHarnessStore();
     }
+
+    // One-shot check: the pre-T-104 layout was
+    // `<relayDir>/crosslink/{sessions,mailboxes}/*.json`. If that tree is
+    // still present, surface a warn so operators know the orphaned data
+    // won't be migrated automatically. Runs once per distinct legacy root
+    // per process (see `warnedLegacyRoots`). `rootDir` in the test path
+    // already points at a HarnessStore root, not a relay root, so callers
+    // driving tests against isolated scratch dirs won't emit the warn
+    // unless they explicitly seed the legacy tree.
+    const legacyCheckBase = rootDir ?? getRelayDir();
+    warnIfLegacyLayoutPresent(legacyCheckBase);
   }
 
   // --- Session lifecycle ---
