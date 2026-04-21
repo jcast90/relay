@@ -45,6 +45,64 @@ interface ParsedProviderResult {
   };
 }
 
+/**
+ * Env vars the Claude CLI subprocess is allowed to read from the parent
+ * process. The invoker strips everything outside the default whitelist
+ * (OSS-03 — `command-invoker.ts`), so auth-adjacent vars the `claude` binary
+ * actually uses need to be opted back in explicitly.
+ *
+ *  - `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`: direct-API auth fallback
+ *    when the user hasn't run `claude setup-token`.
+ *  - `CLAUDE_CONFIG_DIR` / `CLAUDE_HOME`: user's stored auth config dir.
+ *  - `CLAUDE_CODE_USE_BEDROCK` / `CLAUDE_CODE_USE_VERTEX`: switch the CLI
+ *    onto Bedrock / Vertex auth flows.
+ *  - AWS / GCP creds: needed when the Bedrock / Vertex flag above is on.
+ */
+const CLAUDE_PASS_ENV: readonly string[] = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_MODEL",
+  "CLAUDE_CONFIG_DIR",
+  "CLAUDE_HOME",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "AWS_ACCESS_KEY_ID",
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_SESSION_TOKEN",
+  "AWS_REGION",
+  "AWS_DEFAULT_REGION",
+  "AWS_PROFILE",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "GCLOUD_PROJECT",
+  // Canonical Vertex project vars — `GOOGLE_CLOUD_PROJECT` is what gcloud
+  // and the Google Cloud SDKs actually read; `GCLOUD_PROJECT` above is the
+  // legacy alias. Keep both so users on either convention work.
+  "GOOGLE_CLOUD_PROJECT",
+  "GOOGLE_CLOUD_QUOTA_PROJECT",
+  "CLOUDSDK_CORE_PROJECT"
+];
+
+/**
+ * Env vars the Codex CLI subprocess is allowed to read. Same rationale as
+ * {@link CLAUDE_PASS_ENV}: the invoker strips by default and Codex reads
+ * `OPENAI_API_KEY` (and occasionally `AZURE_OPENAI_*`) for direct-API auth
+ * when the user hasn't logged in via `codex login`.
+ */
+const CODEX_PASS_ENV: readonly string[] = [
+  "OPENAI_API_KEY",
+  "OPENAI_BASE_URL",
+  "OPENAI_ORG_ID",
+  "OPENAI_PROJECT",
+  "AZURE_OPENAI_API_KEY",
+  "AZURE_OPENAI_ENDPOINT",
+  // Azure OpenAI routing — both naming conventions seen in the wild.
+  "AZURE_OPENAI_API_VERSION",
+  "AZURE_OPENAI_DEPLOYMENT",
+  "AZURE_OPENAI_DEPLOYMENT_NAME",
+  "CODEX_HOME"
+];
+
 abstract class CliAgentBase implements Agent {
   readonly id: string;
   readonly name: string;
@@ -137,7 +195,11 @@ export class CodexCliAgent extends CliAgentBase {
         command: "codex",
         args,
         cwd: this.cwd,
-        timeoutMs: 300_000
+        timeoutMs: 300_000,
+        // Codex authenticates via its own config or API key env vars. The
+        // invoker strips secrets by default (OSS-03); opt these back in so
+        // users who rely on env-based auth aren't silently broken.
+        passEnv: [...CODEX_PASS_ENV]
       });
 
       if (result.exitCode !== 0) {
@@ -202,7 +264,11 @@ export class ClaudeCliAgent extends CliAgentBase {
       command: "claude",
       args,
       cwd: this.cwd,
-      timeoutMs: 300_000
+      timeoutMs: 300_000,
+      // Claude CLI authenticates via its own config dir or API key env vars.
+      // The invoker strips secrets by default (OSS-03); opt these back in so
+      // users who rely on env-based auth aren't silently broken.
+      passEnv: [...CLAUDE_PASS_ENV]
     });
 
     if (result.exitCode !== 0) {
