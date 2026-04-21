@@ -112,6 +112,14 @@ export class NoopExecutor implements AgentExecutor {
     opts: ExecutorStartOptions
   ): Promise<ExecutionHandle> {
     const id = `noop-exec-${++this.counter}`;
+    // `sandbox` is optional on ExecutorStartOptions so executors that manage
+    // their own lifecycle can skip it. NoopExecutor does not create sandboxes;
+    // surface a clear error rather than synthesize a placeholder ref.
+    if (!opts.sandbox) {
+      throw new Error(
+        "NoopExecutor requires opts.sandbox — pass one from NoopSandboxProvider or similar."
+      );
+    }
 
     return new NoopExecutionHandle(id, opts.sandbox);
   }

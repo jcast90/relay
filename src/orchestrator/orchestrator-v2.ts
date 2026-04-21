@@ -17,6 +17,7 @@ import { initializeTicketLedger } from "../domain/ticket.js";
 import { assertTransition } from "../domain/state-machine.js";
 import type { AgentRegistry } from "../agents/registry.js";
 import type { ArtifactStore } from "../execution/artifact-store.js";
+import type { AgentExecutor } from "../execution/executor.js";
 import type { VerificationRunner } from "../execution/verification-runner.js";
 import type { ChannelStore } from "../channels/channel-store.js";
 import { classifyRequest } from "./classifier.js";
@@ -41,9 +42,30 @@ export type PollerFactory = (input: {
   scheduler: TicketScheduler;
 }) => PollerHandle | null;
 
+export interface OrchestratorV2Options {
+  /**
+   * Optional {@link AgentExecutor}. When set, the per-run
+   * {@link TicketScheduler} is wired with `options.executor` instead of the
+   * legacy dispatch callback — see the scheduler ctor for the mutually-
+   * exclusive contract. When omitted, the scheduler keeps the historical
+   * dispatch-based path so existing tests and callers compile unchanged.
+   *
+   * Production callers that want real child-process execution should
+   * construct a `LocalChildProcessExecutor` (T-202) with a
+   * `GitWorktreeSandboxProvider` (T-201) and pass it here. We deliberately
+   * do NOT default-construct one inside the orchestrator — the orchestrator
+   * is used both by the CLI (which wants real execution) and by tests (which
+   * want a scripted dispatch). Building a default provider with real git
+   * calls would break the test path.
+   */
+  executor?: AgentExecutor;
+}
+
 export class OrchestratorV2 {
   /** Optional poller factory registered via `attachPoller`. */
   private pollerFactory: PollerFactory | null = null;
+
+  private readonly executor: AgentExecutor | null;
 
   constructor(
     private readonly registry: AgentRegistry,
@@ -52,8 +74,11 @@ export class OrchestratorV2 {
     private readonly artifactStore: ArtifactStore,
     private readonly artifactsDir?: string,
     private readonly channelStore?: ChannelStore,
-    private readonly workspaceId?: string
-  ) {}
+    private readonly workspaceId?: string,
+    options?: OrchestratorV2Options
+  ) {
+    this.executor = options?.executor ?? null;
+  }
 
   /**
    * Register a factory that builds a poller (typically a `PrPoller` wired to
@@ -263,15 +288,7 @@ export class OrchestratorV2 {
       ticketCount: String(ticketPlan.tickets.length)
     });
 
-    const scheduler = new TicketScheduler(
-      this.repoRoot,
-      this.artifactStore,
-      this.verificationRunner,
-      this.registry,
-      (r, req) => this.dispatch(r, req),
-      (r, type, phaseId, details) => this.recordEvent(r, type, phaseId, details),
-      { channelStore: this.channelStore }
-    );
+    const scheduler = this.buildScheduler(run);
 
     const poller = this.startPoller(run, scheduler);
 
@@ -356,15 +373,7 @@ export class OrchestratorV2 {
       fastTrack: "trivial"
     });
 
-    const scheduler = new TicketScheduler(
-      this.repoRoot,
-      this.artifactStore,
-      this.verificationRunner,
-      this.registry,
-      (r, req) => this.dispatch(r, req),
-      (r, type, phaseId, details) => this.recordEvent(r, type, phaseId, details),
-      { channelStore: this.channelStore }
-    );
+    const scheduler = this.buildScheduler(run);
 
     const poller = this.startPoller(run, scheduler);
     try {
@@ -390,6 +399,32 @@ export class OrchestratorV2 {
     }
 
     return run;
+  }
+
+  /**
+   * Build a per-run scheduler. Centralized so both the trivial and regular
+   * paths go through one place — previously the two call sites drifted on
+   * option wiring (e.g. new options added to one but not the other).
+   *
+   * Executor wiring: when `options.executor` was supplied to the
+   * orchestrator ctor, the scheduler is constructed with
+   * `{ executor }` and the positional dispatch slot is `null`. Otherwise
+   * the legacy dispatch callback is used. See the scheduler ctor for the
+   * xor contract between the two.
+   */
+  private buildScheduler(_run: HarnessRun): TicketScheduler {
+    return new TicketScheduler(
+      this.repoRoot,
+      this.artifactStore,
+      this.verificationRunner,
+      this.registry,
+      this.executor ? null : (r, req) => this.dispatch(r, req),
+      (r, type, phaseId, details) => this.recordEvent(r, type, phaseId, details),
+      {
+        channelStore: this.channelStore,
+        ...(this.executor ? { executor: this.executor } : {})
+      }
+    );
   }
 
   private startPoller(
