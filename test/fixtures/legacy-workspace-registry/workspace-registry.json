@@ -1,0 +1,17 @@
+{
+  "updatedAt": "2025-01-01T12:00:00.000Z",
+  "workspaces": [
+    {
+      "workspaceId": "ws-legacy-1",
+      "repoPath": "/home/user/projects/legacy-a",
+      "registeredAt": "2025-01-01T12:00:00.000Z",
+      "lastAccessedAt": "2025-01-01T12:00:00.000Z"
+    },
+    {
+      "workspaceId": "ws-legacy-2",
+      "repoPath": "/home/user/projects/legacy-b",
+      "registeredAt": "2025-01-01T12:00:00.000Z",
+      "lastAccessedAt": "2025-01-01T12:00:00.000Z"
+    }
+  ]
+}

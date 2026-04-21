@@ -6,13 +6,56 @@ import {
   type ChatSession,
   type PersistedChatMessage
 } from "../domain/session.js";
+import { buildHarnessStore } from "../storage/factory.js";
+import { STORE_NS } from "../storage/namespaces.js";
+import type { HarnessStore } from "../storage/store.js";
 import { getRelayDir } from "./paths.js";
+
+/**
+ * Coordination record stored on the `HarnessStore` at
+ * `(session, <channelId>:<sessionId>)`. The session doc itself continues to
+ * live at `<channelsDir>/<channelId>/sessions.json` (index) and
+ * `<channelsDir>/<channelId>/sessions/<sessionId>.jsonl` (chat transcript)
+ * for Rust/GUI compat — see `crates/harness-data/src/lib.rs::sessions_dir`,
+ * `sessions_index_path`, and `session_chat_path`. This doc is an audit /
+ * coordination record so `store.mutate` can serve as a cross-process mutex
+ * on the Postgres-backed store (T-402) without this class owning that
+ * logic.
+ */
+interface SessionLockRecord {
+  updatedAt: string;
+  messageCount: number;
+}
+
+function lockRecordId(channelId: string, sessionId: string): string {
+  // HarnessStore ids can't contain `/` or `\` (path traversal guard in
+  // `assertSafeSegment`), so use `:` as the separator between channel and
+  // session. The id stays human-readable and round-trips via simple split.
+  return `${channelId}:${sessionId}`;
+}
 
 export class SessionStore {
   private readonly channelsDir: string;
+  private readonly store: HarnessStore;
 
-  constructor(channelsDir?: string) {
+  /**
+   * @param channelsDir Directory for on-disk channel / session files.
+   *   Defaults to `<relayDir>/channels` so the layout matches what the Rust
+   *   crate `harness-data` reads. Overriding this is only meaningful for
+   *   tests — changing the default would break the Rust/GUI reader.
+   * @param store `HarnessStore` used for the `(session, …)` coordination
+   *   record written on every session mutation. Defaults to
+   *   `buildHarnessStore()` so callers that don't inject one pick up the
+   *   process-wide singleton semantics through the factory. Tests
+   *   substitute a `FakeHarnessStore` here.
+   *
+   * NOTE: session reads/writes still go straight to the filesystem because
+   * the Rust/GUI reader expects the path layout documented on
+   * `SessionLockRecord`. Only coordination primitives migrate.
+   */
+  constructor(channelsDir?: string, store?: HarnessStore) {
     this.channelsDir = channelsDir ?? join(getRelayDir(), "channels");
+    this.store = store ?? buildHarnessStore();
   }
 
   private sessionsDir(channelId: string): string {
@@ -44,6 +87,10 @@ export class SessionStore {
     sessions.push(session);
     await this.writeSessions(channelId, sessions);
 
+    // Initial coordination record so watchers can pick the session up
+    // before any message lands.
+    await this.touchLockRecord(channelId, session.sessionId, 0);
+
     return session;
   }
 
@@ -72,6 +119,11 @@ export class SessionStore {
     }
 
     await this.writeSessions(channelId, sessions);
+    await this.touchLockRecord(
+      channelId,
+      session.sessionId,
+      session.messageCount
+    );
   }
 
   async updateClaudeSessionId(
@@ -104,6 +156,13 @@ export class SessionStore {
     } catch {
       // File may not exist
     }
+
+    // Drop the coordination record so watchers see the session go away.
+    // Tolerated to miss (no-op on ENOENT inside the store).
+    await this.store.deleteDoc(
+      STORE_NS.session,
+      lockRecordId(channelId, sessionId)
+    );
   }
 
   async appendMessage(
@@ -181,5 +240,28 @@ export class SessionStore {
     const tmpPath = `${path}.tmp`;
     await writeFile(tmpPath, JSON.stringify(sessions, null, 2), "utf8");
     await rename(tmpPath, path);
+  }
+
+  /**
+   * Bump the `(session, <channelId>:<sessionId>)` coordination record
+   * through the injected `HarnessStore`. Uses `mutate` to keep semantics
+   * consistent across backends: on Postgres (T-402) this runs under
+   * `pg_advisory_xact_lock`, on FileHarnessStore it serializes through
+   * the in-process key-lock. Purely advisory — nothing reads this record
+   * today, T-402 consumers layer on top.
+   */
+  private async touchLockRecord(
+    channelId: string,
+    sessionId: string,
+    messageCount: number
+  ): Promise<void> {
+    await this.store.mutate<SessionLockRecord>(
+      STORE_NS.session,
+      lockRecordId(channelId, sessionId),
+      () => ({
+        updatedAt: new Date().toISOString(),
+        messageCount
+      })
+    );
   }
 }

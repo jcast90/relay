@@ -171,7 +171,7 @@ export async function resolveChannelRefs(input: {
   currentChannelId: string;
 }): Promise<{ resolved: string; refs: string[] }> {
   const channelStore = new ChannelStore(undefined, getHarnessStore());
-  const sessionStore = new SessionStore();
+  const sessionStore = new SessionStore(undefined, getHarnessStore());
   const channels = await channelStore.listChannels("active");
   const contextBlocks: string[] = [];
   const refs: string[] = [];

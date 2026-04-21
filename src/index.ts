@@ -1066,7 +1066,7 @@ function extractPositionals(args: string[]): string[] {
 
 async function handleSessionCommand(args: string[]): Promise<void> {
   const sub = args[0];
-  const store = new SessionStore();
+  const store = new SessionStore(undefined, getHarnessStore());
 
   if (sub === "create") {
     const channelId = parseNamedArg(args, "--channel");
