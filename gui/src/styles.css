@@ -62,6 +62,13 @@ button.primary { background: var(--accent-dim); border-color: var(--accent); }
   display: flex;
   flex-direction: column;
   min-width: 0;
+  /* Without min-height: 0, flex children with overflow-y: auto grow to their
+     natural content height and blow past the grid row, so nothing appears
+     scrollable — the outer `html { overflow: hidden }` just clips them. */
+  min-height: 0;
+  /* Belt-and-braces: clip at the panel boundary so runaway content can't
+     push the composer / sidebars off-screen. */
+  overflow: hidden;
 }
 .panel:last-child { border-right: none; border-left: 1px solid var(--border); }
 
@@ -76,6 +83,8 @@ button.primary { background: var(--accent-dim); border-color: var(--accent); }
   display: flex;
   justify-content: space-between;
   align-items: center;
+  /* Pin so .content / .list can flex-grow into the remaining space. */
+  flex-shrink: 0;
 }
 
 .list { flex: 1; overflow-y: auto; }
@@ -96,6 +105,8 @@ button.primary { background: var(--accent-dim); border-color: var(--accent); }
   display: flex;
   border-bottom: 1px solid var(--border);
   background: var(--bg-alt);
+  /* Pin so .content can claim remaining vertical space. */
+  flex-shrink: 0;
 }
 .tab {
   padding: 10px 16px;
@@ -343,6 +354,9 @@ button.primary { background: var(--accent-dim); border-color: var(--accent); }
   border-top: 1px solid var(--border);
   background: var(--bg-alt);
   align-items: flex-end;
+  /* Pinned at the bottom of the panel — must not be squeezed when the chat
+     feed grows. */
+  flex-shrink: 0;
 }
 .composer textarea {
   flex: 1;
