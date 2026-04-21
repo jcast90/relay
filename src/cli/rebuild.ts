@@ -29,6 +29,8 @@ export interface RebuildOptions {
   tui: boolean;
   /** Rebuild the Tauri GUI bundle. */
   gui: boolean;
+  /** Skip the up-front `pnpm install`. */
+  skipInstall: boolean;
 }
 
 export function parseRebuildFlags(args: string[]): RebuildOptions {
@@ -38,11 +40,17 @@ export function parseRebuildFlags(args: string[]): RebuildOptions {
   const explicitDist = args.includes("--dist");
   const anyExplicit = explicitTui || explicitGui || explicitDist;
 
-  const known = new Set(["--all", "--tui", "--gui", "--dist"]);
+  const known = new Set([
+    "--all",
+    "--tui",
+    "--gui",
+    "--dist",
+    "--skip-install"
+  ]);
   for (const arg of args) {
     if (arg.startsWith("--") && !known.has(arg)) {
       console.warn(
-        `[rly rebuild] ignoring unknown flag ${arg}. Supported: --all, --dist, --tui, --gui.`
+        `[rly rebuild] ignoring unknown flag ${arg}. Supported: --all, --dist, --tui, --gui, --skip-install.`
       );
     }
   }
@@ -50,7 +58,8 @@ export function parseRebuildFlags(args: string[]): RebuildOptions {
   return {
     dist: all || explicitDist || !anyExplicit,
     tui: all || explicitTui,
-    gui: all || explicitGui
+    gui: all || explicitGui,
+    skipInstall: args.includes("--skip-install")
   };
 }
 
@@ -58,9 +67,24 @@ export function parseRebuildFlags(args: string[]): RebuildOptions {
  * Rebuild one or more Relay artifacts. Called from `rly rebuild` in the
  * main CLI dispatch. Prints progress inline; individual step failures
  * short-circuit the remaining steps so the user sees the actual error.
+ *
+ * Always runs `pnpm install` first unless --skip-install. Cheap when
+ * already in sync (~1s no-op); critical right after `git pull` if the
+ * merged PRs added new dependencies — otherwise tsc surfaces a
+ * "Cannot find module X" and the real fix (re-sync node_modules) is
+ * hidden behind what looks like a code bug.
  */
 export async function runRebuild(options: RebuildOptions): Promise<number> {
   const repoRoot = resolveRepoRoot();
+
+  if (!options.skipInstall) {
+    console.log("[rly rebuild] deps — pnpm install");
+    const exit = await runTool("pnpm", ["install"], repoRoot);
+    if (exit !== 0) {
+      console.error("[rly rebuild] pnpm install failed — stopping.");
+      return exit;
+    }
+  }
 
   if (options.dist) {
     console.log("[rly rebuild] TS dist — pnpm build");
