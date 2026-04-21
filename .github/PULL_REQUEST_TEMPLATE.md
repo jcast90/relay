@@ -1,27 +1,18 @@
-<!--
-Keep the PR scope tight — one logical change. Update docs when behavior changes.
-If this PR is AI-assisted, leave the `Co-Authored-By:` footer on the commits.
--->
-
 ## Summary
-
--
--
+<!-- 1–3 bullets. What changed and why. -->
 
 ## Test plan
+<!-- Checklist. Include manual verification if the change is user-visible. -->
+- [ ]
 
-- [ ] `pnpm test`
-- [ ] `pnpm typecheck`
-- [ ] `pnpm build`
-- [ ] `cargo check --workspace` (if Rust changed)
-- [ ] Manual verification: <describe the flow you exercised>
+## Size check
+<!-- PRs should stay under 800 LOC. If over, explain why. -->
+Diff size: `<N>` lines added / `<M>` deleted.
 
 ## Breaking changes?
+<!-- Yes / no + notes. Data-model or MCP-tool changes usually are. -->
 
-<!-- Yes / No. If yes, describe the break and the migration path. Mention any changes to CLI flags, config vars, `~/.relay/` file layout, MCP tool shapes, or the `crates/harness-data` struct. -->
-
-No.
-
----
-
-<sub>AI-assisted PR? Keep the `Co-Authored-By: Claude …` footer on your commits so provenance is visible in `git log`.</sub>
+## AI-assisted?
+<!-- If yes, make sure the commit has the Co-Authored-By footer and
+     this PR is respectful of the codebase: minimal scope, no
+     sweeping refactors, reviewers' time is precious. -->
