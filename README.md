@@ -2,25 +2,63 @@
   <img src="gui/src-tauri/icons/icon.svg" alt="Relay" width="96" height="96"/>
 </p>
 
-# Relay
+<h1 align="center">Relay</h1>
 
-Local-first orchestration for phase-driven coding with Claude and Codex adapters. Classifies requests by complexity, decomposes work into parallelizable tickets, and executes them with verification loops.
+<p align="center">
+  <b>Local-first orchestration for coding agents.</b><br/>
+  Classify a request, decompose it into parallel tickets, dispatch Claude / Codex to execute, verify, and track PRs —
+  all while you supervise from a dashboard.
+</p>
 
-CLI: `rly` (the legacy `agent-harness` command is kept as an alias so existing scripts keep working).
+<p align="center">
+  <a href="#install"><img alt="install" src="https://img.shields.io/badge/install-one_command-89b4fa?style=flat-square"/></a>
+  <a href="#license"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-a6e3a1?style=flat-square"/></a>
+  <a href="#dashboards"><img alt="dashboards" src="https://img.shields.io/badge/dashboards-CLI_%2B_TUI_%2B_GUI-cba6f7?style=flat-square"/></a>
+</p>
+
+---
+
+## What Relay is
+
+Relay turns a sentence, a GitHub issue URL, or a Linear ticket into a **running plan of AI-coded work** — with tickets, verification loops, live PR tracking, and optional human approval gates. Sessions run inside your normal Claude or Codex CLI; Relay wraps them with an MCP server that records everything into Slack-style **channels** you can query later.
+
+The core idea: **you shouldn't keep agents' context in your head.** Plans, tickets, decisions, and cross-session messages all live in `~/.relay/` as JSON files + optional Postgres, readable by the CLI, the terminal TUI, and the desktop GUI.
+
+CLI: **`rly`** (or the legacy `agent-harness` alias — both binaries ship).
+
+## Table of contents
+
+- [Install](#install)
+- [Quickstart](#quickstart)
+- [How it works](#how-it-works)
+- [Key concepts](#key-concepts)
+- [Dashboards](#dashboards)
+- [CLI reference](#cli-reference)
+- [MCP tools](#mcp-tools)
+- [Integrations](#integrations)
+- [Unattended mode](#unattended-mode)
+- [Storage & execution backends](#storage--execution-backends)
+- [Configuration](#configuration)
+- [Architecture](#architecture)
+- [Development](#development)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Install
 
-### One command (recommended)
+### One command
 
 ```bash
 ./install.sh
 ```
 
-Add `--with-tui` or `--with-gui` to also build the Rust dashboards. Use `--skip-link` to avoid `pnpm link --global` (useful in CI or on shared machines).
+Prereq checks (`node >= 20`, `pnpm`, `git`; plus `cargo` if you add `--with-tui` or `--with-gui`), `pnpm install && pnpm build`, links the `rly` + `agent-harness` binaries on your `$PATH`, scaffolds `~/.relay/config.env.template`. Safe to re-run.
 
-The installer checks prereqs (`node >=20`, `pnpm`, `git`, plus `cargo` if you asked for TUI/GUI), runs `pnpm install && pnpm build`, links the `rly` binary on your `$PATH`, and scaffolds `~/.relay/config.env.template`. It's safe to re-run.
+- `--with-tui` also builds the Rust dashboard.
+- `--with-gui` also builds the Tauri desktop app.
+- `--skip-link` skips the global link (useful in CI).
 
-If you've previously installed the tool under the `agent-harness` name, the installer auto-migrates `~/.agent-harness/` → `~/.relay/` and leaves a back-compat symlink at the old path.
+Legacy users coming from the `agent-harness` name get `~/.agent-harness/` auto-migrated to `~/.relay/` on first run, with a back-compat symlink at the old path.
 
 ### Manual
 
@@ -28,134 +66,307 @@ If you've previously installed the tool under the `agent-harness` name, the inst
 pnpm install && pnpm build && pnpm link --global
 ```
 
-## Getting started
+### How `rly` finds the source
 
-> **Shortcut:** run `rly welcome` for a 6-step interactive tour that covers everything below plus auto-approve and the dashboards. Full reference in [`docs/getting-started.md`](docs/getting-started.md).
+The launcher (`bin/rly.mjs`) runs the current `src/cli.ts` via `tsx` by default — so a `git pull` reflects immediately, no rebuild required. `RELAY_USE_DIST=1` switches to the pre-built `dist/` for slightly faster startup.
 
-1. **Register a repo.** From inside any repo you want Relay to manage:
+## Quickstart
 
-   ```bash
-   rly up
-   ```
+```bash
+rly welcome          # 6-step interactive tour (recommended)
+# Or manually:
+cd /path/to/your/repo
+rly up               # register this repo
+rly doctor           # sanity-check tokens + MCP wiring
+rly claude           # launch Claude with Relay MCP attached
+```
 
-   This writes the repo into `~/.relay/workspace-registry.json`.
+Then paste any of these as your first message:
 
-2. **Set your tokens.** Copy the template and fill it in:
+- A plain sentence — `"Add OAuth2 to /api/users"`
+- A GitHub issue URL — `https://github.com/owner/repo/issues/42`
+- A Linear URL or key — `linear.app/acme/issue/ABC-123` or just `ABC-123`
 
-   ```bash
-   cp ~/.relay/config.env.template ~/.relay/config.env
-   # edit ~/.relay/config.env
-   source ~/.relay/config.env
-   ```
-
-   `GITHUB_TOKEN` unlocks GitHub issue ingestion and the PR watcher. `LINEAR_API_KEY` unlocks Linear issue ingestion. `HARNESS_LIVE=1` switches from the scripted demo to real Claude/Codex adapters. Add `source ~/.relay/config.env` to your `~/.zshrc` so every shell picks it up.
-
-3. **Sanity check.**
-
-   ```bash
-   rly doctor
-   ```
-
-   Verifies workspace paths, MCP wiring, and token presence.
-
-4. **Launch a session.**
-
-   ```bash
-   rly claude    # or: rly codex
-   ```
-
-   These wrap your normal CLI and attach the Relay MCP server.
-
-### End-to-end workflow
-
-Once tokens are set and a session is running, paste a GitHub or Linear issue URL (or a bare Linear key like `ABC-123`) to the agent. Relay:
-
-1. Pulls the issue (title, body, labels, branch hint) via the tracker integration.
-2. Classifies it into a complexity tier and generates a plan.
-3. Decomposes the plan into parallelizable tickets and executes them.
-4. Opens PRs via the SCM integration and tracks them — when `GITHUB_TOKEN` is set the PR watcher polls CI / review state every 30s and posts updates into the ticket's channel. CI failures and change-requested reviews turn into real follow-up tickets via the scheduler.
-5. Surfaces live state in the dashboards.
-
-The **TUI** (`rly tui`, built with `--with-tui`) and **GUI** (built with `--with-gui`) are optional dashboards over the same `~/.relay/` data — every operation they show is also available via CLI (`status`, `running`, `board`, `channels`, `decisions`, `list-runs`, …).
+Relay's classifier picks it up, plans the work, and either executes or asks for approval depending on complexity.
 
 ## How it works
 
-1. **Classify** — incoming request is triaged into a complexity tier
-2. **Plan** — planner agent generates a phased plan
-3. **Decompose** — plan splits into parallelizable tickets with dependency DAGs
-4. **Approve** — large/architectural requests wait for user approval via MCP
-5. **Execute** — ticket scheduler runs independent tickets concurrently (max 3)
-6. **Verify** — each ticket gets implement → verify → retry loops with failure classification
+```
+   your request                        tracker URL detected?
+        │                                      │
+        ▼                                      ▼
+  ┌───────────┐    GitHub / Linear    ┌─────────────────┐
+  │classifier │ ◄───────────────────► │  resolve issue  │
+  └─────┬─────┘                       └─────────────────┘
+        │ complexity tier
+        ▼
+  ┌───────────┐
+  │  planner  │ ──► design doc (if architectural)
+  └─────┬─────┘
+        │ phased plan
+        ▼
+  ┌────────────┐
+  │ decomposer │ ──► tickets with dependency DAG
+  └─────┬──────┘
+        │
+        ▼
+  ┌────────────────┐     parallel, max-concurrency capped
+  │   scheduler    │ ──► [T-1] [T-2] [T-3]
+  └────────────────┘         │     │     │
+                             ▼     ▼     ▼
+                        implement → verify → retry
+                             │
+                             ▼
+                         PR opens
+                             │
+                   ┌─────────┴─────────┐
+                   │    PR watcher     │   GITHUB_TOKEN required
+                   │    every 30 s     │
+                   └─────────┬─────────┘
+                             │
+    CI fail / changes_requested ──► follow-up tickets
+                             │
+                             ▼
+                          merged
+```
 
 ### Complexity tiers
 
 | Tier | Behavior |
-|------|----------|
-| `trivial` | Heuristic match (typo, rename, lint) — skip planning, single ticket |
+|---|---|
+| `trivial` | Heuristic match (typo, rename, lint) — single ticket, skip planning |
 | `bugfix` | Heuristic match — debug-first flow |
 | `feature_small` | LLM classification — lightweight plan, no approval |
-| `feature_large` | Full plan, user approval required |
-| `architectural` | Design doc phase, then plan, then approval |
-| `multi_repo` | Like feature_large + crosslink coordination |
+| `feature_large` | Full plan + **user approval required** via MCP |
+| `architectural` | Design-doc phase → plan → approval |
+| `multi_repo` | Like `feature_large` + crosslink coordination across repos |
 
-## CLI commands
+## Key concepts
 
-| Command | Description |
-|---------|-------------|
-| `rly up` | Register repo in global workspace |
-| `rly status` | Workspace paths and recent runs |
-| `rly list-runs` | Recent persisted runs |
+### Channels
+
+Slack-style workspaces for one piece of work. Each channel carries:
+
+- **feed** — messages, tool calls, PR state transitions
+- **tickets** — unified ticket board (`tickets.json`) shared by chat and the orchestrator
+- **runs** — linked orchestrator runs with full event history
+- **decisions** — recorded choices with `title / description / rationale / alternatives / linkedArtifacts`, queryable per channel
+- **sessions** — persisted chat transcripts (`sessions/<id>.jsonl`)
+
+Channels sort by most-recent activity in the sidebar — the one you're working in stays at the top.
+
+### Primary + associated repos
+
+A channel can attach multiple repos. Exactly **one is primary** — that's where the GUI's main chat agent works and where its `cwd` defaults. Every other attached repo is **associated** — visible to the primary as `alias + path + AGENTS.md summary` (first ~40 lines), not full context.
+
+**Cross-repo work happens through the primary's tools, not by reading:**
+
+- **Quick question** → `crosslink_send` to another repo's live agent
+- **Long task** → write a ticket with `assignedAlias: "<repo-alias>"`; the associated agent polls `tickets.json` and picks it up
+- Primary is explicitly told **not** to grep or edit associated repo files directly
+
+### Crosslink
+
+Live agents in different repos (each a `rly claude` session) discover each other via heartbeat files in `~/.relay/crosslink/sessions/` and exchange messages. MCP tools: `crosslink_discover` / `crosslink_send` / `crosslink_poll` / `crosslink_reply` / `crosslink_register`.
+
+### Spawning associated agents
+
+Opt-in per associated repo at channel creation, or on demand when the primary hits a `no_session` error. **macOS only** today — Relay shells `osascript` to open a Terminal tab and runs `rly claude` in it. Tracked per channel in `spawns.json`; kill from the GUI closes the tab and SIGTERMs the pid. Self-heals against dead crosslink heartbeats.
+
+On Linux / Windows, run `rly claude` in the associated repo manually — crosslink picks it up the same way.
+
+### Tickets
+
+Parallelisable work units with:
+
+- dependency DAG (`dependsOn`)
+- retry budget (`maxAgentAttempts`, `maxTestFixLoops`)
+- specialty tag (`general | ui | business_logic | api_crud | devops | testing`)
+- optional `assignedAlias` for routing to a specific associated-repo agent
+- verification commands (run against an allowlist, never shelled blindly)
+
+Statuses: `pending | blocked | ready | executing | verifying | retry | completed | failed`.
+
+### Decisions
+
+First-class records with rationale + alternatives, written to `channels/<id>/decisions/<id>.json`. Each write is atomic (temp-rename) and also mirrored through the `HarnessStore` coordination layer so Postgres `LISTEN/NOTIFY` consumers can observe new decisions without tailing the filesystem.
+
+### Named agents
+
+Every agent has a display name (`src/domain/agent-names.ts`), so channel feeds show "Saturn reviewed the migration", not "agent-3".
+
+## Dashboards
+
+All three read the same `~/.relay/` files — no synchronization, no split brain.
+
+### CLI
+
+```bash
+rly channels                    # list channels (sorted by latest activity)
+rly channel <id>                # show channel details + feed
+rly board <channelId>           # kanban view of the ticket board
+rly decisions <channelId>       # decision history with rationale
+rly running                     # active tasks across every workspace
+rly status                      # workspace paths + recent runs
+rly list-runs [--workspace <id>]
+rly doctor                      # diagnostics
+```
+
+### TUI (ratatui)
+
+```bash
+rly tui                         # auto-builds on first run (~1 min)
+```
+
+Vertical channel sidebar · feed · task board · decisions · agents. Keyboard-driven, fast.
+
+### GUI (Tauri desktop app)
+
+```bash
+rly gui                         # auto-builds the .app on first run (~2–3 min), then opens it
+rly gui --dev                   # hot-reload Vite + Tauri window
+rly gui --rebuild               # force rebuild
+```
+
+Catppuccin Mocha theme (matches the CMUX ghostty config). Three tabs per channel:
+
+- **Chat** — live streaming with thinking previews + tool-call rail + pulsing accent indicator
+- **Board** — kanban with empty columns hidden, per-column scroll, click-any-ticket detail modal with dependency tree
+- **Decisions** — chronological decision list with rationale
+
+Right pane shows repo assignments (with `PRIMARY` badge), pinned refs, and — when present — a **Spawned agents** section with kill buttons.
+
+## CLI reference
+
+| Command | What it does |
+|---|---|
+| `rly welcome` | 6-step interactive tour (pass `--reset` to replay) |
+| `rly up` | Register the current repo in the global workspace |
+| `rly status` | Workspace paths + recent runs |
+| `rly list-runs` | Recent persisted runs across workspaces |
 | `rly list-workspaces` | All registered workspaces |
 | `rly claude` | Launch Claude with Relay MCP attached |
 | `rly codex` | Launch Codex with Relay MCP attached |
-| `rly channels` | List channels |
-| `rly channel create <name>` | Create a channel |
-| `rly channel <id>` | Show channel details + feed |
-| `rly running` | Active tasks across all workspaces |
-| `rly board <channelId>` | Task board (tickets by status) |
+| `rly channels` | List channels (most-recently-active first) |
+| `rly channel create <name> [--repos alias:wsId:path,...] [--primary <alias>]` | Create a channel |
+| `rly channel update <id> [--repos ...] [--primary <alias>]` | Update repos / primary |
+| `rly channel archive <id>` | Archive a channel |
+| `rly channel <id>` | Show channel details + recent feed |
+| `rly channel feed <id> [--limit N]` | Raw feed entries |
+| `rly channel post <id> <content> [--from <name>] [--type <type>]` | Post to the feed |
+| `rly running` | Active tasks across every workspace |
+| `rly board <channelId>` | Kanban view of the ticket board |
 | `rly decisions <channelId>` | Decision history |
-| `rly doctor` | Workspace + MCP diagnostics |
-| `rly crosslink status` | Active agent sessions |
-| `rly pr-watch <url-or-#>` | Track a PR in the active watcher |
-| `rly pr-status` | List PRs currently tracked by the watcher |
-| `rly tui` | Launch the ratatui dashboard (auto-builds on first run) |
-| `rly gui` | Launch the Tauri desktop app (auto-builds on first run; `--dev` for hot reload) |
-| `rly rebuild` | Rebuild the TS dist; `--tui` / `--gui` / `--all` to rebuild more |
-| `rly welcome` | 6-step interactive tour of Relay's concepts and commands |
-| `rly serve [--port N] [--host H] [--token T] [--workspace ID]` | Expose the Relay MCP server over HTTP/SSE (loopback-only by default) |
+| `rly pr-watch <url-or-#> [--branch <b>] [--ticket <id>] [--channel <id>]` | Manually track a PR |
+| `rly pr-status [--json]` | List tracked PRs with CI + review state |
+| `rly crosslink status` | Active cross-session chatter |
+| `rly tui` | Terminal dashboard (auto-builds on first run) |
+| `rly gui [--dev] [--rebuild]` | Desktop dashboard |
+| `rly rebuild [--all] [--dist] [--tui] [--gui] [--skip-install]` | Rebuild artifacts (runs `pnpm install` first unless skipped) |
+| `rly doctor` | Diagnostics: paths, MCP wiring, token presence |
+| `rly session <create\|list\|get\|delete\|...>` | Session-transcript management |
+| `rly chat <system-prompt\|resolve-refs\|mcp-config>` | Chat plumbing used by the TUI/GUI |
+| `rly config <add-project-dir\|remove-project-dir>` | Global config |
+| `rly mcp-server --workspace <path>` | Run the MCP server (invoked by Claude/Codex automatically) |
+| `rly inspect-mcp` | Show the live MCP tool catalogue |
 
-`agent-harness <cmd>` is accepted as a legacy alias for `rly <cmd>` — both binaries are shipped so existing scripts don't break. `rly` reads current TypeScript source by default (via `tsx`), so a rebuild is **not** required after `git pull`. Set `RELAY_USE_DIST=1` for the compiled dist if you want slightly faster startup.
+The legacy `agent-harness <cmd>` alias is accepted for all commands so existing scripts keep working.
 
-### `rly serve` — HTTP/SSE MCP transport
+## MCP tools
 
-`rly serve` exposes the same MCP tool surface as `rly mcp-server` (which runs over stdio), but over HTTP with Server-Sent Events. Useful when you want to drive Relay from a remote agent, browser client, or multi-process local setup.
+Exposed to Claude and Codex via the Relay MCP server:
+
+**Harness (6)**: `harness_status`, `harness_list_runs`, `harness_get_run_detail`, `harness_get_artifact`, `harness_approve_plan`, `harness_reject_plan`
+
+**Channels (7)**: `channel_create`, `channel_get`, `channel_post`, `channel_record_decision`, `channel_task_board`, `channel_list_tickets`, `harness_running_tasks`
+
+**Crosslink (5)**: `crosslink_discover`, `crosslink_send`, `crosslink_poll`, `crosslink_reply`, `crosslink_register`
+
+Run `rly inspect-mcp` for the authoritative live list.
+
+## Integrations
+
+### Issue trackers (tracker-github, tracker-linear)
+
+Built on Composio's [`@aoagents/ao-core`](https://www.npmjs.com/package/@aoagents/ao-core) leaf plugins. Paste a GitHub or Linear URL (or a bare Linear key like `ABC-123`) as your first message — the classifier fetches the full issue (title / body / labels / branch hint) before planning. The classifier output carries an optional `suggestedBranch` so generated PRs match the tracker's native branch name.
+
+Tokens:
+
+- `GITHUB_TOKEN` — GitHub issues + PR watcher
+- `LINEAR_API_KEY` (or `COMPOSIO_API_KEY`) — Linear issues
+
+### PR watcher (scm-github)
+
+With `GITHUB_TOKEN` set, any orchestrator run starts a background poller that uses AO's `enrichSessionsPRBatch` every 30 s. State transitions — `ci: passing → failing`, `review: pending → changes_requested`, `prState: merged` — post `status_update` entries into the ticket's channel. CI failures and change-request reviews **turn into real follow-up tickets** via the scheduler's dynamic `enqueue` — no manual retriage.
+
+`rly pr-watch <url>` manually tracks a PR outside the auto-detect loop. `rly pr-status` shows everything tracked.
+
+### AO notifier compatibility
+
+`src/channels/ao-notifier.ts` exports `HarnessChannelNotifier implements Notifier` — so you can drop Relay in as a notifier plugin for Composio's `ao` orchestrator without a rewrite.
+
+## Unattended mode
+
+For multi-hour runs where you don't want to click "allow" on every tool call:
 
 ```bash
-rly serve --port 7420                       # loopback, no auth
-rly serve --token $(openssl rand -hex 16)   # loopback, bearer-token required
-RELAY_TOKEN=... rly serve --host 0.0.0.0    # bound to all interfaces — ONLY with a token
+export RELAY_AUTO_APPROVE=1     # in ~/.relay/config.env or your shell
+rly claude
 ```
 
-Clients open `GET /sse` to receive a session endpoint, then `POST /message?sessionId=...` with JSON-RPC payloads; server responses arrive as `event: message` frames on the SSE stream. This matches the `SSEServerTransport` pattern from the official MCP SDK.
+Under the hood:
 
-**Security:** `rly serve` binds to `127.0.0.1` by default — the server is only reachable from the same machine. Never bind to a public interface (`--host 0.0.0.0`) without also passing `--token <secret>` (or `RELAY_TOKEN`): the MCP surface includes `harness_dispatch` and plan-approval tools that can kick off agent runs, so unauthenticated exposure on the network is a real risk. Rate limiting and audit logging are intentionally out of scope — put `rly serve` behind a reverse proxy if you need them.
+- Claude launches with `--dangerously-skip-permissions`
+- Codex launches with `--full-auto` + workspace-write sandbox + `--ask-for-approval never`
+- Internal scheduler-dispatched agents inherit via `RELAY_AUTO_APPROVE` propagated in the child env
 
-## MCP tools (15)
+One-off: `rly claude --yolo` or `rly claude --auto-approve`.
 
-**Harness (6):** `harness_status`, `harness_list_runs`, `harness_get_run_detail`, `harness_get_artifact`, `harness_approve_plan`, `harness_reject_plan`
+**Use this only when you trust the tasks you're dispatching.** No per-tool review means `rm -rf`, `git push --force`, and unlinked network calls all go through without asking.
 
-**Channels (6):** `channel_create`, `channel_get`, `channel_post`, `channel_record_decision`, `channel_task_board`, `harness_running_tasks`
+## Storage & execution backends
 
-**Crosslink (3):** `crosslink_discover`, `crosslink_send`, `crosslink_poll`
+### HarnessStore (pluggable)
 
-## Architecture
+All state — runs, tickets, decisions, crosslink messages, agent-names, workspace registry, session transcripts — goes through a single `HarnessStore` interface (`src/storage/store.ts`). Today:
 
-All data lives at `~/.relay/` (older installs at `~/.agent-harness/` are auto-migrated):
+- **FileHarnessStore** — default. JSON / JSONL under `~/.relay/`.
+- **PostgresHarnessStore** — opt-in via config (T-402). Adds `LISTEN/NOTIFY` for cross-agent coordination.
+
+The interface is intentionally small (docs, changefeeds, logs, blobs) so adding a third backend is bounded work.
+
+### Executor (local vs. pod)
+
+Verification commands run through an `Executor` abstraction (`src/execution/executor.ts`):
+
+- **LocalChildProcessExecutor** — default. Spawns locally.
+- **PodExecutor + PVCSandboxProvider** — Kubernetes (T-403). Runs each ticket's verification in a pod against a per-workspace PVC. Enables cloud-side agent fleets without giving them your laptop.
+
+Both sit behind the same interface; the orchestrator doesn't care which one is live.
+
+## Configuration
+
+### Environment flags
+
+| Var / flag | Effect |
+|---|---|
+| `HARNESS_LIVE=1` | Use real Claude/Codex adapters instead of the scripted demo |
+| `RELAY_AUTO_APPROVE=1` / `--auto-approve` / `--yolo` | Unattended mode — no permission prompts. Required for multi-hour runs |
+| `RELAY_USE_DIST=1` | Run pre-built `dist/cli.js` instead of live source via `tsx`. Marginally faster startup; stale until `rly rebuild` |
+| `GITHUB_TOKEN` | GitHub issues + PR watcher |
+| `LINEAR_API_KEY` (or `COMPOSIO_API_KEY`) | Linear issues |
+| `CLAUDE_BIN` | Override the `claude` binary path (default: `claude` on `$PATH`) |
+| `--sequential` | Use the v1 sequential orchestrator instead of v2 ticket-based |
+| `--no-harness-mcp` | Launch Claude/Codex without attaching the Relay MCP server |
+
+### File layout
 
 ```
 ~/.relay/
-  workspace-registry.json
-  workspaces/<repo-hash>/
+  config.json                 # global config (project dirs, etc.)
+  config.env.template         # copy to config.env and fill in
+  workspace-registry.json     # all registered repos
+  workspaces/<hash>/
     artifacts/
       runs-index.json
       <runId>/
@@ -164,75 +375,103 @@ All data lives at `~/.relay/` (older installs at `~/.agent-harness/` are auto-mi
         ticket-ledger.json
         classification.json
         approval.json
-  channels/<channelId>.json
-    feed.jsonl
-    decisions/<id>.json
+  channels/<channelId>/
+    channel.json              # name, members, repoAssignments, primaryWorkspaceId
+    feed.jsonl                # append-only feed
+    tickets.json              # unified ticket board
+    runs.json                 # linked orchestrator runs
+    decisions/<id>.json       # one file per decision (atomic writes)
+    sessions/<sessionId>.jsonl
+    spawns.json               # spawned-agent tracking (macOS GUI)
   crosslink/
-    sessions/
-    mailboxes/
-  agent-names.json
+    sessions/<sessionId>.json # live session heartbeats
+    mailboxes/<sessionId>/    # pending crosslink messages
+    hooks/                    # generated shell hooks for Claude/Codex
+  agent-names.json            # display-name registry
 ```
 
-## Key concepts
+## Architecture
 
-- **Channels** — Slack-like spaces where agents collaborate. Messages, decisions, and runs live in channels.
-- **Tickets** — parallelizable work units with dependency DAGs, decomposed from plans.
-- **Named agents** — display name registry so you can see which agent did what.
-- **Decisions** — recorded with rationale and alternatives considered, queryable per channel.
-- **Crosslink** — file-based session discovery and messaging between concurrent agent sessions.
+```
+src/
+  cli.ts                      # entry point (bin/rly.mjs → tsx → here)
+  index.ts                    # CLI dispatch (welcome, claude, codex, board, ...)
+  cli/                        # CLI subcommands + launchers (tui, gui, rebuild, welcome)
+  orchestrator/               # classifier, planner, decomposer, scheduler, approval
+  agents/                     # Claude/Codex CLI adapters, registry, invocation
+  channels/                   # ChannelStore, feed, decisions, ao-notifier
+  integrations/               # AO plugins — tracker, scm, pr-poller, env-mutex
+  execution/                  # executor abstraction, verification-runner, k8s pod executor
+  storage/                    # HarnessStore interface + file / postgres backends
+  domain/                     # shared types + zod schemas
+  mcp/                        # MCP server + tool definitions
+  crosslink/                  # session discovery, messaging, hook generation
+  simulation/                 # scripted invoker for the scripted demo mode
+  tui/                        # small TS shim that launches the ratatui binary
 
-## Desktop GUI
+tui/                          # ratatui dashboard (Rust)
+gui/                          # Tauri desktop app — React + Vite frontend, Rust backend
+crates/harness-data/          # shared Rust crate consumed by tui + gui (reads ~/.relay/)
 
-A Tauri desktop app under `gui/` mirrors the TUI's channel/board/decisions layout.
+docs/getting-started.md       # canonical reference guide
+bin/rly.mjs                   # CLI launcher (tsx by default, dist with RELAY_USE_DIST=1)
+install.sh                    # one-command installer
+```
 
-Easiest way (from anywhere):
+## Development
 
 ```bash
-rly gui             # builds the release bundle on first run, then `open`s the .app
-rly gui --dev       # hot-reload Vite + Tauri dev window (keeps terminal attached)
-rly gui --rebuild   # force a rebuild even if the bundle already exists
+pnpm install
+pnpm test                     # 380+ vitest cases
+pnpm typecheck                # tsc --noEmit
+pnpm build                    # tsc → dist/
+pnpm demo                     # scripted simulation, no real API calls
+cd gui && pnpm build          # Vite bundle
+cargo check --workspace       # all three Rust crates
 ```
 
-Direct `pnpm` scripts (useful when hacking on the GUI from the repo):
+Per-area quick loops:
 
-```bash
-pnpm gui:dev      # launch dev window (Vite + Tauri)
-pnpm gui:build    # produce a release .app bundle
-```
+| What | Loop |
+|---|---|
+| Edit TS source, see CLI change | Just save — `rly` reads `src/` live via `tsx` (no rebuild) |
+| Edit Rust TUI | `rly rebuild --tui` |
+| Edit Tauri GUI | `rly gui --dev` (hot reload) |
+| After `git pull` pulled new deps | `rly rebuild` (runs `pnpm install` first) |
 
-Default bundle target is `app` only — the DMG bundler (`bundle_dmg.sh`) is flaky on macOS (osascript/hdiutil permissions, leftover mounts) and isn't needed for local use. To produce a DMG for distribution, run:
+### Testing conventions
 
-```bash
-cd gui && pnpm tauri build --bundles app,dmg
-```
+- **Vitest** for TS. Tests live in `test/` mirroring `src/`. Live-network tests sit in `describe.skip` blocks.
+- **Cargo** for Rust. `cargo test --workspace` covers the TUI / GUI / shared crate.
 
-The Rust backend in `gui/src-tauri/` shares `crates/harness-data` with the TUI, so both read the same `~/.relay/` files. Prereqs: `cargo` (rustup) and Xcode command-line tools on macOS.
+### Scripted vs. live mode
 
-## Tracker & PR integrations
+`HARNESS_LIVE=1` switches from the scripted `ScriptedInvoker` to real Claude/Codex spawns. Leave it off while developing orchestrator logic — the scripted mode is fast and deterministic.
 
-Relay consumes Composio's [`@aoagents/ao-core`](https://www.npmjs.com/package/@aoagents/ao-core) plugin packages for issue-tracker and SCM integrations. No plugin from their stack runs Relay itself — we import only the leaf adapters.
+## Contributing
 
-### Issue-URL ingestion
+Issues and PRs welcome. If you're considering a larger change, open an issue first so we can align on shape before you burn time.
 
-If the first argument to the classifier is a GitHub or Linear issue URL (or a bare Linear key like `ABC-123`), Relay fetches the full issue (title, body, labels, branch hint) and feeds it into classification. Classifier output carries an optional `suggestedBranch` so downstream ticket creation can match the tracker's native branch name.
+- Keep PR scope tight — prefer multiple small PRs over one big one.
+- Run `pnpm test && pnpm typecheck && pnpm build` before pushing.
+- Tests for new behavior. No snapshot tests for orchestrator output — assert on shape.
+- Formatting: two-space indent, double quotes, semicolons, trailing commas where idiomatic. Run your editor's formatter on touched files.
 
-Tokens are read from the environment:
+A **`CLAUDE.md`** at the repo root (when present) tells any Claude agent working in this codebase — including `rly claude` itself — what conventions to follow.
 
-- `GITHUB_TOKEN` — GitHub issues + PR watcher
-- `LINEAR_API_KEY` (or `COMPOSIO_API_KEY`) — Linear issues
+## Known limits / roadmap
 
-### PR watcher
+- **Spawn is macOS-only.** Linux/Windows users launch associated-repo agents manually.
+- **Cost guardrails not yet implemented.** Token usage isn't tracked or capped. Use `RELAY_AUTO_APPROVE=1` with care.
+- **Postgres backend is opt-in, file-only is default.** The coordination features (`LISTEN/NOTIFY` cross-agent decision broadcasts) activate when Postgres is configured.
+- **Pod executor is feature-flagged.** Needs a Kubernetes cluster and kubeconfig; runs verifications in pods against per-workspace PVCs.
 
-`src/integrations/pr-poller.ts` polls all tracked PRs via `enrichSessionsPRBatch` (30s by default). State transitions (CI pass→fail, review pending→changes_requested, PR merged/closed) post entries into the ticket's channel. CI failures and change-request reviews turn into real follow-up tickets via the scheduler's dynamic `enqueue` surface.
+## License
 
-### AO-compatible notifier
+MIT — see [`LICENSE`](./LICENSE).
 
-`src/channels/ao-notifier.ts` exports `HarnessChannelNotifier` implementing AO's `Notifier` interface on top of the channel store. If you ever run Composio's `ao` orchestrator, Relay can be plugged in as its notifier without a rewrite.
+## Acknowledgements
 
-## Flags
-
-- `HARNESS_LIVE=1` — use real Claude/Codex adapters instead of scripted simulation
-- `RELAY_AUTO_APPROVE=1` (or `--auto-approve` / `--yolo` on the CLI) — run fully unattended: Claude launches with `--dangerously-skip-permissions`, Codex with `--full-auto` + workspace-write sandbox + `--ask-for-approval never`, and internal scheduler-dispatched agents inherit. Required for multi-hour runs where you don't want permission prompts. Only use when you trust the tasks you're dispatching.
-- `RELAY_USE_DIST=1` — run the pre-built `dist/cli.js` in-process instead of launching TypeScript source via `tsx`. Slightly faster startup (~80 ms), but stale if you haven't run `rly rebuild` since the last source change. Default behavior reads source, so no rebuild is required after `git pull`.
-- `--sequential` — use v1 sequential orchestrator instead of v2 ticket-based
-- `--no-harness-mcp` — launch Claude/Codex without attaching the Relay MCP server
+- [Composio](https://github.com/ComposioHQ/agent-orchestrator) for `@aoagents/ao-core` and the tracker / SCM plugin surface.
+- [Catppuccin Mocha](https://github.com/catppuccin/catppuccin) palette (via the CMUX ghostty theme).
+- [Tauri](https://tauri.app/), [Ratatui](https://ratatui.rs/), [vitest](https://vitest.dev/), [tsx](https://tsx.is/) — the foundations everything rests on.
