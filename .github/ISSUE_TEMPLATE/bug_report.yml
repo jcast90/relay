@@ -1,0 +1,81 @@
+name: Bug report
+description: Something not working as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. The more concretely you can answer the questions below, the faster we can reproduce and fix.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences describing what's broken.
+      placeholder: "rly board crashes with a TypeError when a channel has no tickets."
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: The minimal sequence of commands or actions that triggers the bug. Start from a fresh state if possible.
+      placeholder: |
+        1. `rly up` in an empty repo
+        2. `rly channel create test`
+        3. `rly board <channelId>`
+        4. See crash
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual behavior
+      description: What should have happened, and what actually happened.
+      placeholder: |
+        Expected: empty board renders with zero tickets per column.
+        Actual: TypeError: Cannot read properties of undefined (reading 'status').
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Relay version
+      description: Output of `rly --version`, or the commit hash you're running.
+      placeholder: "0.1.0 (commit abc1234)"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS / platform
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - Other (note in logs section)
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Affected surface
+      description: Which part of Relay is misbehaving?
+      multiple: true
+      options:
+        - CLI (rly)
+        - TUI (rly tui)
+        - GUI (rly gui)
+        - MCP tool
+        - Orchestrator / scheduler
+        - Installer
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots
+      description: Paste any stack traces, relevant lines from `~/.relay/` artifacts, or screenshots. Redact tokens.
+      render: shell
+    validations:
+      required: false

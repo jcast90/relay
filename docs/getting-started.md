@@ -1,38 +1,78 @@
 # Getting started with Relay
 
-A 10-minute read. Once you're past Install, run `rly welcome` for the interactive tour — this doc is the reference it points at.
+The deeper walkthrough. Start here once the README has sold you on the idea and you want to build the mental model.
 
-## 1. Install
+If you haven't installed yet: `./install.sh` from the repo root, then `cp ~/.relay/config.env.template ~/.relay/config.env` and fill in `GITHUB_TOKEN`, `LINEAR_API_KEY`, `HARNESS_LIVE=1`. The README covers the details.
 
-One command from a fresh clone:
+## From zero to first merged PR
 
-```bash
-./install.sh
+Ten concrete steps. Assumes `GITHUB_TOKEN`, `HARNESS_LIVE=1`, and `RELAY_AUTO_APPROVE=1` are all set.
+
+1. **`cd /path/to/your/repo && rly up`** — registers the repo in `~/.relay/workspace-registry.json`. Expect: `registered workspace <hash> → <path>`.
+2. **`rly doctor`** — checks tokens, MCP wiring, binary paths. Expect a grid of green check marks. A red line here means stop and fix before step 3.
+3. **`rly claude`** — launches Claude with the Relay MCP server attached. Expect: Claude's banner, then the MCP toolbar showing 18 tools (6 harness / 7 channel / 5 crosslink).
+4. **Paste a GitHub issue URL** as your first message — e.g. `https://github.com/your-org/your-repo/issues/42`. Expect: the classifier prints `resolved: <title>`, `tier: feature_small`, `suggestedBranch: feat/42-…`.
+5. **Planner runs** — you see a phased plan in the feed (`phase 1: scaffold`, `phase 2: wire`, `phase 3: tests`). No approval prompt on `feature_small`; `feature_large`/`architectural` would pause here.
+6. **Decomposer emits tickets** — watch the feed print `T-1 … T-4 ready`. Tickets with no `dependsOn` go `ready` immediately; others stay `blocked`.
+7. **In a second terminal: `rly board <channelId>`** — live kanban. Tickets move `ready → executing → verifying → completed` as scheduler-dispatched agents pick them up (max 3 concurrent).
+8. **First PR opens** — the feed prints `PR #123 opened https://github.com/…`. The PR watcher auto-registers it and begins polling every 30 s.
+9. **`rly pr-status`** — shows every tracked PR with live CI + review state. Wait for `ci: passing / review: approved`. If CI fails, the watcher files a follow-up ticket automatically; no manual retriage.
+10. **PR merges** — the feed prints `PR #123 merged`. The channel's ticket board shows all tickets `completed`. You never touched the keyboard after step 4.
+
+If you're not on `RELAY_AUTO_APPROVE=1`, steps 3–10 pause for per-tool permission prompts.
+
+## The five nouns
+
+- **Channel** — a Slack-like space for one piece of work. Carries a feed, ticket ledger, decisions, and linked runs.
+- **Session** — your Claude/Codex CLI with the Relay MCP server attached. All agent activity flows through it.
+- **Run** — one execution of the classifier → planner → scheduler pipeline. Lives under a channel.
+- **Ticket** — a parallelisable work unit produced by the decomposer. Has dependencies, retry budget, verification commands.
+- **Decision** — a recorded choice with rationale + alternatives considered. Queryable per channel.
+
+## A worked example
+
+Paste this into a fresh `rly claude` session:
+
+```
+https://github.com/acme/api/issues/42
 ```
 
-The installer verifies prereqs (`node >=20`, `pnpm`, `git`), builds the TS, links the `rly` and `agent-harness` binaries on your PATH, and scaffolds `~/.relay/config.env.template`. Safe to re-run.
+where issue #42 says *"Rate-limit `/api/search` to 60 req/min per API key, return 429 with `Retry-After` header."*
 
-Add `--with-tui` / `--with-gui` to build the Rust dashboards, or `--skip-link` for CI.
+What happens, in order:
 
-If you've previously installed the tool under the old `agent-harness` name, the installer auto-migrates `~/.agent-harness/` → `~/.relay/` and leaves a back-compat symlink.
+1. **Classifier** hits GitHub, pulls title + body + labels (`enhancement`, `api`, `backend`). Emits `tier: feature_small`, `suggestedBranch: feat/42-rate-limit-search`.
+2. **Planner** writes a 3-phase plan: *(1) add middleware + token-bucket store, (2) wire into `/api/search` route, (3) tests + error-shape*. Feed entry `plan_created`.
+3. **Decomposer** fans out: `T-1 add rate-limit middleware (general)`, `T-2 wire into /api/search (api_crud, depends on T-1)`, `T-3 integration test for 429 + Retry-After (testing, depends on T-2)`, `T-4 update OpenAPI spec (general, depends on T-2)`. Ticket board is live in `rly board <channelId>`.
+4. **Scheduler** starts T-1 (the only `ready` ticket). T-2/T-3/T-4 sit `blocked`. As T-1 completes and verifies, T-2 unblocks, then T-3 + T-4 run in parallel. Max-concurrency defaults to 3 — you can watch the `executing` column fill up.
+5. **Each ticket** spawns its own Claude subprocess with a scoped prompt, runs verification commands (test / lint / typecheck) through the `Executor` abstraction, retries up to `maxTestFixLoops` on failure.
+6. **PR opens** on branch `feat/42-rate-limit-search`. Feed prints the URL. PR watcher auto-registers.
+7. **`rly pr-status`** shows `ci: pending → passing`, `review: pending`. If a reviewer asks for changes, `review: changes_requested` triggers a new follow-up ticket and the loop closes itself.
+8. **Merge** — feed prints `PR #123 merged`. Channel stays around as a record of the whole thing; `rly decisions <channelId>` shows every choice with rationale.
 
-## 2. Tokens
+## Second channel: cross-repo delegation
+
+The interesting case. You have a monorepo front + back-end, or two separate repos:
 
 ```bash
-cp ~/.relay/config.env.template ~/.relay/config.env
-# edit ~/.relay/config.env and set tokens
-echo 'source ~/.relay/config.env' >> ~/.zshrc
-source ~/.zshrc
+rly channel create "auth-v2" \
+  --repos "api:<ws-id>:/path/to/api,web:<ws-id>:/path/to/web" \
+  --primary api
 ```
 
-| Env var | What it unlocks |
-|---|---|
-| `GITHUB_TOKEN` | GitHub issue ingestion + PR watcher (auto CI/review follow-ups) |
-| `LINEAR_API_KEY` | Linear issue ingestion |
-| `HARNESS_LIVE=1` | Real Claude/Codex adapters instead of the scripted demo |
-| `RELAY_AUTO_APPROVE=1` | Unattended mode — no permission prompts. Required for multi-hour runs |
+- `api` is **primary** — the main chat agent runs there; its `cwd` defaults to the API repo.
+- `web` is **associated** — visible to the primary as `alias + path + AGENTS.md summary` (first ~40 lines), not full context.
 
-## 3. Mental model
+The primary is told **not** to grep or edit `web/` directly. Instead:
+
+- **Quick question** → `crosslink_send` to the live `web` agent ("does `/auth/login` still return a JWT?")
+- **Long task** → file a ticket with `assignedAlias: "web"`. The `web` agent polls `tickets.json` and picks it up.
+
+If no `web` agent is live, the primary sees `no_session` and (on macOS) can spawn one: Relay `osascript`s a new Terminal tab and runs `rly claude` in the `web` repo. Tracked in `spawns.json`. Kill it from the GUI and the tab closes.
+
+## Mental model (reference)
+
+For when you want to see the pipeline at a glance:
 
 ```
      you type something          tracker URL?
@@ -69,91 +109,53 @@ source ~/.zshrc
                            merged
 ```
 
-### The five nouns
+## `~/.relay/` file layout
 
-- **Channel** — a Slack-like space for one piece of work. Carries a feed, ticket ledger, decisions, and linked runs.
-- **Session** — your Claude/Codex CLI with the Relay MCP server attached. All agent activity flows through it.
-- **Run** — one execution of the classifier → planner → scheduler pipeline. Lives under a channel.
-- **Ticket** — a parallelisable work unit produced by the decomposer. Has dependencies, retry budget, verification commands.
-- **Decision** — a recorded choice with rationale + alternatives considered. Queryable per channel.
+All three dashboards (CLI / TUI / GUI) read the same files. No synchronisation layer — the filesystem *is* the state.
 
-## 4. Your first flow
-
-```bash
-cd /path/to/some/repo
-rly up                # register the repo
-rly doctor            # sanity check
-rly claude            # launch a session — paste a request or issue URL
-rly board <channelId> # watch tickets move
-rly pr-status         # see live PRs as they open
+```
+~/.relay/
+  config.json                 # global config (project dirs, etc.)
+  config.env                  # tokens + flags (source from your shell rc)
+  workspace-registry.json     # all registered repos
+  workspaces/<hash>/
+    artifacts/runs-index.json
+    artifacts/<runId>/run.json, events.jsonl, ticket-ledger.json, classification.json, approval.json
+  channels/<channelId>/
+    channel.json              # name, members, repoAssignments, primaryWorkspaceId
+    feed.jsonl                # append-only feed
+    tickets.json              # unified ticket board
+    runs.json                 # linked orchestrator runs
+    decisions/<id>.json       # one file per decision (atomic temp-rename)
+    sessions/<sessionId>.jsonl
+    spawns.json               # spawned-agent tracking (macOS GUI)
+  crosslink/
+    sessions/<sessionId>.json # live session heartbeats
+    mailboxes/<sessionId>/    # pending crosslink messages
+    hooks/                    # generated shell hooks for Claude/Codex
+  agent-names.json            # display-name registry
 ```
 
-Issue URLs (GitHub, Linear, or bare `ABC-123` Linear keys) are auto-resolved — the classifier fetches full title / body / labels / branch hint before planning.
+Opting in to Postgres (`PostgresHarnessStore`) keeps the same on-disk layout and adds `LISTEN/NOTIFY` on top for cross-agent coordination.
 
-## 5. Dashboards
-
-Three views, all backed by the same `~/.relay/` files.
-
-```bash
-rly channels              # CLI list
-rly board <channelId>     # CLI kanban
-rly tui                   # ratatui terminal dashboard
-rly gui                   # Tauri desktop app
-```
-
-`rly tui` auto-builds `relay-tui` on first run (~1 min). `rly gui` auto-builds the `.app` bundle on first run (~2–3 min) then `open`s it. `rly gui --dev` launches the Vite hot-reload flow.
-
-## 6. Going unattended
-
-For multi-hour runs where you don't want to click "allow" every few minutes:
-
-```bash
-export RELAY_AUTO_APPROVE=1        # or in ~/.relay/config.env
-rly claude
-```
-
-This passes `--dangerously-skip-permissions` to Claude and `--full-auto` + workspace-write sandbox to Codex. **Only use when you trust the tasks you're dispatching** — there's no per-tool review.
-
-One-off: `rly claude --yolo` or `rly claude --auto-approve`.
-
-## 7. Day-to-day commands
-
-| Command | What it does |
-|---|---|
-| `rly status` | Workspace paths, recent runs, MCP state |
-| `rly running` | Active tasks across every registered workspace |
-| `rly channels` | List channels (sorted by most-recent activity) |
-| `rly channel <id>` | Show one channel's feed |
-| `rly board <id>` | Tickets-by-status kanban |
-| `rly decisions <id>` | Recorded decisions with rationale |
-| `rly list-runs` | Recent persisted runs across workspaces |
-| `rly pr-watch <url>` | Manually track a PR |
-| `rly pr-status` | Show tracked PRs with CI / review state |
-| `rly crosslink status` | Active cross-session messaging |
-| `rly doctor` | Diagnostics |
-| `rly rebuild` | Rebuild TS dist / `--tui` / `--gui` / `--all` |
-| `rly welcome --reset` | Re-run the interactive tour |
-
-## 8. Advanced
-
-- **Crosslink**: concurrent `rly claude` sessions in different repos can discover and message each other via `crosslink_discover` / `crosslink_send` / `crosslink_poll` / `crosslink_reply`. Useful for multi-repo refactors.
-- **Scheduler enqueue**: PR follow-ups (CI fail / changes-requested) become real tickets via the scheduler's dynamic `enqueue` surface, so the loop closes without human intervention.
-- **AO-compatible notifier**: `src/channels/ao-notifier.ts` implements Composio's Notifier interface so Relay can be plugged in as an AO notifier if you ever run their stack.
-- **MCP tools**: 15 exposed to Claude/Codex. See `rly inspect-mcp` for the live list.
-
-## 9. Troubleshooting
+## Troubleshooting
 
 | Symptom | Likely cause / fix |
 |---|---|
-| "GITHUB_TOKEN not set — PR watching disabled" | Expected if you didn't set the token; PRs won't auto-track. |
-| Claude keeps prompting for permissions | Set `RELAY_AUTO_APPROVE=1` or pass `--yolo`. |
-| `rly` runs stale code after `git pull` | Default behavior reads current source via `tsx`, so this shouldn't happen. If you set `RELAY_USE_DIST=1`, run `rly rebuild`. |
+| `GITHUB_TOKEN not set — PR watching disabled` | Expected if you didn't set the token; PRs won't auto-track. |
+| Classifier can't resolve a Linear key like `ABC-123` | `LINEAR_API_KEY` (or `COMPOSIO_API_KEY`) not set, or the key doesn't match any issue visible to your token. |
+| Claude keeps prompting for permissions | Set `RELAY_AUTO_APPROVE=1` or pass `--yolo` / `--auto-approve`. |
+| Tickets stuck in `blocked` forever | Check `dependsOn` chain — a failed upstream ticket blocks everything downstream. `rly board <id>` shows the edges. |
+| Ticket retries exhausted (`failed`) | Verification commands kept failing past `maxTestFixLoops`. Feed shows the last verification output; fix manually, mark the ticket `completed`, and the scheduler unblocks downstream. |
+| `rly` runs stale code after `git pull` | Default reads current source via `tsx`, so this shouldn't happen. If you set `RELAY_USE_DIST=1`, run `rly rebuild`. |
 | `rly tui` / `rly gui` fails on first run | Install `cargo` (rustup). The auto-build needs it. |
-| TUI shows no channels | Make sure you've registered at least one workspace with `rly up`. |
+| TUI shows no channels | Register at least one workspace with `rly up` and create a channel (or launch a session, which creates one). |
 | GUI shows stale data | `rly gui --rebuild` to refresh the bundle after a code change. |
+| Crosslink `no_session` when spawning an associated agent | macOS-only today. On Linux/Windows, run `rly claude` in the associated repo manually — crosslink picks it up. |
+| PR watcher never updates | Check `rly pr-status` for errors. Usually a scoping issue on `GITHUB_TOKEN` (needs `repo` scope for private repos). |
 
-## 10. Where to go next
+## Next
 
-- Read `README.md` for the full feature matrix.
-- Run `rly inspect-mcp` to see every MCP tool exposed to your agent.
-- Run `rly welcome --reset` any time to re-play the interactive tour.
+- `rly welcome` for the 6-step interactive tour (`--reset` to replay).
+- `rly inspect-mcp` for the live list of MCP tools exposed to the agent.
+- README for the full feature matrix, CLI reference, MCP catalogue, and architecture map.

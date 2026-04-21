@@ -1,0 +1,43 @@
+name: Feature request
+description: Suggest a new capability or UX change.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feature requests are easier to evaluate when they're grounded in a concrete problem. Please fill in the motivation before the proposal — it's more useful than the proposal alone.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What are you trying to do, and what's getting in the way today? Include a concrete workflow or example if you can.
+      placeholder: |
+        When I run multi-repo refactors I can't see per-repo agent progress in the GUI — the sidebar only shows the primary. I end up tailing `~/.relay/` by hand.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed shape
+      description: Roughly what the change would look like. CLI surface, UI sketch, config knob — whatever form fits. Doesn't have to be a full design.
+      placeholder: |
+        Add a "Associated agents" section to the GUI right pane showing live heartbeat status for every attached repo's `rly claude` session, pulling from `~/.relay/crosslink/sessions/`.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you thought about, and why the proposal above won out. Optional.
+    validations:
+      required: false
+  - type: dropdown
+    id: willing-to-implement
+    attributes:
+      label: Would you want to implement this yourself?
+      options:
+        - "Yes"
+        - "Maybe — with guidance"
+        - "No"
+    validations:
+      required: true
