@@ -55,8 +55,7 @@ function buildResponse(prompt: string, cwd: string) {
         suggestedSpecialties: ["general"],
         estimatedTicketCount: 3,
         needsDesignDoc: false,
-        needsUserApproval: false,
-        crosslinkRepos: []
+        needsUserApproval: false
       }
     };
   }
@@ -94,8 +93,7 @@ function buildResponse(prompt: string, cwd: string) {
           suggestedSpecialties: ["general"],
           estimatedTicketCount: 2,
           needsDesignDoc: false,
-          needsUserApproval: false,
-          crosslinkRepos: []
+          needsUserApproval: false
         },
         tickets: [
           {

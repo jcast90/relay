@@ -227,8 +227,7 @@ export const ticketPlanJsonSchema = {
         suggestedSpecialties: { type: "array", items: { type: "string" } },
         estimatedTicketCount: { type: "integer", minimum: 1, maximum: 50 },
         needsDesignDoc: { type: "boolean" },
-        needsUserApproval: { type: "boolean" },
-        crosslinkRepos: { type: "array", items: { type: "string" } }
+        needsUserApproval: { type: "boolean" }
       }
     },
     tickets: {

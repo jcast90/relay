@@ -451,8 +451,7 @@ async function main(): Promise<void> {
     suggestedSpecialties: ["general", "devops"] as string[],
     estimatedTicketCount: tickets.length,
     needsDesignDoc: false,
-    needsUserApproval: true,
-    crosslinkRepos: []
+    needsUserApproval: true
   };
 
   const run: HarnessRun = {

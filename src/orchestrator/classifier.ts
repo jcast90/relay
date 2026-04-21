@@ -61,8 +61,7 @@ export function buildHeuristicClassification(
     suggestedSpecialties: ["general"],
     estimatedTicketCount: tier === "trivial" ? 1 : 2,
     needsDesignDoc: false,
-    needsUserApproval: false,
-    crosslinkRepos: []
+    needsUserApproval: false
   };
 }
 
@@ -226,8 +225,7 @@ export async function classifyRequest(input: {
       suggestedSpecialties: ["general"],
       estimatedTicketCount: 3,
       needsDesignDoc: false,
-      needsUserApproval: false,
-      crosslinkRepos: []
+      needsUserApproval: false
     };
     return suggestedBranch ? { ...fallback, suggestedBranch } : fallback;
   }

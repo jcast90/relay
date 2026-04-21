@@ -13,8 +13,7 @@ describe("ticket decomposer", () => {
       suggestedSpecialties: ["general"],
       estimatedTicketCount: 2,
       needsDesignDoc: false,
-      needsUserApproval: false,
-      crosslinkRepos: []
+      needsUserApproval: false
     };
 
     const ticketPlan = buildTicketPlanFromPhases(plan, classification);
@@ -36,8 +35,7 @@ describe("ticket decomposer", () => {
       suggestedSpecialties: ["general"],
       estimatedTicketCount: 2,
       needsDesignDoc: false,
-      needsUserApproval: false,
-      crosslinkRepos: []
+      needsUserApproval: false
     };
 
     const ticketPlan = buildTicketPlanFromPhases(plan, classification);

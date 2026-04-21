@@ -76,7 +76,7 @@ src/
   agents/                 # Claude/Codex CLI adapters, registry, invocation
   channels/               # ChannelStore (feed / decisions / tickets / runs), ao-notifier
   integrations/           # AO plugins — tracker, scm, pr-poller, env-mutex
-  execution/              # executor abstraction, verification-runner, k8s pod executor
+  execution/              # executor abstraction, verification-runner, local child-process executor
   storage/                # HarnessStore interface + file / postgres backends
   domain/                 # shared TS types + zod schemas
   mcp/                    # MCP server + tool definitions

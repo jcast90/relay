@@ -86,8 +86,7 @@ describe("classifyRequest — tracker URL ingestion", () => {
             suggestedSpecialties: ["api_crud", "ui"],
             estimatedTicketCount: 5,
             needsDesignDoc: false,
-            needsUserApproval: true,
-            crosslinkRepos: []
+            needsUserApproval: true
           }
         })
       };
@@ -170,8 +169,7 @@ describe("classifyRequest — tracker URL ingestion", () => {
           suggestedSpecialties: ["general"],
           estimatedTicketCount: 2,
           needsDesignDoc: false,
-          needsUserApproval: false,
-          crosslinkRepos: []
+          needsUserApproval: false
         }
       })
     }));
