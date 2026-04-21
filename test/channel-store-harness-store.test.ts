@@ -40,7 +40,10 @@ class FakeHarnessStore implements HarnessStore {
     return (v as T | undefined) ?? null;
   }
 
+  readonly putCalls: Array<{ ns: string; id: string }> = [];
+
   async putDoc<T>(ns: string, id: string, doc: T): Promise<void> {
+    this.putCalls.push({ ns, id });
     this.docs.set(this.key(ns, id), doc);
   }
 
@@ -211,6 +214,117 @@ describe("ChannelStore with HarnessStore injection", () => {
     expect(channel.channelId).toMatch(/^channel-/);
   });
 
+  it("mirrors recorded decisions through HarnessStore.putDoc", async () => {
+    const channel = await store.createChannel({
+      name: "#decisions",
+      description: "decision-mirror-test"
+    });
+
+    const decision = await store.recordDecision(channel.channelId, {
+      runId: null,
+      ticketId: null,
+      title: "Adopt zustand",
+      description: "Replace context-based state with zustand.",
+      rationale: "Smaller re-renders, simpler API.",
+      alternatives: ["redux", "context-only"],
+      decidedBy: "planner-claude",
+      decidedByName: "Claude (Planner)",
+      linkedArtifacts: []
+    });
+
+    // Primary source of truth still lives at channels/<id>/decisions/<did>.json
+    // — Rust's `load_channel_decisions` depends on that path.
+    const onDiskPath = join(
+      channelsDir,
+      channel.channelId,
+      "decisions",
+      `${decision.decisionId}.json`
+    );
+    const onDisk = JSON.parse(await readFile(onDiskPath, "utf8")) as {
+      decisionId: string;
+    };
+    expect(onDisk.decisionId).toBe(decision.decisionId);
+
+    // And a coordination mirror is published under STORE_NS.decision at
+    // `<channelId>:<decisionId>` so store-watchers can observe new
+    // decisions without tailing the filesystem.
+    const storeId = `${channel.channelId}:${decision.decisionId}`;
+    expect(fake.putCalls).toContainEqual({
+      ns: STORE_NS.decision,
+      id: storeId
+    });
+    const mirrored = await fake.getDoc<{ decisionId: string; title: string }>(
+      STORE_NS.decision,
+      storeId
+    );
+    expect(mirrored).not.toBeNull();
+    expect(mirrored!.title).toBe("Adopt zustand");
+  });
+
+  it("swallows HarnessStore mirror failures when recording a decision", async () => {
+    // Decisions are durably persisted to disk before the mirror runs. A
+    // mirror outage must never surface as a recordDecision failure, or
+    // the Rust/GUI readers would be out of sync with callers who retry.
+    const flaky: HarnessStore = {
+      getDoc: async () => null,
+      putDoc: async () => {
+        throw new Error("simulated mirror outage");
+      },
+      listDocs: async () => {
+        throw new Error("not implemented");
+      },
+      deleteDoc: async () => {
+        throw new Error("not implemented");
+      },
+      appendLog: async () => {
+        throw new Error("not implemented");
+      },
+      readLog: async () => {
+        throw new Error("not implemented");
+      },
+      putBlob: async () => {
+        throw new Error("not implemented");
+      },
+      getBlob: async () => {
+        throw new Error("not implemented");
+      },
+      mutate: async <T>(
+        _ns: string,
+        _id: string,
+        fn: (prev: T | null) => T
+      ): Promise<T> => fn(null),
+      watch: async function* () {
+        throw new Error("not implemented");
+      }
+    };
+    const flakyStore = new ChannelStore(channelsDir, flaky);
+    const channel = await flakyStore.createChannel({
+      name: "#flaky",
+      description: "flaky-mirror"
+    });
+
+    const decision = await flakyStore.recordDecision(channel.channelId, {
+      runId: null,
+      ticketId: null,
+      title: "Stay resilient",
+      description: "Keep disk primary.",
+      rationale: "Mirror is advisory.",
+      alternatives: [],
+      decidedBy: "planner-claude",
+      decidedByName: "Claude (Planner)",
+      linkedArtifacts: []
+    });
+
+    // Disk copy still landed.
+    const onDiskPath = join(
+      channelsDir,
+      channel.channelId,
+      "decisions",
+      `${decision.decisionId}.json`
+    );
+    await expect(stat(onDiskPath)).resolves.toBeTruthy();
+  });
+
   it("serializes concurrent upsertChannelTickets on the same channel", async () => {
     const channel = await store.createChannel({
       name: "#race",
@@ -305,6 +419,72 @@ describe("ChannelStore reads legacy Rust-layout fixtures", () => {
       const decisions = await store.listDecisions("channel-abc");
       expect(decisions).toHaveLength(1);
       expect(decisions[0].decisionId).toBe("decision-legacy-1");
+    } finally {
+      await rm(storeRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * Decision-only parity fixture. `legacy-channel/` and `legacy-crosslink/`
+ * each covered their respective domains end-to-end; the review flagged
+ * that decisions had no dedicated fixture proving that pre-T-104
+ * on-disk files still round-trip through `ChannelStore`. This block
+ * covers that gap: copy the fixture into a scratch dir, bind a fresh
+ * ChannelStore with an isolated HarnessStore (so no coordination docs
+ * leak into the user's relay), and assert both `getDecision` and
+ * `listDecisions` read the JSON payloads untouched.
+ */
+describe("ChannelStore reads legacy decisions fixture", () => {
+  let workDir: string;
+
+  beforeEach(async () => {
+    workDir = await mkdtemp(join(tmpdir(), "ch-dec-legacy-"));
+    const src = fileURLToPath(
+      new URL("./fixtures/legacy-channel-decisions", import.meta.url)
+    );
+    await cp(src, workDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(workDir, { recursive: true, force: true });
+  });
+
+  it("reads pre-migration decisions through listDecisions and getDecision", async () => {
+    const storeRoot = await mkdtemp(join(tmpdir(), "ch-dec-legacy-store-"));
+    try {
+      const channelsDir = join(workDir, "channels");
+      const store = new ChannelStore(
+        channelsDir,
+        new FileHarnessStore(storeRoot)
+      );
+
+      const decisions = await store.listDecisions("channel-decisions-legacy");
+      // Sorted descending by createdAt in `listDecisions`, so the newer beta
+      // comes first.
+      expect(decisions.map((d) => d.decisionId)).toEqual([
+        "decision-legacy-beta",
+        "decision-legacy-alpha"
+      ]);
+      expect(decisions[0].title).toBe("JWT for v1 session tokens");
+      expect(decisions[0].linkedArtifacts).toHaveLength(1);
+      expect(decisions[1].alternatives).toContain("Redis SETNX");
+
+      const alpha = await store.getDecision(
+        "channel-decisions-legacy",
+        "decision-legacy-alpha"
+      );
+      expect(alpha).not.toBeNull();
+      expect(alpha!.decidedBy).toBe("planner-claude");
+      expect(alpha!.runId).toBe("run-legacy-alpha");
+
+      const beta = await store.getDecision(
+        "channel-decisions-legacy",
+        "decision-legacy-beta"
+      );
+      expect(beta).not.toBeNull();
+      expect(beta!.ticketId).toBe("ticket-legacy-auth");
+      expect(beta!.runId).toBeNull();
     } finally {
       await rm(storeRoot, { recursive: true, force: true });
     }

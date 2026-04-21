@@ -1,6 +1,4 @@
-import { readdir, readFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
-import { join } from "node:path";
 
 import type { CrosslinkStore } from "./store.js";
 import type { CrosslinkCapability } from "./types.js";
@@ -231,7 +229,7 @@ async function handleReply(
     return { error: "messageId and content are required." };
   }
 
-  const allMessages = await readMailboxMessages(state.store.rootDir, state.sessionId);
+  const allMessages = await state.store.listPendingMessages(state.sessionId);
   const original = allMessages.find((msg) => msg.messageId === messageId);
 
   if (!original) {
@@ -267,44 +265,6 @@ async function handleDeregister(state: CrosslinkToolState): Promise<unknown> {
   state.sessionId = null;
 
   return { deregistered: sessionId };
-}
-
-async function readMailboxMessages(
-  storeRootDir: string,
-  sessionId: string
-): Promise<Array<{ messageId: string; fromSessionId: string }>> {
-  const mailboxDir = join(storeRootDir, "mailboxes", sessionId);
-
-  try {
-    const files = await readdir(mailboxDir);
-    const messages: Array<{ messageId: string; fromSessionId: string }> = [];
-
-    for (const file of files) {
-      if (!file.endsWith(".json")) {
-        continue;
-      }
-
-      try {
-        const raw = JSON.parse(await readFile(join(mailboxDir, file), "utf8")) as {
-          messageId?: string;
-          fromSessionId?: string;
-        };
-
-        if (raw.messageId && raw.fromSessionId) {
-          messages.push({
-            messageId: raw.messageId,
-            fromSessionId: raw.fromSessionId
-          });
-        }
-      } catch {
-        // Skip malformed files
-      }
-    }
-
-    return messages;
-  } catch {
-    return [];
-  }
 }
 
 function notifyTmux(targetSessionId: string, fromSessionId: string): void {

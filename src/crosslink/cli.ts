@@ -1,3 +1,4 @@
+import { getHarnessStore } from "../storage/factory.js";
 import { CrosslinkStore } from "./store.js";
 import { generateHookScripts, printHookSetupInstructions } from "./hook.js";
 import { buildCrosslinkId } from "./types.js";
@@ -28,7 +29,7 @@ async function handleInit(): Promise<void> {
 }
 
 async function handleStatus(): Promise<void> {
-  const store = new CrosslinkStore();
+  const store = new CrosslinkStore(undefined, getHarnessStore());
   const sessions = await store.discoverSessions();
 
   if (sessions.length === 0) {
@@ -54,7 +55,7 @@ async function handleStatus(): Promise<void> {
 }
 
 async function handleCheck(): Promise<void> {
-  const store = new CrosslinkStore();
+  const store = new CrosslinkStore(undefined, getHarnessStore());
   const sessions = await store.discoverSessions();
 
   // Find session for current terminal — match by most recent heartbeat
@@ -94,7 +95,7 @@ async function handleSend(args: string[]): Promise<void> {
     return;
   }
 
-  const store = new CrosslinkStore();
+  const store = new CrosslinkStore(undefined, getHarnessStore());
 
   const sent = await store.sendMessage({
     fromSessionId: buildCrosslinkId("cli"),
@@ -108,7 +109,7 @@ async function handleSend(args: string[]): Promise<void> {
 }
 
 async function handleClean(): Promise<void> {
-  const store = new CrosslinkStore();
+  const store = new CrosslinkStore(undefined, getHarnessStore());
 
   // Discover sessions (auto-cleans stale ones)
   const sessions = await store.discoverSessions();

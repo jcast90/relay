@@ -1,0 +1,14 @@
+{
+  "decisionId": "decision-legacy-alpha",
+  "channelId": "channel-decisions-legacy",
+  "runId": "run-legacy-alpha",
+  "ticketId": null,
+  "title": "Adopt Postgres advisory locks for cross-process mutex",
+  "description": "Use pg_advisory_lock() keyed on channelId for ticket-board writes.",
+  "rationale": "Matches the HarnessStore Postgres backend plan (T-402) without adding Redis.",
+  "alternatives": ["Redis SETNX", "file-based flock", "in-memory only"],
+  "decidedBy": "planner-claude",
+  "decidedByName": "Claude (Planner)",
+  "linkedArtifacts": [],
+  "createdAt": "2025-01-01T12:00:00.000Z"
+}

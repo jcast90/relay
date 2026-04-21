@@ -1,0 +1,12 @@
+{
+  "messageId": "msg-legacy-1",
+  "fromSessionId": "session-legacy-beta",
+  "toSessionId": "session-legacy-alpha",
+  "type": "question",
+  "content": "What does the v1 auth flow look like?",
+  "inReplyTo": null,
+  "status": "pending",
+  "createdAt": "2025-01-01T10:05:00.000Z",
+  "deliveredAt": null,
+  "repliedAt": null
+}
