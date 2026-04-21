@@ -167,7 +167,7 @@ A channel can attach multiple repos. Exactly **one is primary** — that's where
 
 ### Crosslink
 
-Live agents in different repos (each a `rly claude` session) discover each other via heartbeat files in `~/.relay/crosslink/sessions/` and exchange messages. MCP tools: `crosslink_discover` / `crosslink_send` / `crosslink_poll` / `crosslink_reply` / `crosslink_register`.
+Live agents in different repos (each a `rly claude` session) discover each other via heartbeat files in `~/.relay/crosslink/sessions/` and exchange messages. MCP tools: `crosslink_discover` / `crosslink_send` / `crosslink_poll`.
 
 ### Spawning associated agents
 
@@ -276,11 +276,11 @@ The legacy `agent-harness <cmd>` alias is accepted for all commands so existing 
 
 Exposed to Claude and Codex via the Relay MCP server:
 
-**Harness (6)**: `harness_status`, `harness_list_runs`, `harness_get_run_detail`, `harness_get_artifact`, `harness_approve_plan`, `harness_reject_plan`
+**Harness (8)**: `harness_status`, `harness_list_runs`, `harness_get_run_detail`, `harness_get_artifact`, `harness_approve_plan`, `harness_reject_plan`, `harness_dispatch`, `project_create`
 
-**Channels (7)**: `channel_create`, `channel_get`, `channel_post`, `channel_record_decision`, `channel_task_board`, `channel_list_tickets`, `harness_running_tasks`
+**Channels (6)**: `channel_create`, `channel_get`, `channel_post`, `channel_record_decision`, `channel_task_board`, `harness_running_tasks`
 
-**Crosslink (5)**: `crosslink_discover`, `crosslink_send`, `crosslink_poll`, `crosslink_reply`, `crosslink_register`
+**Crosslink (3)**: `crosslink_discover`, `crosslink_send`, `crosslink_poll`
 
 Run `rly inspect-mcp` for the authoritative live list.
 

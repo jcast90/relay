@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createInterface, Interface } from "node:readline/promises";
 import { join } from "node:path";
 
@@ -7,6 +7,37 @@ import { getRelayDir } from "./paths.js";
 import { listRegisteredWorkspaces } from "./workspace-registry.js";
 
 const ONBOARDED_FILE = "onboarded.json";
+const CONFIG_ENV = "config.env";
+const CONFIG_ENV_TEMPLATE = "config.env.template";
+
+export type ScaffoldResult =
+  | { status: "created"; from: string; to: string }
+  | { status: "already-exists"; path: string }
+  | { status: "missing-template"; expectedTemplate: string };
+
+/**
+ * Copy `config.env.template` into `config.env` inside the given relay dir.
+ * Idempotent — never overwrites an existing `config.env`. If the template is
+ * missing (fresh clone without `install.sh` run, or a manual install), the
+ * caller gets `missing-template` back so it can show the user the right hint.
+ *
+ * Exported for unit tests; `runWelcome` calls this when the user opts in.
+ */
+export async function scaffoldConfigEnv(relayDir: string): Promise<ScaffoldResult> {
+  const target = join(relayDir, CONFIG_ENV);
+  const template = join(relayDir, CONFIG_ENV_TEMPLATE);
+
+  if (existsSync(target)) {
+    return { status: "already-exists", path: target };
+  }
+  if (!existsSync(template)) {
+    return { status: "missing-template", expectedTemplate: template };
+  }
+
+  await mkdir(relayDir, { recursive: true });
+  await copyFile(template, target);
+  return { status: "created", from: template, to: target };
+}
 
 // Catppuccin-ish ANSI for terminal output. Falls back gracefully on
 // non-colour terminals — no library dependency.
@@ -139,6 +170,9 @@ export async function runWelcome(options: WelcomeOptions): Promise<number> {
 
     // ── 2. Setup check ───────────────────────────────────────────────────
     header(2, total, "Setup check");
+    const relayDir = getRelayDir();
+    const configEnvPath = join(relayDir, CONFIG_ENV);
+    const configEnvExists = existsSync(configEnvPath);
     const tokens = await readTokensFromConfig();
     const workspaces = await listRegisteredWorkspaces();
 
@@ -146,16 +180,49 @@ export async function runWelcome(options: WelcomeOptions): Promise<number> {
       b ? `${c.green}✓${c.reset}` : `${c.peach}·${c.reset}`;
 
     p("");
+    p(`  ${ok(configEnvExists)} ~/.relay/config.env ${configEnvExists ? "present" : "missing"}`);
     p(`  ${ok(tokens.github)} GITHUB_TOKEN      ${tokens.github ? "set" : "not set — PR watcher + GitHub issues disabled"}`);
     p(`  ${ok(tokens.linear)} LINEAR_API_KEY    ${tokens.linear ? "set" : "not set — Linear issue ingestion disabled"}`);
     p(
       `  ${ok(workspaces.length > 0)} repos registered  ${workspaces.length} workspace${workspaces.length === 1 ? "" : "s"}`
     );
     p("");
-    if (!tokens.github) {
-      p(`  ${c.dim}To enable:${c.reset}`);
-      p(`    cp ~/.relay/config.env.template ~/.relay/config.env`);
-      p(`    ${c.dim}# fill in tokens${c.reset}`);
+
+    // If config.env is missing, offer to scaffold it so the user doesn't
+    // hit runtime errors later from a missing file. Interactive flows prompt;
+    // non-interactive flows just print the cp command.
+    if (!configEnvExists) {
+      if (rl) {
+        const answer = (
+          await ask(
+            rl,
+            "No ~/.relay/config.env yet — copy the template into place now? [Y/n]"
+          )
+        ).toLowerCase();
+        if (answer === "" || answer === "y" || answer === "yes") {
+          const result = await scaffoldConfigEnv(relayDir);
+          if (result.status === "created") {
+            p(`  ${c.green}✓${c.reset} Created ${result.to}`);
+            p(`    ${c.dim}Open it and fill in your tokens, then:${c.reset}`);
+            p(`    source ~/.relay/config.env    ${c.dim}# or add to ~/.zshrc${c.reset}`);
+          } else if (result.status === "already-exists") {
+            p(`  ${c.dim}Already exists at ${result.path} — left untouched.${c.reset}`);
+          } else {
+            p(`  ${c.peach}!${c.reset} Template not found at ${result.expectedTemplate}.`);
+            p(`    ${c.dim}Re-run install.sh to drop it in, or create config.env by hand.${c.reset}`);
+          }
+        } else {
+          p(`  ${c.dim}Skipped — when you're ready, run:${c.reset}`);
+          p(`    cp ~/.relay/config.env.template ~/.relay/config.env`);
+        }
+      } else {
+        p(`  ${c.dim}To create it:${c.reset}`);
+        p(`    cp ~/.relay/config.env.template ~/.relay/config.env`);
+        p(`    ${c.dim}# fill in tokens${c.reset}`);
+        p(`    source ~/.relay/config.env    ${c.dim}# or add to ~/.zshrc${c.reset}`);
+      }
+    } else if (!tokens.github) {
+      p(`  ${c.dim}To enable GitHub/Linear, open${c.reset} ${c.bold}~/.relay/config.env${c.reset} ${c.dim}and fill in tokens, then:${c.reset}`);
       p(`    source ~/.relay/config.env    ${c.dim}# or add to ~/.zshrc${c.reset}`);
     }
     if (workspaces.length === 0) {
