@@ -93,16 +93,37 @@ export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
   await channelStore.linkRun(channelId, runId, workspaceId);
 
   // Fire and forget — the orchestrator writes progress to the channel feed
-  // and artifact store as it runs.
+  // and artifact store as it runs. If the top-level run promise rejects we
+  // surface the failure to the channel feed so users don't see "dispatched"
+  // and then nothing. We only swallow the *return value* (the background task
+  // must not throw), never the error itself.
   orchestrator.run(featureRequest, runId)
     .catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      const stack = error instanceof Error && error.stack
+        ? error.stack.split("\n").slice(0, 20).join("\n")
+        : "";
       channelStore.postEntry(channelId!, {
         type: "status_update",
         fromAgentId: null,
         fromDisplayName: "Orchestrator",
-        content: `Run failed: ${error instanceof Error ? error.message : String(error)}`,
-        metadata: { runId, error: "true" }
-      }).catch(() => {});
+        content: `Run failed: ${message}`,
+        metadata: {
+          runId,
+          channelId,
+          workspaceId,
+          error: "true",
+          errorMessage: message,
+          ...(stack ? { errorStack: stack } : {})
+        }
+      }).catch((postErr: unknown) => {
+        // If posting the failure entry itself fails there is nowhere left to
+        // surface it — log to stderr so operators still see the loss.
+        const postMessage = postErr instanceof Error ? postErr.message : String(postErr);
+        console.warn(
+          `[orchestrator] failed to post run-failure entry (runId=${runId} channelId=${channelId}): ${postMessage}`
+        );
+      });
     });
 
   return {

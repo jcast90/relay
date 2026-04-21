@@ -108,6 +108,17 @@ interface ActiveWatcherEntry {
 
 let activeWatcher: ActiveWatcherEntry | null = null;
 
+/**
+ * Tracks which channels have already received the "GITHUB_TOKEN missing"
+ * warning entry during this process. The warning is a useful one-shot
+ * signal — without this guard, every factory invocation (one per run) would
+ * append a fresh warning to the feed and spam the channel.
+ *
+ * Cleared by `__resetActiveWatcherForTests` so tests can observe the
+ * warning on demand.
+ */
+const missingTokenWarnedChannels = new Set<string>();
+
 /** Access the live watcher. Returns null when no run is wired or token missing. */
 export function getActiveWatcher(): ActiveWatcherView | null {
   return activeWatcher?.view ?? null;
@@ -116,6 +127,7 @@ export function getActiveWatcher(): ActiveWatcherView | null {
 /** Test helper — force-clear the singleton between test cases. */
 export function __resetActiveWatcherForTests(): void {
   activeWatcher = null;
+  missingTokenWarnedChannels.clear();
 }
 
 /**
@@ -211,7 +223,38 @@ export function createPrWatcherFactory(opts: CreateFactoryOpts): PollerFactory {
 
   return ({ run, scheduler }) => {
     if (!process.env.GITHUB_TOKEN) {
+      // Keep the stdout info line for CLI users who don't have the GUI/TUI
+      // open — they still need to see this in plain terminal output.
       console.info("[pr-watcher] GITHUB_TOKEN not set — PR watching disabled");
+      // Also surface as a channel-level warning so the GUI/TUI show it. Post
+      // at most once per (channel, process) to avoid spamming: the factory is
+      // invoked once per run and the message is invariant until the operator
+      // sets GITHUB_TOKEN and restarts.
+      const channelId = run.channelId ?? opts.defaultChannelId;
+      if (channelId && !missingTokenWarnedChannels.has(channelId)) {
+        missingTokenWarnedChannels.add(channelId);
+        opts.channelStore
+          .postEntry(channelId, {
+            type: "status_update",
+            fromAgentId: null,
+            fromDisplayName: "PR Watcher",
+            content:
+              "GITHUB_TOKEN not set — PR watching is disabled. Set the env var and " +
+              "restart to enable PR status updates for this channel.",
+            metadata: {
+              runId: run.id,
+              channelId,
+              warning: "missing_github_token",
+              component: "pr-watcher"
+            }
+          })
+          .catch((err: unknown) => {
+            const message = err instanceof Error ? err.message : String(err);
+            console.warn(
+              `[pr-watcher] failed to post missing-token warning to channel ${channelId}: ${message}`
+            );
+          });
+      }
       return noopHandle();
     }
 

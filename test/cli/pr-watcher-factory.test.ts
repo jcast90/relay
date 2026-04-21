@@ -136,6 +136,87 @@ describe("createPrWatcherFactory", () => {
     infoSpy.mockRestore();
   });
 
+  it("posts a channel-level warning entry when GITHUB_TOKEN is absent", async () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    const execGit: ExecGit = vi.fn();
+
+    // Seed a channel and pass its id to the factory so the warning has a
+    // home. Without `defaultChannelId` (and `run.channelId`) there is no
+    // channel to post to — that case is intentionally silent, covered by
+    // the stdout info message above.
+    const channel = await channelStore.createChannel({
+      name: "#test",
+      description: "missing-token test"
+    });
+
+    const factory = createPrWatcherFactory({
+      channelStore,
+      repoRoot: "/irrelevant",
+      defaultChannelId: channel.channelId,
+      execGit
+    });
+
+    factory({
+      run: minimalRun(),
+      scheduler: stubScheduler() as TicketScheduler
+    });
+
+    // Let the fire-and-forget postEntry settle. postEntry awaits mkdir,
+    // appendFile, and touchChannel (which re-reads + writes channel.json),
+    // so a real timer flush is more reliable than microtask pumping.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const entries = await channelStore.readFeed(channel.channelId);
+    const warning = entries.find(
+      (e) =>
+        e.type === "status_update" &&
+        e.metadata.warning === "missing_github_token"
+    );
+    expect(warning).toBeDefined();
+    expect(warning!.fromDisplayName).toBe("PR Watcher");
+    expect(warning!.content).toContain("GITHUB_TOKEN not set");
+    expect(warning!.metadata.component).toBe("pr-watcher");
+
+    infoSpy.mockRestore();
+  });
+
+  it("posts the missing-token warning only once per channel per process", async () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    const execGit: ExecGit = vi.fn();
+
+    const channel = await channelStore.createChannel({
+      name: "#test-dedupe",
+      description: "dedupe test"
+    });
+
+    const factory = createPrWatcherFactory({
+      channelStore,
+      repoRoot: "/irrelevant",
+      defaultChannelId: channel.channelId,
+      execGit
+    });
+
+    // Invoke the factory three times — simulating three back-to-back runs.
+    for (let i = 0; i < 3; i += 1) {
+      factory({
+        run: minimalRun(),
+        scheduler: stubScheduler() as TicketScheduler
+      });
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const entries = await channelStore.readFeed(channel.channelId);
+    const warnings = entries.filter(
+      (e) =>
+        e.type === "status_update" &&
+        e.metadata.warning === "missing_github_token"
+    );
+    expect(warnings).toHaveLength(1);
+
+    infoSpy.mockRestore();
+  });
+
   it("returns a no-op handle when git remote resolution fails", async () => {
     process.env.GITHUB_TOKEN = "fake-token";
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});

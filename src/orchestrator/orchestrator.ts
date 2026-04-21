@@ -480,7 +480,16 @@ export class Orchestrator {
     };
 
     run.events.push(event);
-    this.artifactStore.appendEvent(run.id, event).catch(() => {});
+    // appendEvent is fire-and-forget here (recordEvent is synchronous for
+    // callers), but we must not silently swallow failures — log them with
+    // enough context to correlate with the run. Matches the pattern used in
+    // OrchestratorV2.recordEvent.
+    this.artifactStore.appendEvent(run.id, event).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[orchestrator] appendEvent failed (runId=${run.id} type=${type} phaseId=${phaseId}): ${message}`
+      );
+    });
   }
 
   private recordEvidence(run: HarnessRun, record: EvidenceRecord): void {

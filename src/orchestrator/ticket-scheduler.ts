@@ -606,7 +606,12 @@ export class TicketScheduler {
     ticketId: string,
     proposedCommands: string[],
     allowlistedCommands: string[]
-  ): Promise<{ success: boolean; rejected: string[] }> {
+  ): Promise<{
+    success: boolean;
+    rejected: string[];
+    overridden: boolean;
+    substitutedCommands: string[];
+  }> {
     const selection = selectVerificationCommands(
       proposedCommands,
       allowlistedCommands
@@ -625,7 +630,43 @@ export class TicketScheduler {
       success = success && entry.result.exitCode === 0;
     }
 
-    return { success, rejected: selection.rejected };
+    const substitutedCommands = selection.overridden ? [...selection.commandsToRun] : [];
+
+    // Surface the override via the channel feed so users don't see
+    // "verification passed" when the agent's proposed commands were all
+    // swapped out for allowlisted substitutes. Best-effort — a feed write
+    // failure must not halt verification.
+    if (selection.overridden && run.channelId && this.channelStore) {
+      this.channelStore
+        .postEntry(run.channelId, {
+          type: "status_update",
+          fromAgentId: null,
+          fromDisplayName: "Verifier",
+          content:
+            `Verification override: agent's proposed commands were not on the allowlist; ` +
+            `ran allowlisted substitutes instead.`,
+          metadata: {
+            runId: run.id,
+            ticketId,
+            verification: success ? "passed-with-override" : "failed-with-override",
+            rejectedCommands: selection.rejected,
+            substitutedCommands
+          }
+        })
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          console.warn(
+            `[scheduler] verification-override feed post failed (runId=${run.id} ticketId=${ticketId}): ${message}`
+          );
+        });
+    }
+
+    return {
+      success,
+      rejected: selection.rejected,
+      overridden: selection.overridden,
+      substitutedCommands
+    };
   }
 
   private updateBlockedTickets(run: HarnessRun): void {
