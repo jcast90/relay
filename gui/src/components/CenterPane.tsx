@@ -19,12 +19,18 @@ type Props = {
   onSessionCreated: (sessionId: string) => void;
 };
 
+type ActivityEntry = { text: string; ts: number };
+
 type ActiveStream = {
   streamId: number;
   alias: string | null;
   accum: string;
-  activity: string[];
+  activity: ActivityEntry[];
+  expanded: boolean;
 };
+
+const ACTIVITY_STACK_MAX = 20;
+const ACTIVITY_TOP_N = 3;
 
 export function CenterPane({
   channel,
@@ -154,8 +160,17 @@ function reduceStream(current: ActiveStream, event: ChatEvent): ActiveStream {
   switch (event.kind) {
     case "chunk":
       return { ...current, accum: current.accum + event.text };
-    case "activity":
-      return { ...current, activity: [...current.activity, event.text] };
+    case "activity": {
+      const next = [
+        ...current.activity,
+        { text: event.text, ts: Date.now() },
+      ];
+      const trimmed =
+        next.length > ACTIVITY_STACK_MAX
+          ? next.slice(next.length - ACTIVITY_STACK_MAX)
+          : next;
+      return { ...current, activity: trimmed };
+    }
     default:
       return current;
   }
@@ -196,32 +211,12 @@ function ChatView({
           <FeedView entries={feed} />
         )}
         {stream && (
-          <div className={`feed-entry role-assistant streaming`}>
-            <div className="feed-header">
-              <span className="feed-author">
-                {stream.alias ? `@${stream.alias}` : "assistant"}
-              </span>
-              <span className="stream-status">
-                <span className="stream-dot" /> streaming
-              </span>
-            </div>
-            <div className="stream-activity">
-              {stream.activity.length === 0 ? (
-                <div className="stream-activity-empty">
-                  {stream.accum ? "writing response…" : "thinking…"}
-                </div>
-              ) : (
-                stream.activity.slice(-5).map((a, i) => (
-                  <div key={i} className="stream-activity-line">
-                    · {a}
-                  </div>
-                ))
-              )}
-            </div>
-            {stream.accum && (
-              <div className="feed-content">{stream.accum}</div>
-            )}
-          </div>
+          <ActivityStreamCard
+            stream={stream}
+            onToggleExpanded={() =>
+              onStartStream({ ...stream, expanded: !stream.expanded })
+            }
+          />
         )}
       </div>
       <Composer
@@ -233,6 +228,90 @@ function ChatView({
         onSessionCreated={onSessionCreated}
       />
     </>
+  );
+}
+
+function ActivityStreamCard({
+  stream,
+  onToggleExpanded,
+}: {
+  stream: ActiveStream;
+  onToggleExpanded: () => void;
+}) {
+  const total = stream.activity.length;
+  const visibleCount = stream.expanded ? total : Math.min(ACTIVITY_TOP_N, total);
+  const visible = total === 0 ? [] : stream.activity.slice(total - visibleCount);
+  const hiddenCount = total - visibleCount;
+  const agentBadge = stream.alias ? `@${stream.alias}` : "agent";
+  const latestTs = total > 0 ? stream.activity[total - 1].ts : null;
+
+  return (
+    <div className="feed-entry role-assistant streaming">
+      <div className="feed-header">
+        <span className="feed-author">
+          {stream.alias ? `@${stream.alias}` : "assistant"}
+        </span>
+        <span className="stream-status">
+          <span className="stream-dot" />
+          {stream.accum ? "writing response" : "thinking"}
+          {total > 0 ? ` · ${total} action${total === 1 ? "" : "s"}` : ""}
+        </span>
+      </div>
+      <div className={`stream-activity ${stream.expanded ? "expanded" : ""}`}>
+        {total === 0 ? (
+          <div className="stream-activity-empty">
+            <span className="activity-badge">{agentBadge}</span>
+            <span className="activity-icon">⚙</span>
+            <span className="activity-ellipsis">
+              {stream.accum ? "writing response…" : "thinking…"}
+            </span>
+          </div>
+        ) : (
+          <>
+            {visible.map((entry, i) => {
+              const isNewest = i === visible.length - 1;
+              return (
+                <div
+                  key={`${entry.ts}-${i}`}
+                  className={`stream-activity-line ${isNewest ? "newest" : ""}`}
+                  title={new Date(entry.ts).toLocaleTimeString()}
+                >
+                  {isNewest && (
+                    <span className="activity-badge">{agentBadge}</span>
+                  )}
+                  <span className="activity-icon">⚙</span>
+                  <span className="activity-text">{entry.text}</span>
+                </div>
+              );
+            })}
+            {hiddenCount > 0 && (
+              <button
+                type="button"
+                className="stream-activity-more"
+                onClick={onToggleExpanded}
+              >
+                +{hiddenCount} more
+              </button>
+            )}
+            {stream.expanded && total > ACTIVITY_TOP_N && (
+              <button
+                type="button"
+                className="stream-activity-more"
+                onClick={onToggleExpanded}
+              >
+                collapse
+              </button>
+            )}
+          </>
+        )}
+        {latestTs && (
+          <div className="stream-activity-meta">
+            last update {new Date(latestTs).toLocaleTimeString()}
+          </div>
+        )}
+      </div>
+      {stream.accum && <div className="feed-content">{stream.accum}</div>}
+    </div>
   );
 }
 
@@ -326,7 +405,13 @@ function Composer({
         claudeSessionId,
         autoApprove,
       });
-      onStartStream({ streamId, alias, accum: "", activity: [] });
+      onStartStream({
+        streamId,
+        alias,
+        accum: "",
+        activity: [],
+        expanded: false,
+      });
       setText("");
     } catch (e) {
       setError(String(e));
