@@ -55,31 +55,82 @@ function collectRepoContext(repoPath: string): string {
   return lines.length > 0 ? lines.join("\n") : "";
 }
 
-export function buildSystemPrompt(input: {
+export async function buildSystemPrompt(input: {
   channelId: string;
   repoPath?: string;
   alias?: string;
-}): string {
+}): Promise<string> {
   const parts: string[] = [];
 
-  if (input.repoPath && input.alias) {
-    const repoName = input.repoPath.split("/").pop() ?? input.repoPath;
-    parts.push(
-      `You are working in the '${repoName}' repository (alias: @${input.alias}) at: ${input.repoPath}. ` +
-      `Your working directory is already set to this repo — do NOT search for it elsewhere. ` +
-      `All file operations should be relative to this directory.`
-    );
-    const repoContext = collectRepoContext(input.repoPath);
-    if (repoContext) {
+  // Always pull the channel so we can surface ALL attached repos, not just
+  // the one the user prefixed with @alias. Previously a message with no alias
+  // prefix gave the agent zero channel-repo awareness — it would fall back to
+  // whatever context the global CLAUDE.md describes (e.g. a different stack).
+  const channelStore = new ChannelStore();
+  const channel = await channelStore.getChannel(input.channelId).catch(() => null);
+  const assignments = channel?.repoAssignments ?? [];
+
+  if (assignments.length > 0) {
+    const focused = input.alias
+      ? assignments.find((r) => r.alias === input.alias) ?? null
+      : null;
+
+    if (focused) {
+      const focusedName = focused.repoPath.split("/").pop() ?? focused.repoPath;
       parts.push(
-        "\nRepo context (read at session start — may be stale after long runs):\n" +
-          repoContext
+        `You are working in the '${focusedName}' repository (alias: @${focused.alias}) at: ${focused.repoPath}. ` +
+          `Your working directory is already set to this repo — do NOT search for it elsewhere. ` +
+          `All file operations should be relative to this directory.`
+      );
+      const focusedCtx = collectRepoContext(focused.repoPath);
+      if (focusedCtx) {
+        parts.push(
+          "\nFocused repo context (read at session start — may be stale after long runs):\n" +
+            focusedCtx
+        );
+      }
+      const others = assignments.filter((r) => r.alias !== focused.alias);
+      if (others.length > 0) {
+        parts.push(
+          "\nOther repos attached to this channel (prefix a message with the alias to switch focus):\n" +
+            others.map((r) => `  - @${r.alias}: ${r.repoPath}`).join("\n")
+        );
+      }
+    } else {
+      // No focused alias — list every attached repo with git context so the
+      // agent knows what's in scope and picks the right one without asking.
+      parts.push(
+        `This channel is attached to ${assignments.length} repo${assignments.length === 1 ? "" : "s"}. ` +
+          `No specific repo was selected for this message (no @alias prefix), so treat all of them as in scope. ` +
+          `If the user's question is clearly about one, focus there; otherwise ask which.`
+      );
+      for (const r of assignments) {
+        const ctx = collectRepoContext(r.repoPath);
+        const ctxBlock = ctx ? `\n${ctx}` : "";
+        parts.push(`\n### @${r.alias} — ${r.repoPath}${ctxBlock}`);
+      }
+      parts.push(
+        "\nWhen the user prefixes a message with `@<alias> ...`, that repo becomes the active working directory."
       );
     }
   } else if (input.repoPath) {
+    // No channel-level assignments but an explicit --repo was passed (e.g.
+    // from the TUI / CLI flow). Fall back to the legacy single-repo path.
+    const repoName = input.repoPath.split("/").pop() ?? input.repoPath;
+    if (input.alias) {
+      parts.push(
+        `You are working in the '${repoName}' repository (alias: @${input.alias}) at: ${input.repoPath}. ` +
+          `Your working directory is already set to this repo — do NOT search for it elsewhere. ` +
+          `All file operations should be relative to this directory.`
+      );
+    }
     const repoContext = collectRepoContext(input.repoPath);
     if (repoContext) {
-      parts.push("Current repo context:\n" + repoContext);
+      parts.push(
+        (input.alias ? "\nRepo context" : "Current repo context") +
+          " (read at session start — may be stale after long runs):\n" +
+          repoContext
+      );
     }
   }
 

@@ -1235,7 +1235,7 @@ async function handleChatCommand(
       return;
     }
 
-    const prompt = buildSystemPrompt({ channelId, repoPath, alias });
+    const prompt = await buildSystemPrompt({ channelId, repoPath, alias });
     jsonOut({ prompt });
     return;
   }
