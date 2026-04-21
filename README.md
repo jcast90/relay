@@ -418,6 +418,9 @@ bin/rly.mjs                   # CLI launcher (tsx by default, dist with RELAY_US
 install.sh                    # one-command installer
 ```
 
+- `docs/` — human-facing deeper walkthroughs (getting started, cloud execution, storage injection).
+- `agent_docs/` — agent-targeted reference (architecture, data model, testing) for coding agents working in the repo.
+
 ## Development
 
 ```bash
@@ -451,6 +454,8 @@ Per-area quick loops:
 ## Contributing
 
 Issues and PRs welcome. If you're considering a larger change, open an issue first so we can align on shape before you burn time.
+
+See [`AGENTS.md`](./AGENTS.md) for the coding-agent conventions.
 
 - Keep PR scope tight — prefer multiple small PRs over one big one.
 - Run `pnpm test && pnpm typecheck && pnpm build` before pushing.
