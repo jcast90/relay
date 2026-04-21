@@ -165,11 +165,17 @@ cat > "$TEMPLATE" <<'ENVEOF'
 # export RELAY_AUTO_APPROVE=1
 ENVEOF
 
+# Tighten perms — these files hold (or will hold) API tokens. Making them
+# owner-read-only reduces blast radius if a backup tool, shared dev machine,
+# or Time Machine snapshot ends up somewhere it shouldn't. Idempotent.
+chmod 600 "$TEMPLATE" 2>/dev/null || true
+
 CONFIG="${RELAY_DIR}/config.env"
 if [ ! -f "$CONFIG" ]; then
   log "No existing config.env found — leaving template only (copy it over when ready)"
 else
   log "Existing config.env preserved at ${CONFIG}"
+  chmod 600 "$CONFIG" 2>/dev/null || true
 fi
 
 # ---------- next-steps banner ----------
