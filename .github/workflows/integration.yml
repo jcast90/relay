@@ -1,9 +1,9 @@
 name: Integration
 
 # Integration tier — runs the suites that are `describe.skip`'d in the
-# default `ci.yml` because they need external services (Postgres, a real
-# Kubernetes cluster, real `git`, a GitHub token). The fast PR tier stays
-# scripted-mode and deterministic; this workflow is the long-poll:
+# default `ci.yml` because they need external services (Postgres, real
+# `git`, a GitHub token). The fast PR tier stays scripted-mode and
+# deterministic; this workflow is the long-poll:
 #
 #   * Nightly at 06:00 UTC on `main`.
 #   * On-demand via `workflow_dispatch` from the Actions UI.
@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       suites:
-        description: "Which suites to run (all|postgres|k8s|git|pr-watcher)"
+        description: "Which suites to run (all|postgres|git|pr-watcher)"
         required: false
         default: "all"
 
@@ -109,63 +109,6 @@ jobs:
 
       - name: Run git-worktree sandbox integration suite
         run: pnpm test test/execution/git-worktree-sandbox.test.ts
-
-  # ---------------------------------------------------------------------------
-  # Pod executor against a real Kubernetes API. Needs a kubeconfig the repo
-  # doesn't ship by default. Until an admin provisions `K8S_KUBECONFIG` in
-  # repo secrets, the job runs but exits cleanly with a skipped notice —
-  # it doesn't fail CI.
-  # ---------------------------------------------------------------------------
-  pod-executor:
-    name: pod-executor-integration
-    if: >-
-      ${{ github.event_name == 'schedule' ||
-          github.event.inputs.suites == 'all' ||
-          github.event.inputs.suites == 'k8s' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Detect K8S_KUBECONFIG secret
-        id: detect
-        env:
-          KUBECONFIG_PRESENT: ${{ secrets.K8S_KUBECONFIG != '' }}
-        run: echo "present=$KUBECONFIG_PRESENT" >> "$GITHUB_OUTPUT"
-
-      - name: Skip — no kubeconfig secret provisioned
-        if: steps.detect.outputs.present != 'true'
-        run: |
-          echo "Skipping pod-executor integration: add the K8S_KUBECONFIG"
-          echo "repo secret (a base64-encoded kubeconfig for a throwaway"
-          echo "namespace) to enable this tier. See CI.md for details."
-
-      - uses: pnpm/action-setup@v4
-        if: steps.detect.outputs.present == 'true'
-        with:
-          version: 10
-
-      - uses: actions/setup-node@v4
-        if: steps.detect.outputs.present == 'true'
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Install dependencies
-        if: steps.detect.outputs.present == 'true'
-        run: pnpm install --frozen-lockfile
-
-      - name: Materialize kubeconfig
-        if: steps.detect.outputs.present == 'true'
-        env:
-          KUBECONFIG_B64: ${{ secrets.K8S_KUBECONFIG }}
-        run: |
-          mkdir -p "$HOME/.kube"
-          printf '%s' "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/relay-ci.yaml"
-          echo "RELAY_TEST_K8S_KUBECONFIG=$HOME/.kube/relay-ci.yaml" >> "$GITHUB_ENV"
-
-      - name: Run pod-executor integration
-        if: steps.detect.outputs.present == 'true'
-        run: pnpm test test/execution/pod-executor.integration.test.ts
 
   # ---------------------------------------------------------------------------
   # Live-GitHub pr-watcher-factory suite. Needs a real token — the test block

@@ -24,7 +24,7 @@ need external services. Two triggers:
 
 - **Nightly** — cron `0 6 * * *` (06:00 UTC).
 - **On-demand** — `workflow_dispatch` from the Actions UI. Pass `suites`
-  (one of `all|postgres|k8s|git|pr-watcher`) to run just one tier.
+  (one of `all|postgres|git|pr-watcher`) to run just one tier.
 
 ### Jobs and what they need
 
@@ -32,7 +32,6 @@ need external services. Two triggers:
 |---|---|---|---|
 | `postgres-integration` | `HARNESS_TEST_POSTGRES_URL` | Postgres 16 service container | none — provisioned inline |
 | `git-worktree-integration` | `RELAY_TEST_REAL_GIT=1` | system `git` | none |
-| `pod-executor-integration` | `RELAY_TEST_K8S_KUBECONFIG` | real Kubernetes API | `K8S_KUBECONFIG` (base64-encoded kubeconfig) |
 | `pr-watcher-live` | `GITHUB_TOKEN`, `HARNESS_LIVE=1` | github.com | `INTEGRATION_GITHUB_TOKEN` (fine-grained read token) |
 
 Jobs whose secret isn't set print a skip notice and exit 0 — the workflow
@@ -44,16 +43,13 @@ stays green until an admin provisions them. Grep the workflow file for
 To light up the full matrix, add these under `Settings -> Secrets and
 variables -> Actions`:
 
-- `K8S_KUBECONFIG` — `base64` of a kubeconfig scoped to a throwaway namespace.
-  The suite creates and deletes its own Jobs; nothing persistent.
 - `INTEGRATION_GITHUB_TOKEN` — fine-grained PAT with **read** access to the
   pr-watcher fixture repo. No write scope. Currently the `describe.skip`
   block in `test/cli/pr-watcher-factory.test.ts` is empty — this secret is
   the slot it'll consume once the live-network cases land.
 
-Until those are added, `pod-executor-integration` and `pr-watcher-live`
-report "skipped" in the Actions UI. `postgres-integration` and
-`git-worktree-integration` run unconditionally.
+Until that's added, `pr-watcher-live` reports "skipped" in the Actions UI.
+`postgres-integration` and `git-worktree-integration` run unconditionally.
 
 ## Running the integration tier locally
 
@@ -66,9 +62,6 @@ HARNESS_TEST_POSTGRES_URL=postgres://postgres@localhost:5432/relay_test pnpm tes
 
 # Real-git worktree sandbox
 RELAY_TEST_REAL_GIT=1 pnpm test test/execution/git-worktree-sandbox.test.ts
-
-# Pod executor (needs a cluster)
-RELAY_TEST_K8S_KUBECONFIG=~/.kube/config pnpm test test/execution/pod-executor.integration.test.ts
 ```
 
 Scripted mode stays the default. Don't flip `HARNESS_LIVE` in PRs unless
