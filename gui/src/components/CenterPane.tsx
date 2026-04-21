@@ -214,6 +214,7 @@ function ChatView({
             sessionId={sessionId}
             messages={sessionMessages}
             streaming={!!stream}
+            streamId={stream?.streamId ?? null}
             onRewound={() => {
               onStartStream(null);
               onRefresh();
@@ -332,12 +333,14 @@ function SessionMessages({
   sessionId,
   messages,
   streaming,
+  streamId,
   onRewound,
 }: {
   channel: Channel;
   sessionId: string;
   messages: PersistedChatMessage[];
   streaming: boolean;
+  streamId: number | null;
   onRewound: () => void;
 }) {
   const [rewindTarget, setRewindTarget] = useState<PersistedChatMessage | null>(
@@ -387,6 +390,7 @@ function SessionMessages({
           channel={channel}
           sessionId={sessionId}
           target={rewindTarget}
+          streamId={streamId}
           onClose={() => setRewindTarget(null)}
           onDone={() => {
             setRewindTarget(null);
@@ -402,12 +406,14 @@ function RewindConfirmModal({
   channel,
   sessionId,
   target,
+  streamId,
   onClose,
   onDone,
 }: {
   channel: Channel;
   sessionId: string;
   target: PersistedChatMessage;
+  streamId: number | null;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -423,6 +429,16 @@ function RewindConfirmModal({
     setBusy(true);
     setError(null);
     try {
+      // Gap #8: abort any in-flight stream BEFORE truncating the session
+      // log. Otherwise the Rust streaming thread can append a stale
+      // assistant turn after `rewind-apply` has already truncated + reset.
+      if (streamId !== null) {
+        try {
+          await api.cancelChatStream(streamId);
+        } catch (e) {
+          console.warn("[rewind] cancelChatStream failed:", e);
+        }
+      }
       await api.rewindApply(
         channel.channelId,
         sessionId,
