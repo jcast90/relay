@@ -14,6 +14,11 @@ import type {
 } from "./executor.js";
 import type { SandboxRef } from "./sandbox.js";
 import type { K8sClientLike, K8sJob } from "./k8s-client.js";
+import {
+  finalizeK8sName,
+  sanitizeK8sLabelValue,
+  slugifyForK8s
+} from "./k8s-names.js";
 import type { PVCSandboxProvider } from "./sandboxes/pvc-sandbox.js";
 
 const DEFAULT_POLL_MS = 3_000;
@@ -21,6 +26,11 @@ const DEFAULT_TERMINATION_GRACE_S = 10;
 const KILLED_EXIT_CODE = 137;
 const JOB_FAILED_EXIT_CODE = 1;
 const SUMMARY_PREFIX_LENGTH = 120;
+const DEFAULT_MAX_CONSECUTIVE_POLL_FAILURES = 5;
+
+function formatErr(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
 
 export interface PodResourceRequests {
   cpu?: string;
@@ -46,6 +56,12 @@ export interface PodExecutorOptions {
    * streamPodLog. Useful when the client doesn't implement streaming.
    */
   useStreamingLogs?: boolean;
+  /**
+   * Number of consecutive `readJob` failures tolerated inside `wait()`
+   * before we give up and surface an "API unavailable" error. Defaults to
+   * 5. A single transient 5xx or network blip must not terminate the run.
+   */
+  maxConsecutivePollFailures?: number;
 }
 
 interface ParsedRemoteUri {
@@ -157,6 +173,7 @@ interface PodHandleDeps {
   postKillWatchdogMs: number;
   timeoutMs?: number;
   useStreamingLogs: boolean;
+  maxConsecutivePollFailures: number;
 }
 
 class PodExecutionHandle implements ExecutionHandle {
@@ -203,21 +220,38 @@ class PodExecutionHandle implements ExecutionHandle {
   }
 
   async kill(_signal: "SIGTERM" | "SIGKILL" = "SIGTERM"): Promise<void> {
+    // Idempotent: if wait() has already resolved OR a prior kill() started
+    // the teardown, this call is a no-op. The post-kill watchdog ensures
+    // wait() can't hang even if the underlying API is unresponsive.
     if (this.cachedResult) return;
+    if (this.killRequested) return;
     this.killRequested = true;
     this.armPostKillWatchdog();
     this.stopLogStream();
-    const podNames = await this.resolvePodNames().catch(() => [] as string[]);
+    const podNames = await this.resolvePodNames().catch((err) => {
+      console.warn(
+        `[pod-executor] kill: resolvePodNames failed for ${this.deps.jobName}: ${formatErr(err)}`
+      );
+      return [] as string[];
+    });
     for (const name of podNames) {
       await this.deps.client
         .deletePod(this.deps.namespace, name, { gracePeriodSeconds: 5 })
-        .catch(() => undefined);
+        .catch((err) => {
+          console.warn(
+            `[pod-executor] kill: deletePod ${name} failed: ${formatErr(err)}`
+          );
+        });
     }
     await this.deps.client
       .deleteJob(this.deps.namespace, this.deps.jobName, {
         propagationPolicy: "Background"
       })
-      .catch(() => undefined);
+      .catch((err) => {
+        console.warn(
+          `[pod-executor] kill: deleteJob ${this.deps.jobName} failed: ${formatErr(err)}`
+        );
+      });
   }
 
   async *stream(): AsyncIterable<ExecutionEvent> {
@@ -258,21 +292,64 @@ class PodExecutionHandle implements ExecutionHandle {
     const deadline = this.deps.timeoutMs
       ? Date.now() + this.deps.timeoutMs
       : Number.POSITIVE_INFINITY;
-    this.pokeLogStream().catch(() => undefined);
+    this.pokeLogStream().catch((err) => {
+      console.warn(
+        `[pod-executor] wait: initial pokeLogStream failed for ${this.deps.jobName}: ${formatErr(err)}`
+      );
+    });
+
+    let consecutiveFailures = 0;
+    let lastPollError: unknown = null;
 
     while (!this.cachedResult) {
       if (Date.now() >= deadline && !this.timedOut) {
         this.timedOut = true;
         await this.kill("SIGTERM");
       }
-      const job = await this.deps.client.readJob(this.deps.namespace, this.deps.jobName);
+      // Wrap the poll tick: a single transient 5xx / network blip must not
+      // terminate wait(). We count consecutive failures and give up cleanly
+      // only after `maxConsecutivePollFailures` in a row — at which point
+      // we surface the real reason instead of hanging.
+      let job: K8sJob | null;
+      try {
+        job = await this.deps.client.readJob(this.deps.namespace, this.deps.jobName);
+        consecutiveFailures = 0;
+        lastPollError = null;
+      } catch (err) {
+        consecutiveFailures += 1;
+        lastPollError = err;
+        console.warn(
+          `[pod-executor] wait: readJob ${this.deps.jobName} failed ` +
+            `(${consecutiveFailures}/${this.deps.maxConsecutivePollFailures}), ` +
+            `backing off ${this.deps.pollIntervalMs}ms: ${formatErr(err)}`
+        );
+        if (consecutiveFailures >= this.deps.maxConsecutivePollFailures) {
+          this.bus.emit({
+            kind: "stderr",
+            at: new Date().toISOString(),
+            data: `[pod-executor] K8s API unavailable after ${this.deps.maxConsecutivePollFailures} retries: ${formatErr(lastPollError)}\n`
+          });
+          this.stderrBuf += `[pod-executor] K8s API unavailable after ${this.deps.maxConsecutivePollFailures} retries: ${formatErr(lastPollError)}\n`;
+          this.finalize(
+            JOB_FAILED_EXIT_CODE,
+            `K8s API unavailable after ${this.deps.maxConsecutivePollFailures} retries: ${formatErr(lastPollError)}`
+          );
+          break;
+        }
+        await sleep(this.deps.pollIntervalMs);
+        continue;
+      }
       if (!job) {
         this.finalize(this.killRequested ? KILLED_EXIT_CODE : JOB_FAILED_EXIT_CODE, "job missing");
         break;
       }
       const status = job.status ?? {};
       if (this.podName === null) {
-        await this.pokeLogStream().catch(() => undefined);
+        await this.pokeLogStream().catch((err) => {
+          console.warn(
+            `[pod-executor] wait: pokeLogStream failed for ${this.deps.jobName}: ${formatErr(err)}`
+          );
+        });
       }
       if (status.succeeded && status.succeeded > 0) {
         await this.finalizeFromPodLogs(0);
@@ -296,7 +373,11 @@ class PodExecutionHandle implements ExecutionHandle {
     this.timeoutHandle = setTimeout(() => {
       if (this.cachedResult) return;
       this.timedOut = true;
-      this.kill("SIGTERM").catch(() => undefined);
+      this.kill("SIGTERM").catch((err) => {
+        console.warn(
+          `[pod-executor] timeout: kill(${this.deps.jobName}) failed: ${formatErr(err)}`
+        );
+      });
     }, this.deps.timeoutMs);
     this.timeoutHandle.unref?.();
   }
@@ -323,7 +404,12 @@ class PodExecutionHandle implements ExecutionHandle {
   private async resolveFailureExitCode(): Promise<number> {
     const pods = await this.deps.client
       .listPodsForJob(this.deps.namespace, this.deps.jobName)
-      .catch(() => [] as Awaited<ReturnType<K8sClientLike["listPodsForJob"]>>);
+      .catch((err) => {
+        console.warn(
+          `[pod-executor] resolveFailureExitCode: listPodsForJob ${this.deps.jobName} failed: ${formatErr(err)}`
+        );
+        return [] as Awaited<ReturnType<K8sClientLike["listPodsForJob"]>>;
+      });
     for (const pod of pods) {
       for (const cs of pod.status?.containerStatuses ?? []) {
         if (cs.state?.terminated?.exitCode !== undefined) {
@@ -344,13 +430,24 @@ class PodExecutionHandle implements ExecutionHandle {
       for (const pod of pods) {
         const name = pod.metadata?.name;
         if (!name) continue;
-        const log = await this.deps.client.readPodLog(this.deps.namespace, name);
-        if (log && !this.stdoutBuf.includes(log)) {
-          this.stdoutBuf += log;
+        try {
+          const log = await this.deps.client.readPodLog(this.deps.namespace, name);
+          if (log && !this.stdoutBuf.includes(log)) {
+            this.stdoutBuf += log;
+          }
+        } catch (logErr) {
+          // Surface the failure to the user via stderr so they don't wonder
+          // why stdout is empty. The exit code is already determined; we
+          // just couldn't retrieve the pod's output.
+          const msg = `[pod-executor] logs unavailable for pod ${name}: ${formatErr(logErr)}\n`;
+          console.warn(msg.trim());
+          this.stderrBuf += msg;
         }
       }
-    } catch {
-      // best-effort; missing logs shouldn't block exit.
+    } catch (err) {
+      const msg = `[pod-executor] logs unavailable (listPodsForJob failed): ${formatErr(err)}\n`;
+      console.warn(msg.trim());
+      this.stderrBuf += msg;
     }
     this.finalize(exitCode);
   }
@@ -380,6 +477,21 @@ class PodExecutionHandle implements ExecutionHandle {
           data: text
         });
       });
+      const emitStreamEnd = (reason: string): void => {
+        if (this.cachedResult) return;
+        // The user sees this on any mid-run disconnect (network blip, pod
+        // eviction, log-api crash). wait() will continue polling readJob and
+        // will finalize when the Job itself reports succeeded/failed.
+        const msg = `[pod-executor] log stream ended unexpectedly: ${reason}\n`;
+        this.stderrBuf += msg;
+        this.bus.emit({
+          kind: "stderr",
+          at: new Date().toISOString(),
+          data: msg
+        });
+      };
+      sink.on("error", (err) => emitStreamEnd(formatErr(err)));
+      sink.on("close", () => emitStreamEnd("sink closed"));
       try {
         this.logAborter = await this.deps.client.streamPodLog(
           this.deps.namespace,
@@ -387,7 +499,10 @@ class PodExecutionHandle implements ExecutionHandle {
           sink as Writable,
           { follow: true }
         );
-      } catch {
+      } catch (err) {
+        console.warn(
+          `[pod-executor] streamPodLog ${this.podName} failed, falling back to poll: ${formatErr(err)}`
+        );
         await this.tryStartPollingLogs();
       }
     } else {
@@ -426,8 +541,12 @@ class PodExecutionHandle implements ExecutionHandle {
           this.logSinceSeconds,
           Math.ceil(this.deps.pollIntervalMs / 1_000) + 1
         );
-      } catch {
-        // ignore transient read failures
+      } catch (err) {
+        // Transient read failures don't kill wait() — it has its own
+        // readJob-based poll loop. We warn so repeated failures are visible.
+        console.warn(
+          `[pod-executor] log poll tick failed for ${this.podName}: ${formatErr(err)}`
+        );
       }
     };
     this.logPollTimer = setInterval(tick, this.deps.pollIntervalMs);
@@ -439,8 +558,10 @@ class PodExecutionHandle implements ExecutionHandle {
     if (this.logAborter) {
       try {
         this.logAborter.abort();
-      } catch {
-        // ignore
+      } catch (err) {
+        console.warn(
+          `[pod-executor] stopLogStream: aborter.abort() threw: ${formatErr(err)}`
+        );
       }
       this.logAborter = null;
     }
@@ -485,6 +606,7 @@ export class PodExecutor implements AgentExecutor {
   private readonly pollIntervalMs: number;
   private readonly postKillWatchdogMs: number;
   private readonly useStreamingLogs: boolean;
+  private readonly maxConsecutivePollFailures: number;
   private counter = 0;
 
   constructor(options: PodExecutorOptions) {
@@ -503,6 +625,8 @@ export class PodExecutor implements AgentExecutor {
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_MS;
     this.postKillWatchdogMs = options.postKillWatchdogMs ?? 30_000;
     this.useStreamingLogs = options.useStreamingLogs ?? true;
+    this.maxConsecutivePollFailures =
+      options.maxConsecutivePollFailures ?? DEFAULT_MAX_CONSECUTIVE_POLL_FAILURES;
   }
 
   async start(
@@ -547,10 +671,19 @@ export class PodExecutor implements AgentExecutor {
       env.push({ name: key, value });
     }
 
-    const jobName = `worker-${opts.runId}-${ticket.id}-${++this.counter}`.slice(0, 63);
+    // Slugify + finalize so arbitrary runId/ticketId (UUIDs, uppercase, `_`)
+    // produce DNS-1123 legal names. `finalizeK8sName` caps at 63 chars and
+    // strips trailing `-` so the name ends in an alphanumeric as required.
+    const runSlug = slugifyForK8s(opts.runId);
+    const ticketSlug = slugifyForK8s(ticket.id);
+    const counter = ++this.counter;
+    const jobName = finalizeK8sName(`worker-${runSlug}-${ticketSlug}-${counter}`);
+    // Label values allow `.` and `_` in addition to DNS-1123's alphabet, but
+    // must start+end alphanumeric and stay <= 63 chars. We sanitize here so
+    // later label selectors (e.g. the PVC reuse guard) round-trip cleanly.
     const labels = {
-      "relay.run-id": opts.runId,
-      "relay.ticket-id": ticket.id,
+      "relay.run-id": sanitizeK8sLabelValue(opts.runId),
+      "relay.ticket-id": sanitizeK8sLabelValue(ticket.id),
       "relay.role": "worker"
     };
     const job = buildJobManifest({
@@ -569,7 +702,7 @@ export class PodExecutor implements AgentExecutor {
 
     await this.client.createJob(this.namespace, job);
 
-    const handleId = `${ticket.id}-${Date.now()}-${this.counter}`;
+    const handleId = `${ticket.id}-${Date.now()}-${counter}`;
     return new PodExecutionHandle({
       id: handleId,
       sandbox,
@@ -579,7 +712,8 @@ export class PodExecutor implements AgentExecutor {
       pollIntervalMs: this.pollIntervalMs,
       postKillWatchdogMs: this.postKillWatchdogMs,
       timeoutMs: opts.timeoutMs,
-      useStreamingLogs: this.useStreamingLogs
+      useStreamingLogs: this.useStreamingLogs,
+      maxConsecutivePollFailures: this.maxConsecutivePollFailures
     });
   }
 }

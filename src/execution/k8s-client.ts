@@ -103,7 +103,7 @@ export interface DefaultK8sClientOptions {
 export async function createDefaultK8sClient(
   options: DefaultK8sClientOptions = {}
 ): Promise<K8sClientLike> {
-  const k8s = await import("@kubernetes/client-node");
+  const k8s = await loadK8sModule();
   const config = new k8s.KubeConfig();
   if (options.kubeconfig) {
     config.loadFromFile(options.kubeconfig);
@@ -210,6 +210,34 @@ export async function createDefaultK8sClient(
       });
     }
   };
+}
+
+/**
+ * Wrap the dynamic import so a missing optional peer surfaces an actionable
+ * message. `@kubernetes/client-node` lives under `dependencies` today but we
+ * want the error to survive any future shift to `optionalDependencies` or a
+ * pruned install — `ERR_MODULE_NOT_FOUND` on its own tells operators nothing.
+ */
+async function loadK8sModule(): Promise<typeof import("@kubernetes/client-node")> {
+  return wrapK8sLoader(() => import("@kubernetes/client-node"));
+}
+
+/**
+ * Exported for unit tests: accepts an arbitrary loader, applies the same
+ * actionable-error wrapping. Lets us assert the error shape without having
+ * to uninstall the real dependency.
+ */
+export async function wrapK8sLoader<T>(loader: () => Promise<T>): Promise<T> {
+  try {
+    return await loader();
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `@kubernetes/client-node is required for HARNESS_EXECUTOR=pod. ` +
+        `Install via: pnpm add @kubernetes/client-node. Underlying: ${detail}`,
+      { cause: err }
+    );
+  }
 }
 
 function isNotFound(err: unknown): boolean {
