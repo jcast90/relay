@@ -212,13 +212,15 @@ rly list-runs [--workspace <id>]
 rly doctor                      # diagnostics
 ```
 
+During `HARNESS_LIVE=1 rly run` with the Claude provider, tool-use events stream inline on stderr — each tool call appears as `⚙ [HH:MM:SS] [agent] Reading foo.ts`. Pass `--quiet` (or set `RELAY_QUIET=1`) to silence the feed without affecting stdout.
+
 ### TUI (ratatui)
 
 ```bash
 rly tui                         # auto-builds on first run (~1 min)
 ```
 
-Vertical channel sidebar · feed · task board · decisions · agents. Keyboard-driven, fast.
+Vertical channel sidebar · feed · task board · decisions · agents. Keyboard-driven, fast. While a Claude session is streaming, the chat pane shows a live tool-use stack (newest tool call, recent history, and a `last update …` timestamp) — matching the GUI's activity card.
 
 ### GUI (Tauri desktop app)
 
@@ -356,6 +358,7 @@ Both sit behind the same interface; the orchestrator doesn't care which one is l
 | `GITHUB_TOKEN` | GitHub issues + PR watcher |
 | `LINEAR_API_KEY` (or `COMPOSIO_API_KEY`) | Linear issues |
 | `CLAUDE_BIN` | Override the `claude` binary path (default: `claude` on `$PATH`) |
+| `RELAY_QUIET=1` / `--quiet` / `--silent` | Suppress inline tool-use activity during `rly run` |
 | `--sequential` | Use the v1 sequential orchestrator instead of v2 ticket-based |
 | `--no-harness-mcp` | Launch Claude/Codex without attaching the Relay MCP server |
 

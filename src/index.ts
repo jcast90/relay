@@ -17,6 +17,10 @@ import { AgentRegistry } from "./agents/registry.js";
 import { launchGui, launchTui, parseGuiFlags } from "./cli/launch-gui-tui.js";
 import { parseRebuildFlags, runRebuild } from "./cli/rebuild.js";
 import { launchInteractiveCommand } from "./cli/launcher.js";
+import {
+  createStreamActivityRenderer,
+  isQuietMode
+} from "./cli/stream-activity-renderer.js";
 import { hasOnboarded, parseWelcomeFlags, runWelcome } from "./cli/welcome.js";
 import {
   ensureHarnessWorkspace,
@@ -254,11 +258,25 @@ export async function main(): Promise<void> {
   const agentOverrides = parseAgentOverrides();
   await registerAgentNames({ defaultProvider, overrides: agentOverrides });
   const registry = new AgentRegistry();
+
+  // Inline tool-use activity (OSS-06). Active only for live Claude runs where
+  // stderr is a TTY and the user hasn't opted out via --quiet / RELAY_QUIET.
+  // Scripted runs don't hit the Claude CLI so there's nothing to stream.
+  const streamQuiet = isQuietMode(args);
+  const streamRendererEnabled = live && !streamQuiet;
+  const streamRenderers = new Map<string, ReturnType<typeof createStreamActivityRenderer>>();
   const agents = createLiveAgents({
     cwd,
     invoker: live ? undefined : new ScriptedInvoker(cwd),
     defaultProvider,
-    overrides: agentOverrides
+    overrides: agentOverrides,
+    onStreamLineFor: streamRendererEnabled
+      ? (spec) => {
+          const renderer = createStreamActivityRenderer({ label: spec.id });
+          streamRenderers.set(spec.id, renderer);
+          return (line: string) => renderer.onLine(line);
+        }
+      : undefined
   });
 
   for (const agent of agents) {
@@ -306,6 +324,9 @@ export async function main(): Promise<void> {
       run = await orchestratorV2.run(featureRequest, runId);
     }
   } catch (error) {
+    // Flush any pending streaming activity before surfacing the failure so
+    // the last few tool calls aren't lost when a burst was still in flight.
+    for (const r of streamRenderers.values()) r.flush();
     console.error("Orchestrator failed:", error instanceof Error ? error.message : error);
 
     // Mark the run as FAILED in the index so the dashboard doesn't show it as active
@@ -327,6 +348,7 @@ export async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
+  for (const r of streamRenderers.values()) r.flush();
   const recentRuns = await artifactStore.readRunsIndex();
 
   console.log(`Run id: ${run.id}`);

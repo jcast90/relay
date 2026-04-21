@@ -53,6 +53,13 @@ interface AgentFactoryOptions {
   defaultProvider?: AgentProvider;
   defaultModel?: string;
   overrides?: Record<string, { provider?: AgentProvider; model?: string }>;
+  /**
+   * Per-agent streaming hook. When supplied, the factory will pass it to each
+   * Claude-provider agent so stdout lines can be fed to the CLI activity
+   * renderer. The factory calls this for every spec so callers can scope the
+   * renderer per-agent (e.g. label it with the agent's displayName).
+   */
+  onStreamLineFor?: (spec: AgentSpec) => ((line: string) => void) | undefined;
 }
 
 export function createLiveAgents(options: AgentFactoryOptions): Agent[] {
@@ -64,6 +71,10 @@ export function createLiveAgents(options: AgentFactoryOptions): Agent[] {
     const provider = override?.provider ?? spec.provider ?? defaultProvider;
     const model = override?.model ?? spec.model ?? options.defaultModel;
     const AgentClass = provider === "codex" ? CodexCliAgent : ClaudeCliAgent;
+    // Only Claude supports tool_use stream-json today — passing this to
+    // CodexCliAgent is harmless but ignored there.
+    const onStreamLine =
+      provider === "claude" ? options.onStreamLineFor?.(spec) : undefined;
 
     return new AgentClass({
       id: spec.id,
@@ -75,7 +86,8 @@ export function createLiveAgents(options: AgentFactoryOptions): Agent[] {
       },
       cwd: options.cwd,
       model,
-      invoker
+      invoker,
+      onStreamLine
     });
   });
 }

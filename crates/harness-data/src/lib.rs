@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub mod tool_activity;
+
 // --- Workspace Registry ---
 
 #[derive(Debug, Deserialize)]

@@ -754,18 +754,21 @@ impl App {
                 self.chat_streaming = true;
             }
             WorkerEvent::Activity(desc) => {
-                // Push to activity stack for this alias
+                use data::tool_activity::{ACTIVITY_STACK_MAX, ACTIVITY_TOP_N};
+                let now = now_time();
+                // Cap BEFORE appending so a burst of tool_use blocks can't spike
+                // the stack past the limit even for a single frame (mirrors the
+                // fix being shipped in OSS-02 / gap #12).
                 let stack = self.activity_stacks
                     .entry(alias.clone())
                     .or_insert_with(|| ActivityStack {
                         entries: Vec::new(),
                         agent_alias: alias.clone(),
                     });
-                stack.entries.push((desc.clone(), now_time()));
-                // Keep max 20 entries
-                if stack.entries.len() > 20 {
+                while stack.entries.len() >= ACTIVITY_STACK_MAX {
                     stack.entries.remove(0);
                 }
+                stack.entries.push((desc.clone(), now.clone()));
 
                 // Remove previous activity message for this alias if it's the last message
                 if let Some(last) = self.chat_messages.last() {
@@ -780,28 +783,42 @@ impl App {
                     }
                 }
 
-                // Build stacked activity content — show top 3
+                // Build stacked activity content. Top-N newest visible (most
+                // recent last — natural reading order), each prefixed with a
+                // wall-clock timestamp so the user can see how fast tool calls
+                // are firing. Matches the GUI's stacked card layout.
                 let stack = self.activity_stacks.get(&alias).unwrap();
-                let top_n = if self.activity_expanded { stack.entries.len() } else { 3 };
-                let recent: Vec<&str> = stack.entries.iter()
-                    .rev()
-                    .take(top_n)
-                    .map(|(d, _)| d.as_str())
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect();
+                let top_n = if self.activity_expanded { stack.entries.len() } else { ACTIVITY_TOP_N };
                 let total = stack.entries.len();
-                let content = if total > top_n {
-                    format!("{}\n  +{} more", recent.join("\n"), total - top_n)
-                } else {
-                    recent.join("\n")
-                };
+                let start = total.saturating_sub(top_n);
+                let mut lines: Vec<String> = Vec::with_capacity(top_n + 2);
+
+                // First line is the header-adjacent status ("N actions · thinking")
+                // so the UI layer always has something to pair with the alias
+                // badge, mirroring the GUI's `stream-status` span.
+                let action_label = if total == 1 { "action" } else { "actions" };
+                lines.push(format!(
+                    "{} {} · {}",
+                    total,
+                    action_label,
+                    if self.chat_streaming { "writing response" } else { "thinking" },
+                ));
+
+                for (d, ts) in &stack.entries[start..] {
+                    lines.push(format!("[{}] {}", ts, d));
+                }
+                let hidden = total.saturating_sub(top_n);
+                if hidden > 0 {
+                    lines.push(format!("  +{} more", hidden));
+                }
+                if let Some((_, last_ts)) = stack.entries.last() {
+                    lines.push(format!("last update {}", last_ts));
+                }
 
                 self.chat_messages.push(ChatMessage {
                     role: ChatRole::Activity,
-                    content,
-                    timestamp: now_time(),
+                    content: lines.join("\n"),
+                    timestamp: now,
                     agent_alias: alias.clone(),
                 });
                 self.chat_scroll = usize::MAX;
@@ -2379,7 +2396,7 @@ fn spawn_claude_worker_with_session(
                                                         Some("tool_use") => {
                                                             let tool_name = block.get("name").and_then(|v| v.as_str()).unwrap_or("tool");
                                                             let input = block.get("input").unwrap_or(&serde_json::Value::Null);
-                                                            let desc = describe_tool_use(tool_name, input);
+                                                            let desc = data::tool_activity::describe_tool_use(tool_name, input);
                                                             let _ = evt_tx.send(WorkerEvent::Activity(desc));
                                                         }
                                                         _ => {}
@@ -2437,65 +2454,8 @@ fn spawn_claude_worker_with_session(
     (cmd_tx, evt_rx)
 }
 
-/// Build a human-readable one-liner describing what a tool call is doing.
-fn describe_tool_use(name: &str, input: &serde_json::Value) -> String {
-    let get_str = |key: &str| input.get(key).and_then(|v| v.as_str()).unwrap_or("");
-
-    match name {
-        "Read" => {
-            let path = get_str("file_path");
-            let short = path.rsplit('/').next().unwrap_or(path);
-            format!("Reading {}", short)
-        }
-        "Edit" => {
-            let path = get_str("file_path");
-            let short = path.rsplit('/').next().unwrap_or(path);
-            format!("Editing {}", short)
-        }
-        "Write" => {
-            let path = get_str("file_path");
-            let short = path.rsplit('/').next().unwrap_or(path);
-            format!("Writing {}", short)
-        }
-        "Bash" => {
-            let cmd = get_str("command");
-            format!("$ {}", truncate_str(cmd, 50))
-        }
-        "Grep" => {
-            let pattern = get_str("pattern");
-            format!("Searching for '{}'", truncate_str(pattern, 40))
-        }
-        "Glob" => {
-            let pattern = get_str("pattern");
-            format!("Finding files: {}", pattern)
-        }
-        "Agent" => {
-            let desc = get_str("description");
-            if desc.is_empty() {
-                "Spawning agent".to_string()
-            } else {
-                format!("Agent: {}", desc)
-            }
-        }
-        "WebSearch" => {
-            let query = get_str("query");
-            format!("Web search: {}", truncate_str(query, 40))
-        }
-        "WebFetch" => {
-            let url = get_str("url");
-            format!("Fetching {}", truncate_str(url, 40))
-        }
-        "LSP" => {
-            let method = get_str("method");
-            format!("LSP {}", method)
-        }
-        "Skill" => {
-            let skill = get_str("skill");
-            format!("/{}", skill)
-        }
-        _ => name.to_string(),
-    }
-}
+// `describe_tool_use` now lives in `harness_data::tool_activity` so the GUI
+// (src-tauri) and the TUI render identical one-liners. See OSS-06.
 
 fn prompt_auto_approve() -> bool {
     use std::io::Write;

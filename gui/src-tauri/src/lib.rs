@@ -305,37 +305,8 @@ enum ChatEvent {
     Error { stream_id: u64, message: String },
 }
 
-fn describe_tool_use(name: &str, input: &serde_json::Value) -> String {
-    let s = |k: &str| {
-        input
-            .get(k)
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string()
-    };
-    let basename = |p: &str| p.rsplit('/').next().unwrap_or(p).to_string();
-    let trunc = |s: String, n: usize| {
-        if s.chars().count() <= n {
-            s
-        } else {
-            let mut out: String = s.chars().take(n).collect();
-            out.push('…');
-            out
-        }
-    };
-    match name {
-        "Read" => format!("Reading {}", basename(&s("file_path"))),
-        "Edit" => format!("Editing {}", basename(&s("file_path"))),
-        "Write" => format!("Writing {}", basename(&s("file_path"))),
-        "Bash" => format!("$ {}", trunc(s("command"), 60)),
-        "Grep" => format!("Searching '{}'", trunc(s("pattern"), 40)),
-        "Glob" => format!("Finding {}", s("pattern")),
-        "WebSearch" => format!("Web search: {}", trunc(s("query"), 40)),
-        "WebFetch" => format!("Fetching {}", trunc(s("url"), 50)),
-        "Skill" => format!("/{}", s("skill")),
-        _ => name.to_string(),
-    }
-}
+// `describe_tool_use` lives in the shared `harness_data::tool_activity`
+// module so the GUI, TUI, and CLI render identical one-liners. See OSS-06.
 
 #[tauri::command]
 fn start_chat(
@@ -527,7 +498,9 @@ fn start_chat(
                                         "chat-event",
                                         ChatEvent::Activity {
                                             stream_id,
-                                            text: describe_tool_use(name, input),
+                                            text: data::tool_activity::describe_tool_use(
+                                                name, input,
+                                            ),
                                         },
                                     );
                                 }
