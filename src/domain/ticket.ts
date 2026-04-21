@@ -83,6 +83,15 @@ export interface TicketLedgerEntry {
    * must do so by re-initializing, not by patching this field in place.
    */
   runId: string | null;
+  /**
+   * Optional alias of the repo (from `Channel.repoAssignments[].alias`) this
+   * ticket should be routed to. When set, the orchestrator / spawner uses
+   * the matching repo assignment to pick the target workspace for the
+   * ticket's agent. When unset, callers fall back to the channel's primary
+   * repo (via `ChannelStore.getPrimaryAssignment`). Optional for back-compat
+   * with ticket files written before per-repo routing existed.
+   */
+  assignedAlias?: string;
 }
 
 export function initializeTicketLedger(

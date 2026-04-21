@@ -470,12 +470,15 @@ async function handleChannelCommand(args: string[]): Promise<void> {
   if (sub === "create") {
     const name = args[1];
     if (!name) {
-      console.error("Usage: rly channel create <name> [description] [--repos alias:wsId:path,...]");
+      console.error(
+        "Usage: rly channel create <name> [description] [--repos alias:wsId:path,...] [--primary <alias>]"
+      );
       process.exitCode = 1;
       return;
     }
 
     const reposArg = parseNamedArg(args, "--repos");
+    const primaryArg = parseNamedArg(args, "--primary");
     const repoAssignments = reposArg
       ? reposArg.split(",").map((r) => {
           const [alias, workspaceId, ...pathParts] = r.split(":");
@@ -483,11 +486,39 @@ async function handleChannelCommand(args: string[]): Promise<void> {
         })
       : undefined;
 
-    // Description is everything after name that isn't a flag
-    const descParts = args.slice(2).filter((a) => !a.startsWith("--") && a !== reposArg);
+    let primaryWorkspaceId: string | undefined;
+    if (primaryArg) {
+      if (!repoAssignments || repoAssignments.length === 0) {
+        console.error(
+          `--primary ${primaryArg} requires --repos with at least one entry.`
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const match = repoAssignments.find((r) => r.alias === primaryArg);
+      if (!match) {
+        const known = repoAssignments.map((r) => r.alias).join(", ");
+        console.error(
+          `--primary alias "${primaryArg}" is not in --repos (known aliases: ${known}).`
+        );
+        process.exitCode = 1;
+        return;
+      }
+      primaryWorkspaceId = match.workspaceId;
+    }
+
+    // Description is everything after name that isn't a flag value.
+    const descParts = args
+      .slice(2)
+      .filter((a) => !a.startsWith("--") && a !== reposArg && a !== primaryArg);
     const description = descParts.join(" ") || `Channel for ${name}`;
 
-    const channel = await store.createChannel({ name, description, repoAssignments });
+    const channel = await store.createChannel({
+      name,
+      description,
+      repoAssignments,
+      primaryWorkspaceId
+    });
 
     if (args.includes("--json")) {
       jsonOut(channel);
@@ -521,19 +552,51 @@ async function handleChannelCommand(args: string[]): Promise<void> {
   if (sub === "update") {
     const channelId = args[1];
     if (!channelId) {
-      console.error("Usage: rly channel update <channelId> --repos alias:wsId:path,...");
+      console.error(
+        "Usage: rly channel update <channelId> [--repos alias:wsId:path,...] [--primary <alias>]"
+      );
       process.exitCode = 1;
       return;
     }
 
     const reposArg = parseNamedArg(args, "--repos");
-    const patch: Record<string, unknown> = {};
+    const primaryArg = parseNamedArg(args, "--primary");
+    const patch: Partial<
+      Pick<
+        import("./domain/channel.js").Channel,
+        "repoAssignments" | "primaryWorkspaceId"
+      >
+    > = {};
 
     if (reposArg) {
       patch.repoAssignments = reposArg.split(",").map((r) => {
         const [alias, workspaceId, ...pathParts] = r.split(":");
         return { alias, workspaceId, repoPath: pathParts.join(":") };
       });
+    }
+
+    if (primaryArg) {
+      // Resolve --primary against the assignments that will be on the
+      // channel after this update: the patched repos (if provided) take
+      // precedence over what's currently on disk.
+      const existing = await store.getChannel(channelId);
+      if (!existing) {
+        console.error(`Channel not found: ${channelId}`);
+        process.exitCode = 1;
+        return;
+      }
+      const effectiveAssignments =
+        patch.repoAssignments ?? existing.repoAssignments ?? [];
+      const match = effectiveAssignments.find((r) => r.alias === primaryArg);
+      if (!match) {
+        const known = effectiveAssignments.map((r) => r.alias).join(", ") || "(none)";
+        console.error(
+          `--primary alias "${primaryArg}" is not in the channel's repos (known aliases: ${known}).`
+        );
+        process.exitCode = 1;
+        return;
+      }
+      patch.primaryWorkspaceId = match.workspaceId;
     }
 
     const updated = await store.updateChannel(channelId, patch);

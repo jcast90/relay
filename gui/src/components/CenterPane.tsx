@@ -445,6 +445,9 @@ function BoardView({ tickets }: { tickets: TicketLedgerEntry[] }) {
                   }}
                 >
                   <div>{t.title}</div>
+                  {t.assignedAlias && (
+                    <div className="ticket-alias-chip">@{t.assignedAlias}</div>
+                  )}
                   <div className="ticket-meta">
                     {t.specialty} · attempt {t.attempt}
                     {t.assignedAgentName ? ` · ${t.assignedAgentName}` : ""}
@@ -515,6 +518,12 @@ function TicketDetailModal({
             <div className="detail-row">
               <span className="detail-label">Assigned</span>
               <span>{ticket.assignedAgentName}</span>
+            </div>
+          )}
+          {ticket.assignedAlias && (
+            <div className="detail-row">
+              <span className="detail-label">Assigned to</span>
+              <span>@{ticket.assignedAlias}</span>
             </div>
           )}
           {deps.length > 0 && (

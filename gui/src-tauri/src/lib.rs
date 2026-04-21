@@ -1,6 +1,9 @@
 use harness_data as data;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::fs;
 use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::Emitter;
@@ -150,12 +153,27 @@ fn create_channel(
     name: String,
     description: String,
     repos: Vec<RepoAssignmentInput>,
+    #[allow(non_snake_case)] primaryWorkspaceId: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    // Resolve the primary workspace id (if provided) to the matching alias —
+    // the CLI takes `--primary <alias>` because aliases are user-facing, but
+    // the GUI works with workspace ids. When the id isn't in the repos list
+    // we silently drop it; the CLI would error and that matters less than
+    // the create succeeding with a sensible fallback.
+    let primary_alias = primaryWorkspaceId
+        .as_ref()
+        .and_then(|id| repos.iter().find(|r| &r.workspace_id == id))
+        .map(|r| r.alias.clone());
+
     let repos = repos_arg(&repos);
     let mut args: Vec<&str> = vec!["channel", "create", &name, &description, "--json"];
     if !repos.is_empty() {
         args.push("--repos");
         args.push(&repos);
+    }
+    if let Some(ref alias) = primary_alias {
+        args.push("--primary");
+        args.push(alias);
     }
     cli_json(&args)
 }
@@ -570,6 +588,341 @@ fn start_chat(
     Ok(stream_id)
 }
 
+// --- Terminal.app spawn/kill lifecycle (Task #24) ---
+//
+// Each channel tracks an associated-repo agent spawn in
+// `~/.relay/channels/<channelId>/spawns.json`. On macOS, "spawn" opens a new
+// Terminal.app tab running `rly claude` in the repo; we capture the window/tab
+// ids from the AppleScript return value so we can close them again later.
+//
+// We hardcode STALE_HEARTBEAT_MS here (matching the crosslink store) instead
+// of depending on the TS/crosslink side, so self-heal stays self-contained.
+const STALE_HEARTBEAT_MS: u64 = 120_000;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Spawn {
+    pub alias: String,
+    pub repo_path: String,
+    pub spawned_at: String,
+    pub terminal_window_id: Option<u32>,
+    pub terminal_tab_id: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct SpawnsFile {
+    #[serde(default = "default_spawns_version")]
+    version: u32,
+    #[serde(default)]
+    spawns: BTreeMap<String, Spawn>,
+}
+
+fn default_spawns_version() -> u32 {
+    1
+}
+
+fn spawns_path(channel_id: &str) -> PathBuf {
+    data::harness_root()
+        .join("channels")
+        .join(channel_id)
+        .join("spawns.json")
+}
+
+fn load_spawns_file(channel_id: &str) -> SpawnsFile {
+    let path = spawns_path(channel_id);
+    match fs::read_to_string(&path) {
+        Ok(raw) => serde_json::from_str::<SpawnsFile>(&raw).unwrap_or_else(|_| SpawnsFile {
+            version: 1,
+            spawns: BTreeMap::new(),
+        }),
+        Err(_) => SpawnsFile {
+            version: 1,
+            spawns: BTreeMap::new(),
+        },
+    }
+}
+
+fn save_spawns_file(channel_id: &str, file: &SpawnsFile) -> Result<(), String> {
+    let path = spawns_path(channel_id);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("create spawns dir: {}", e))?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    let content = serde_json::to_string_pretty(file)
+        .map_err(|e| format!("serialize spawns.json: {}", e))?;
+    fs::write(&tmp, content).map_err(|e| format!("write spawns.json tmp: {}", e))?;
+    fs::rename(&tmp, &path).map_err(|e| format!("rename spawns.json: {}", e))
+}
+
+/// Run `osascript -e <script>` and return trimmed stdout, or an error string.
+fn run_osascript(script: &str) -> Result<String, String> {
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("osascript failed to launch: {}", e))?;
+    if !output.status.success() {
+        return Err(format!(
+            "osascript error: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Parse the result of `do script` — Terminal returns a reference like
+/// `tab 1 of window id 12345` (the exact wording varies by macOS version
+/// but always includes "window id <N>" and a "tab <N>" index, both as
+/// integers). Returns (window_id, tab_id). Returns None on parse miss so
+/// callers can fall back to a best-effort windowId.
+fn parse_terminal_tab_ref(raw: &str) -> (Option<u32>, Option<u32>) {
+    let window_id = extract_int_after(raw, "window id ");
+    // Terminal's textual form is usually "tab <N> of window id <M>".
+    // Pull the first number after the literal word "tab " for the tab index.
+    let tab_id = extract_int_after(raw, "tab ");
+    (window_id, tab_id)
+}
+
+fn extract_int_after(haystack: &str, needle: &str) -> Option<u32> {
+    let idx = haystack.find(needle)?;
+    let rest = &haystack[idx + needle.len()..];
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        None
+    } else {
+        digits.parse::<u32>().ok()
+    }
+}
+
+/// Best-effort query of Terminal's frontmost window id. Returns None if
+/// Terminal isn't running or AppleScript fails.
+fn frontmost_terminal_window_id() -> Option<u32> {
+    let script = r#"tell application "Terminal" to id of front window"#;
+    run_osascript(script).ok().and_then(|s| s.parse::<u32>().ok())
+}
+
+/// AppleScript single-quote escaping: wrap in single quotes, any inner `'`
+/// becomes `'\''`. Used for shell path interpolation inside the `do script`
+/// command we hand to Terminal.
+fn shell_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// AppleScript string literal escaping: wrap in double quotes, escape inner
+/// backslashes and double quotes.
+fn applescript_string(s: &str) -> String {
+    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{}\"", escaped)
+}
+
+#[tauri::command]
+fn spawn_agent(
+    channel_id: String,
+    alias: String,
+    repo_path: String,
+) -> Result<Spawn, String> {
+    if std::env::consts::OS != "macos" {
+        return Err(
+            "spawn is macOS-only — run `rly claude` in the repo manually on this platform".into(),
+        );
+    }
+
+    // Build the shell command the Terminal tab should run. We single-quote
+    // the path to survive spaces and most shell metacharacters, then wrap
+    // the whole shell command as an AppleScript string literal.
+    let shell_cmd = format!("cd {} && rly claude", shell_single_quote(&repo_path));
+    let script = format!(
+        r#"tell application "Terminal" to do script {}"#,
+        applescript_string(&shell_cmd)
+    );
+
+    let raw = run_osascript(&script)
+        .map_err(|e| format!("failed to open Terminal tab: {}", e))?;
+
+    let (mut window_id, mut tab_id) = parse_terminal_tab_ref(&raw);
+
+    // Fallback: if we couldn't parse window id from the `do script` return,
+    // grab the frontmost Terminal window id. Tab index falls back to 0.
+    if window_id.is_none() {
+        window_id = frontmost_terminal_window_id();
+        if tab_id.is_none() {
+            tab_id = Some(0);
+        }
+    }
+
+    let spawn = Spawn {
+        alias: alias.clone(),
+        repo_path,
+        spawned_at: chrono::Utc::now().to_rfc3339(),
+        terminal_window_id: window_id,
+        terminal_tab_id: tab_id,
+    };
+
+    // Idempotent on alias: overwrite any existing entry.
+    let mut file = load_spawns_file(&channel_id);
+    file.version = 1;
+    file.spawns.insert(alias, spawn.clone());
+    save_spawns_file(&channel_id, &file)?;
+
+    Ok(spawn)
+}
+
+/// Best-effort SIGTERM to a crosslink session whose repoPath matches.
+/// Reads `~/.relay/crosslink/sessions/*.json` and kills the first match.
+/// Any failure is swallowed; this is a fallback when osascript can't find
+/// the tab.
+fn try_sigterm_matching_session(repo_path: &str) {
+    let sessions_dir = data::harness_root().join("crosslink").join("sessions");
+    let Ok(entries) = fs::read_dir(&sessions_dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(raw) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(session) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        let session_repo = session.get("repoPath").and_then(|v| v.as_str()).unwrap_or("");
+        if session_repo != repo_path {
+            continue;
+        }
+        let Some(pid) = session.get("pid").and_then(|v| v.as_u64()) else {
+            continue;
+        };
+        // Shell out to `kill` — avoids pulling in libc/nix just for SIGTERM.
+        let _ = Command::new("kill")
+            .arg("-TERM")
+            .arg(pid.to_string())
+            .status();
+        break;
+    }
+}
+
+#[tauri::command]
+fn kill_spawned_agent(channel_id: String, alias: String) -> Result<(), String> {
+    let mut file = load_spawns_file(&channel_id);
+    let Some(entry) = file.spawns.remove(&alias) else {
+        // Already gone — treat as success.
+        return Ok(());
+    };
+
+    if std::env::consts::OS == "macos" {
+        if let Some(wid) = entry.terminal_window_id {
+            // Targeted: close the exact tab in the tracked window, if we
+            // have a tab index. Fall back to closing the whole window if
+            // the tab lookup fails.
+            let close_script = if let Some(tid) = entry.terminal_tab_id {
+                format!(
+                    r#"tell application "Terminal"
+                        try
+                            close tab {tid} of window id {wid} saving no
+                        on error
+                            try
+                                close window id {wid} saving no
+                            end try
+                        end try
+                    end tell"#,
+                    tid = tid,
+                    wid = wid,
+                )
+            } else {
+                format!(
+                    r#"tell application "Terminal"
+                        try
+                            close window id {wid} saving no
+                        end try
+                    end tell"#,
+                    wid = wid,
+                )
+            };
+            let _ = run_osascript(&close_script);
+        }
+    }
+
+    // Best-effort SIGTERM to the crosslink session for this repo.
+    try_sigterm_matching_session(&entry.repo_path);
+
+    // Always rewrite spawns.json without this alias, even if osascript
+    // failed — the user may have closed the tab by hand.
+    file.version = 1;
+    save_spawns_file(&channel_id, &file)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn list_spawns(channel_id: String) -> Result<Vec<Spawn>, String> {
+    let mut file = load_spawns_file(&channel_id);
+
+    // Build a lookup of live crosslink sessions keyed by repoPath. A session
+    // is "live" if its lastHeartbeat is newer than STALE_HEARTBEAT_MS.
+    let live_repos = load_live_crosslink_repos();
+
+    let mut survivors: Vec<Spawn> = Vec::new();
+    let mut drop_aliases: Vec<String> = Vec::new();
+
+    for (alias, spawn) in &file.spawns {
+        if live_repos.contains(&spawn.repo_path) {
+            survivors.push(spawn.clone());
+        } else {
+            drop_aliases.push(alias.clone());
+        }
+    }
+
+    if !drop_aliases.is_empty() {
+        for alias in &drop_aliases {
+            file.spawns.remove(alias);
+        }
+        file.version = 1;
+        save_spawns_file(&channel_id, &file)?;
+    }
+
+    Ok(survivors)
+}
+
+fn load_live_crosslink_repos() -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    let sessions_dir = data::harness_root().join("crosslink").join("sessions");
+    let Ok(entries) = fs::read_dir(&sessions_dir) else {
+        return out;
+    };
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(raw) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(session) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        let Some(repo) = session.get("repoPath").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(hb) = session.get("lastHeartbeat").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(hb) else {
+            continue;
+        };
+        let hb_ms = parsed.timestamp_millis();
+        if (now_ms - hb_ms) <= STALE_HEARTBEAT_MS as i64 {
+            out.insert(repo.to_string());
+        }
+    }
+    out
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -596,6 +949,9 @@ pub fn run() {
             delete_session,
             append_session_message,
             start_chat,
+            spawn_agent,
+            kill_spawned_agent,
+            list_spawns,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

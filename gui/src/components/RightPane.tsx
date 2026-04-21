@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { Channel, ChannelRunLink, RunIndexEntry } from "../types";
+import type { Channel, ChannelRunLink, RunIndexEntry, Spawn } from "../types";
 import { SessionList } from "./SessionList";
 
 type Props = {
@@ -68,15 +68,25 @@ export function RightPane({
 
       <div className="section">
         <h4>Repos ({channel.repoAssignments.length})</h4>
-        {channel.repoAssignments.map((r) => (
-          <div key={r.workspaceId} className="row">
-            <span>@{r.alias}</span>
-            <span className="right" title={r.repoPath}>
-              {basename(r.repoPath)}
-            </span>
-          </div>
-        ))}
+        {channel.repoAssignments.map((r) => {
+          const isPrimary =
+            channel.primaryWorkspaceId &&
+            r.workspaceId === channel.primaryWorkspaceId;
+          return (
+            <div key={r.workspaceId} className="row">
+              <span>
+                @{r.alias}
+                {isPrimary && <span className="primary-badge">PRIMARY</span>}
+              </span>
+              <span className="right" title={r.repoPath}>
+                {basename(r.repoPath)}
+              </span>
+            </div>
+          );
+        })}
       </div>
+
+      <SpawnedAgents channelId={channel.channelId} refreshTick={refreshTick} />
 
       <div className="section">
         <h4>Runs ({runs.length})</h4>
@@ -93,6 +103,84 @@ export function RightPane({
 }
 
 type RunInfo = { run: RunIndexEntry; workspaceId: string };
+
+/**
+ * Spawned agents panel — shows external Terminal-hosted agents launched
+ * from this channel via the spawn flow. Empty state hides the whole
+ * section (opt-in concept; not primary UI).
+ *
+ * We refetch on mount, on channelId change, and on every refreshTick so
+ * the list stays roughly in sync with backend state even when other
+ * surfaces trigger spawns. Kill is optimistic: we drop the row from
+ * local state before the async call resolves, then rollback if it fails.
+ */
+function SpawnedAgents({
+  channelId,
+  refreshTick,
+}: {
+  channelId: string;
+  refreshTick: number;
+}) {
+  const [spawns, setSpawns] = useState<Spawn[]>([]);
+  const [killError, setKillError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listSpawns(channelId)
+      .then((rows) => {
+        if (!cancelled) setSpawns(rows);
+      })
+      .catch(() => {
+        // Silently fall back to empty. listSpawns might fail if Task #24
+        // hasn't registered its Tauri command yet; the section just
+        // hides rather than showing a scary error.
+        if (!cancelled) setSpawns([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [channelId, refreshTick]);
+
+  if (spawns.length === 0) return null;
+
+  const kill = async (alias: string) => {
+    setKillError(null);
+    const before = spawns;
+    // Optimistic remove.
+    setSpawns((prev) => prev.filter((s) => s.alias !== alias));
+    try {
+      await api.killSpawnedAgent(channelId, alias);
+    } catch (e) {
+      setKillError(`Failed to kill @${alias}: ${e}`);
+      setSpawns(before);
+    }
+  };
+
+  return (
+    <div className="section">
+      <h4>Spawned agents ({spawns.length})</h4>
+      <div className="spawn-list">
+        {spawns.map((s) => (
+          <div key={s.alias} className="spawn-row">
+            <span className="spawn-alias">@{s.alias}</span>
+            <span className="spawn-repo" title={s.repoPath}>
+              {basename(s.repoPath)}
+            </span>
+            <button
+              className="kill-button"
+              onClick={() => kill(s.alias)}
+              title="Kill this spawned agent"
+            >
+              Kill
+            </button>
+          </div>
+        ))}
+      </div>
+      {killError && <div className="error">{killError}</div>}
+    </div>
+  );
+}
 
 function basename(p: string): string {
   return p.split("/").filter(Boolean).pop() ?? p;

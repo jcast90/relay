@@ -57,6 +57,15 @@ export interface Channel {
   members: ChannelMember[];
   pinnedRefs: ChannelRef[];
   repoAssignments?: RepoAssignment[];
+  /**
+   * When set, identifies which entry in `repoAssignments` is the "primary"
+   * repo for this channel — the one the user chats in by default and the
+   * one orchestrator/agents route to when a ticket has no explicit
+   * `assignedAlias`. When unset, callers fall back to `repoAssignments[0]`.
+   * Optional for back-compat with channel.json files written before the
+   * primary/associated model existed.
+   */
+  primaryWorkspaceId?: string;
   createdAt: string;
   updatedAt: string;
 }

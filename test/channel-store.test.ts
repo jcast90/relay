@@ -197,4 +197,209 @@ describe("channel store", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  describe("primary repo assignment", () => {
+    const assignments = [
+      { alias: "ui", workspaceId: "ws-ui", repoPath: "/tmp/ui" },
+      { alias: "be", workspaceId: "ws-be", repoPath: "/tmp/be" },
+      { alias: "brain", workspaceId: "ws-brain", repoPath: "/tmp/brain" }
+    ];
+
+    it("persists primaryWorkspaceId passed to createChannel", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      try {
+        const channel = await store.createChannel({
+          name: "#multi-repo",
+          description: "Multi-repo channel",
+          repoAssignments: assignments,
+          primaryWorkspaceId: "ws-be"
+        });
+
+        expect(channel.primaryWorkspaceId).toBe("ws-be");
+        const fetched = await store.getChannel(channel.channelId);
+        expect(fetched!.primaryWorkspaceId).toBe("ws-be");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("drops primaryWorkspaceId that doesn't match any assignment on create", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      try {
+        const channel = await store.createChannel({
+          name: "#bad-primary",
+          description: "Dangling primary",
+          repoAssignments: assignments,
+          primaryWorkspaceId: "ws-does-not-exist"
+        });
+
+        expect(channel.primaryWorkspaceId).toBeUndefined();
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("getPrimaryAssignment returns the matching assignment when primary is set", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      try {
+        const channel = await store.createChannel({
+          name: "#primary-set",
+          description: "Primary set",
+          repoAssignments: assignments,
+          primaryWorkspaceId: "ws-brain"
+        });
+
+        const primary = store.getPrimaryAssignment(channel);
+        expect(primary).not.toBeNull();
+        expect(primary!.alias).toBe("brain");
+        expect(primary!.workspaceId).toBe("ws-brain");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("getPrimaryAssignment falls back to the first assignment when primary is unset", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      try {
+        const channel = await store.createChannel({
+          name: "#primary-unset",
+          description: "Primary unset",
+          repoAssignments: assignments
+        });
+
+        expect(channel.primaryWorkspaceId).toBeUndefined();
+        const primary = store.getPrimaryAssignment(channel);
+        expect(primary).not.toBeNull();
+        expect(primary!.alias).toBe("ui");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("getPrimaryAssignment falls back to first assignment when primary points at a missing workspaceId", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      try {
+        // Simulate a channel file that was hand-edited or written by an
+        // older version: primaryWorkspaceId is set but isn't in
+        // repoAssignments. The helper must not strand the caller.
+        const channel = await store.createChannel({
+          name: "#stale-primary",
+          description: "Stale primary",
+          repoAssignments: assignments
+        });
+        const stale = { ...channel, primaryWorkspaceId: "ws-gone" };
+
+        const primary = store.getPrimaryAssignment(stale);
+        expect(primary).not.toBeNull();
+        expect(primary!.alias).toBe("ui");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("getPrimaryAssignment returns null when the channel has no repoAssignments", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      try {
+        const channel = await store.createChannel({
+          name: "#no-repos",
+          description: "No repos"
+        });
+        expect(store.getPrimaryAssignment(channel)).toBeNull();
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("updateChannel reassigns primary to first remaining repo when the current primary is removed", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      try {
+        const channel = await store.createChannel({
+          name: "#shrink",
+          description: "Shrink repos",
+          repoAssignments: assignments,
+          primaryWorkspaceId: "ws-brain"
+        });
+
+        const updated = await store.updateChannel(channel.channelId, {
+          repoAssignments: [assignments[0], assignments[1]] // drops brain
+        });
+
+        expect(updated).not.toBeNull();
+        // brain is gone → primary should fall back to first remaining (ui)
+        expect(updated!.primaryWorkspaceId).toBe("ws-ui");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("updateChannel preserves primaryWorkspaceId when the primary survives the repos update", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      try {
+        const channel = await store.createChannel({
+          name: "#preserve",
+          description: "Preserve primary",
+          repoAssignments: assignments,
+          primaryWorkspaceId: "ws-be"
+        });
+
+        const updated = await store.updateChannel(channel.channelId, {
+          repoAssignments: [assignments[0], assignments[1]] // keeps be
+        });
+
+        expect(updated!.primaryWorkspaceId).toBe("ws-be");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("updateChannel can change primaryWorkspaceId directly", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      try {
+        const channel = await store.createChannel({
+          name: "#repoint",
+          description: "Repoint primary",
+          repoAssignments: assignments,
+          primaryWorkspaceId: "ws-ui"
+        });
+
+        const updated = await store.updateChannel(channel.channelId, {
+          primaryWorkspaceId: "ws-brain"
+        });
+
+        expect(updated!.primaryWorkspaceId).toBe("ws-brain");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("updateChannel clears primaryWorkspaceId when repoAssignments is emptied", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      try {
+        const channel = await store.createChannel({
+          name: "#clear",
+          description: "Clear primary",
+          repoAssignments: assignments,
+          primaryWorkspaceId: "ws-ui"
+        });
+
+        const updated = await store.updateChannel(channel.channelId, {
+          repoAssignments: []
+        });
+
+        expect(updated!.primaryWorkspaceId).toBeUndefined();
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  });
 });
