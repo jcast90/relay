@@ -22,7 +22,7 @@ Top-level layout of the repo. One line per directory, pointing at the concrete s
 - **`agents/`** — Claude and Codex CLI adapters; `command-invoker.ts` for spawning.
 - **`channels/`** — `channel-store.ts` owns feed / tickets / decisions; `ao-notifier.ts` bridges to Composio's AO orchestrator.
 - **`integrations/`** — AO plugins: tracker (GitHub/Linear), scm (PR watcher), pr-poller, env-mutex.
-- **`execution/`** — `executor.ts` abstraction, `local-child-process-executor.ts`, pod executor for k8s.
+- **`execution/`** — `executor.ts` abstraction, `local-child-process-executor.ts`.
 - **`storage/`** — `HarnessStore` interface in `store.ts`, `FileHarnessStore` and `PostgresHarnessStore` backends.
 - **`domain/`** — shared TS types and zod schemas. Canonical source for shapes; Rust side mirrors these.
 - **`mcp/`** — MCP server + tool definitions (harness / channel / crosslink tool groups).

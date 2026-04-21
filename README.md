@@ -396,7 +396,7 @@ src/
   agents/                     # Claude/Codex CLI adapters, registry, invocation
   channels/                   # ChannelStore, feed, decisions, ao-notifier
   integrations/               # AO plugins — tracker, scm, pr-poller, env-mutex
-  execution/                  # executor abstraction, verification-runner, k8s pod executor
+  execution/                  # executor abstraction, verification-runner
   storage/                    # HarnessStore interface + file / postgres backends
   domain/                     # shared types + zod schemas
   mcp/                        # MCP server + tool definitions
@@ -464,7 +464,6 @@ A **`CLAUDE.md`** at the repo root (when present) tells any Claude agent working
 - **Spawn is macOS-only.** Linux/Windows users launch associated-repo agents manually.
 - **Cost guardrails not yet implemented.** Token usage isn't tracked or capped. Use `RELAY_AUTO_APPROVE=1` with care.
 - **Postgres backend is opt-in, file-only is default.** The coordination features (`LISTEN/NOTIFY` cross-agent decision broadcasts) activate when Postgres is configured.
-- **Pod executor is feature-flagged.** Needs a Kubernetes cluster and kubeconfig; runs verifications in pods against per-workspace PVCs.
 
 ## License
 
