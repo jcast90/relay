@@ -23,16 +23,18 @@ export type ServeValidation =
   | { kind: "error"; message: string };
 
 /**
- * Hosts we treat as loopback-only. `localhost` is included even though it can
- * in theory resolve elsewhere via `/etc/hosts` — in practice every mainstream
- * setup points it at 127.0.0.1/::1, and users who deliberately re-point it
- * into the wide world are already in "you're on your own" territory.
+ * Hosts we treat as loopback-only.
+ *
+ * We deliberately do NOT include the literal string "localhost" because it
+ * can resolve to non-loopback addresses in container/CI environments (some
+ * Docker/Kubernetes setups, CI runners with custom `/etc/hosts`, IPv6
+ * wildcard bindings, etc.). Silently treating `localhost` as loopback there
+ * would flip the "no token, warn only" path into "no token, world-reachable,
+ * warn only" — exactly the configuration OSS-03 is meant to refuse.
+ *
+ * Callers who want loopback can pass `127.0.0.1` or `::1` explicitly.
  */
-const LOOPBACK_HOSTS: ReadonlySet<string> = new Set([
-  "127.0.0.1",
-  "::1",
-  "localhost"
-]);
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "::1"]);
 
 export function isLoopbackHost(host: string): boolean {
   return LOOPBACK_HOSTS.has(host);

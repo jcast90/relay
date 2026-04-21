@@ -38,6 +38,27 @@ describe("isSecretEnvName", () => {
     expect(isSecretEnvName("KEYBOARD_LAYOUT")).toBe(false);
     expect(isSecretEnvName("MONKEY")).toBe(false);
     expect(isSecretEnvName("AUTHOR")).toBe(false);
+    // `TOKENIZER` must not match — the boundary rule requires `_` or end-of-
+    // string immediately after `TOKEN`, and `TOKENIZER` has neither.
+    expect(isSecretEnvName("TOKENIZER_VERSION")).toBe(false);
+    expect(isSecretEnvName("AUTHOR_NAME")).toBe(false);
+  });
+
+  it("flags concatenated-word credential forms common in the wild", () => {
+    // Stripe, SendGrid, Mailgun, and many other SaaS products ship with
+    // `*_APIKEY` (no separator) rather than `*_API_KEY`.
+    expect(isSecretEnvName("STRIPE_APIKEY")).toBe(true);
+    expect(isSecretEnvName("APIKEY")).toBe(true);
+    // GitHub App / TLS configs use `PRIVATEKEY` without a separator.
+    expect(isSecretEnvName("GITHUB_APP_PRIVATEKEY")).toBe(true);
+    // OAuth ecosystem: all of these are extremely common.
+    expect(isSecretEnvName("SESSION_ACCESSTOKEN")).toBe(true);
+    expect(isSecretEnvName("REFRESHTOKEN")).toBe(true);
+    expect(isSecretEnvName("MY_BEARERTOKEN")).toBe(true);
+    // Bare "keyword" vars that aren't suffix/prefix shapes.
+    expect(isSecretEnvName("BEARER")).toBe(true);
+    expect(isSecretEnvName("JWT_KEY")).toBe(true);
+    expect(isSecretEnvName("OAUTH_SECRET")).toBe(true);
   });
 });
 

@@ -65,7 +65,13 @@ const CLAUDE_PASS_ENV: readonly string[] = [
   "AWS_DEFAULT_REGION",
   "AWS_PROFILE",
   "GOOGLE_APPLICATION_CREDENTIALS",
-  "GCLOUD_PROJECT"
+  "GCLOUD_PROJECT",
+  // Canonical Vertex project vars — `GOOGLE_CLOUD_PROJECT` is what gcloud
+  // and the Google Cloud SDKs actually read; `GCLOUD_PROJECT` above is the
+  // legacy alias. Keep both so users on either convention work.
+  "GOOGLE_CLOUD_PROJECT",
+  "GOOGLE_CLOUD_QUOTA_PROJECT",
+  "CLOUDSDK_CORE_PROJECT"
 ];
 
 /**
@@ -81,6 +87,10 @@ const CODEX_PASS_ENV: readonly string[] = [
   "OPENAI_PROJECT",
   "AZURE_OPENAI_API_KEY",
   "AZURE_OPENAI_ENDPOINT",
+  // Azure OpenAI routing — both naming conventions seen in the wild.
+  "AZURE_OPENAI_API_VERSION",
+  "AZURE_OPENAI_DEPLOYMENT",
+  "AZURE_OPENAI_DEPLOYMENT_NAME",
   "CODEX_HOME"
 ];
 

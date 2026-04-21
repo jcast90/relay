@@ -14,10 +14,16 @@ import {
  */
 
 describe("isLoopbackHost", () => {
-  it("treats 127.0.0.1, ::1, and localhost as loopback", () => {
+  it("treats 127.0.0.1 and ::1 as loopback", () => {
     expect(isLoopbackHost("127.0.0.1")).toBe(true);
     expect(isLoopbackHost("::1")).toBe(true);
-    expect(isLoopbackHost("localhost")).toBe(true);
+  });
+
+  it("does NOT treat the literal string 'localhost' as loopback", () => {
+    // Container/CI hazard: `localhost` can resolve to non-loopback addresses
+    // in some environments, so the validator refuses to treat the name as
+    // automatically safe. Users who want loopback can pass the IP.
+    expect(isLoopbackHost("localhost")).toBe(false);
   });
 
   it("treats everything else as non-loopback", () => {
@@ -117,14 +123,30 @@ describe("validateServeOptions", () => {
     }
   });
 
-  it("treats ::1 and localhost the same as 127.0.0.1", () => {
-    for (const host of ["::1", "localhost"]) {
-      const result = validateServeOptions({
-        host,
-        token: undefined,
-        allowUnauthenticatedRemote: false
-      });
-      expect(result.kind).toBe("ok");
+  it("treats ::1 the same as 127.0.0.1", () => {
+    const result = validateServeOptions({
+      host: "::1",
+      token: undefined,
+      allowUnauthenticatedRemote: false
+    });
+    expect(result.kind).toBe("ok");
+  });
+
+  it("HARD-STOPS on --host localhost + no token (container/CI hazard)", () => {
+    // `localhost` can resolve to non-loopback addresses in containerized /
+    // CI environments, so the validator no longer treats it as loopback.
+    // A serve invocation with `--host localhost` and no token must refuse to
+    // start, not warn — same as any other non-loopback host.
+    const result = validateServeOptions({
+      host: "localhost",
+      token: undefined,
+      allowUnauthenticatedRemote: false
+    });
+
+    expect(result.kind).toBe("error");
+    if (result.kind === "error") {
+      expect(result.message).toMatch(/Refusing to start/i);
+      expect(result.message).toMatch(/localhost/);
     }
   });
 });

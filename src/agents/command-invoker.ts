@@ -68,9 +68,15 @@ const DEFAULT_PREFIX_WHITELIST: readonly string[] = [
  * (`FOO_TOKEN`, `API_KEY`) and prefix forms (`TOKEN_FOO`, `KEY_BAR`). Used as
  * a second-pass filter so a well-meaning addition to the whitelist can't
  * accidentally leak a secret — the strip pass runs after the allow pass.
+ *
+ * The word list covers both the conventional `_`-separated forms (`API_KEY`,
+ * `ACCESS_TOKEN`) and the concatenated forms that show up in the wild
+ * (`APIKEY`, `ACCESSTOKEN`, `PRIVATEKEY`, `BEARERTOKEN`, …). Longer
+ * alternatives are listed before shorter ones so regex alternation prefers
+ * the more specific match (standard left-to-right alternation semantics).
  */
 const SECRET_NAME_PATTERN =
-  /(?:^|_)(TOKEN|KEY|SECRET|PASSWORD|PASSWD|CREDENTIAL|CREDS|AUTH)S?(?:_|$)/i;
+  /(?:^|_)(APIKEY|PRIVATEKEY|SESSIONKEY|ENCRYPTKEY|SIGNINGKEY|ACCESSTOKEN|REFRESHTOKEN|IDTOKEN|BEARERTOKEN|BEARER|JWT|OAUTH|TOKEN|KEY|SECRET|PASSWORD|PASSWD|CREDENTIAL|CREDS|AUTH)S?(?:_|$)/i;
 
 /** True if the variable name looks credential-shaped. */
 export function isSecretEnvName(name: string): boolean {
