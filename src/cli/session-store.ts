@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import { appendFile, mkdir, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { promisify } from "node:util";
 
 import {
   buildSessionId,
@@ -10,6 +12,28 @@ import { buildHarnessStore } from "../storage/factory.js";
 import { STORE_NS } from "../storage/namespaces.js";
 import type { HarnessStore } from "../storage/store.js";
 import { getRelayDir } from "./paths.js";
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * `git` runner injected into {@link SessionStore} so tests can exercise
+ * the rewind-ref cleanup path without shelling out to a real git binary.
+ * The default binds to `execFile("git", …)`.
+ */
+export type SessionStoreGitExec = (
+  args: string[],
+  opts: { cwd: string }
+) => Promise<{ stdout: string; stderr: string }>;
+
+/**
+ * Matches the "unknown ref" / "no ref found" message `git update-ref -d`
+ * emits. Swallowing this keeps `deleteSession` idempotent when a session
+ * had no rewind snapshots to begin with (nothing to clean up).
+ */
+function isMissingRefError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /no ref|not a valid ref|does not exist|cannot lock ref/i.test(msg);
+}
 
 /**
  * Coordination record stored on the `HarnessStore` at
@@ -42,6 +66,7 @@ function lockRecordId(channelId: string, sessionId: string): string {
 export class SessionStore {
   private readonly channelsDir: string;
   private readonly store: HarnessStore;
+  private readonly gitExec: SessionStoreGitExec;
 
   /**
    * @param channelsDir Directory for on-disk channel / session files.
@@ -53,14 +78,24 @@ export class SessionStore {
    *   `buildHarnessStore()` so callers that don't inject one pick up the
    *   process-wide singleton semantics through the factory. Tests
    *   substitute a `FakeHarnessStore` here.
+   * @param gitExec `git` runner used by rewind-ref cleanup on
+   *   {@link deleteSession}. Defaults to `execFile("git", …)`. Tests
+   *   inject a fake to avoid shelling out.
    *
    * NOTE: session reads/writes still go straight to the filesystem because
    * the Rust/GUI reader expects the path layout documented on
    * `SessionLockRecord`. Only coordination primitives migrate.
    */
-  constructor(channelsDir?: string, store?: HarnessStore) {
+  constructor(
+    channelsDir?: string,
+    store?: HarnessStore,
+    gitExec?: SessionStoreGitExec
+  ) {
     this.channelsDir = channelsDir ?? join(getRelayDir(), "channels");
     this.store = store ?? buildHarnessStore();
+    this.gitExec =
+      gitExec ??
+      (async (args, opts) => execFileAsync("git", args, { cwd: opts.cwd }));
   }
 
   private sessionsDir(channelId: string): string {
@@ -173,7 +208,21 @@ export class SessionStore {
     return session;
   }
 
-  async deleteSession(channelId: string, sessionId: string): Promise<void> {
+  /**
+   * Remove a session and everything that should follow it out of the store:
+   * the on-disk JSONL transcript, the sessions index entry, the
+   * HarnessStore coordination record, and — when `opts.repoPaths` is
+   * supplied — any `refs/harness-rewind/<sessionId>/*` refs this session
+   * stashed across those repos. Rewind refs aren't discovered for callers
+   * that don't pass repoPaths (the session itself doesn't remember them),
+   * which is why the CLI passes them in from the channel's
+   * repoAssignments.
+   */
+  async deleteSession(
+    channelId: string,
+    sessionId: string,
+    opts: { repoPaths?: string[] } = {}
+  ): Promise<void> {
     const sessions = await this.listSessions(channelId);
     const filtered = sessions.filter((s) => s.sessionId !== sessionId);
     await this.writeSessions(channelId, filtered);
@@ -210,6 +259,43 @@ export class SessionStore {
           err instanceof Error ? err.message : String(err)
         }`
       );
+    }
+
+    // Prune rewind snapshot refs (Gap #7). We don't track the per-turn
+    // keys, so iterate every ref under `refs/harness-rewind/<sessionId>/`
+    // via `for-each-ref` and delete each via `update-ref -d`. Individual
+    // "missing ref" errors are expected (race between a concurrent rewind
+    // apply and this delete) and swallowed; real failures warn loudly but
+    // don't block the delete — the on-disk session is already gone.
+    for (const repoPath of opts.repoPaths ?? []) {
+      const prefix = `refs/harness-rewind/${sessionId}/`;
+      let refs: string[] = [];
+      try {
+        const { stdout } = await this.gitExec(
+          ["for-each-ref", "--format=%(refname)", prefix],
+          { cwd: repoPath }
+        );
+        refs = stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+      } catch (err) {
+        console.warn(
+          `[session-store] for-each-ref failed in ${repoPath} while pruning rewind refs for session ${sessionId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+        continue;
+      }
+      for (const ref of refs) {
+        try {
+          await this.gitExec(["update-ref", "-d", ref], { cwd: repoPath });
+        } catch (err) {
+          if (isMissingRefError(err)) continue;
+          console.warn(
+            `[session-store] failed to delete rewind ref ${ref} in ${repoPath}: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          );
+        }
+      }
     }
   }
 

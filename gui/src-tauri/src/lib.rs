@@ -1,11 +1,12 @@
 use harness_data as data;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use tauri::Emitter;
 
 /// Defense-in-depth validator for IDs crossing the Tauri IPC boundary.
@@ -419,6 +420,38 @@ fn rewind_apply(
 
 static CHAT_SEQ: AtomicU64 = AtomicU64::new(0);
 
+// Stream ids the caller has asked us to cancel. A spawned `start_chat`
+// thread checks this between stdout lines and, if present, exits the loop
+// without persisting a partial assistant message. Rewind calls
+// `cancel_chat_stream` before truncating the session log to avoid the race
+// where the streaming thread appends AFTER truncation.
+static CANCELLED_STREAMS: Mutex<Option<HashSet<u64>>> = Mutex::new(None);
+
+fn mark_stream_cancelled(stream_id: u64) {
+    let mut guard = CANCELLED_STREAMS.lock().expect("CANCELLED_STREAMS poisoned");
+    guard.get_or_insert_with(HashSet::new).insert(stream_id);
+}
+
+fn is_stream_cancelled(stream_id: u64) -> bool {
+    let guard = CANCELLED_STREAMS.lock().expect("CANCELLED_STREAMS poisoned");
+    guard.as_ref().map_or(false, |s| s.contains(&stream_id))
+}
+
+fn clear_stream_cancelled(stream_id: u64) {
+    let mut guard = CANCELLED_STREAMS.lock().expect("CANCELLED_STREAMS poisoned");
+    if let Some(set) = guard.as_mut() {
+        set.remove(&stream_id);
+    }
+}
+
+/// Build the `--metadata` JSON blob attached to a rewind-anchored user
+/// message. Isolated as a pure function so a rewind_key containing newlines,
+/// quotes, backslashes, or JSON fragments round-trips through serde instead
+/// of being spliced into a format string (Gap #1 from the rewind audit).
+fn build_rewind_metadata_json(rewind_key: &str) -> String {
+    serde_json::json!({ "rewindKey": rewind_key }).to_string()
+}
+
 #[derive(Serialize, Clone)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 enum ChatEvent {
@@ -486,9 +519,7 @@ fn start_chat(
     // frontend can later offer a Rewind button that resets repos to the
     // snapshot captured before this turn.
     let alias_arg = alias.clone();
-    let metadata_json = rewind_key
-        .as_ref()
-        .map(|k| format!("{{\"rewindKey\":\"{}\"}}", k.replace('"', "\\\"")));
+    let metadata_json = rewind_key.as_ref().map(|k| build_rewind_metadata_json(k));
     let mut append_args: Vec<&str> = vec![
         "session", "append", "--channel", &channel_id, "--session", &session_id, "--role", "user",
     ];
@@ -612,8 +643,18 @@ fn start_chat(
         let reader = BufReader::new(stdout);
         let mut accum = String::new();
         let mut final_session_id: Option<String> = None;
+        let mut cancelled = false;
 
         for line in reader.lines() {
+            // Rewind (and anything else that wants to abort a live stream)
+            // sets the cancellation flag via `cancel_chat_stream`. Check on
+            // every iteration so we stop appending to `accum` promptly; the
+            // child process is killed below to unblock the read loop.
+            if is_stream_cancelled(stream_id) {
+                cancelled = true;
+                let _ = child.kill();
+                break;
+            }
             let line = match line {
                 Ok(l) if l.is_empty() => continue,
                 Ok(l) => l,
@@ -718,6 +759,23 @@ fn start_chat(
         }
         let _ = child.wait();
 
+        // If rewind (or anything else) cancelled this stream, DO NOT
+        // persist a partial assistant message or update the claude session
+        // id — that's exactly the race Gap #8 fixes. Clear the flag so the
+        // next stream that happens to reuse this id (extremely unlikely
+        // given the monotonic AtomicU64, but cheap insurance) starts clean.
+        if cancelled {
+            clear_stream_cancelled(stream_id);
+            let _ = app_handle.emit(
+                "chat-event",
+                ChatEvent::Done {
+                    stream_id,
+                    final_text: String::new(),
+                },
+            );
+            return;
+        }
+
         // Persist the assistant message.
         if !accum.is_empty() {
             let mut append_args: Vec<&str> = vec![
@@ -772,6 +830,17 @@ fn start_chat(
     });
 
     Ok(stream_id)
+}
+
+/// Signal a running `start_chat` thread to exit without persisting the
+/// assistant message. The rewind button calls this BEFORE truncating the
+/// session log so the stream can't race the truncation and re-append a
+/// stale assistant turn (Gap #8). Safe to call with an unknown stream id
+/// — it's a set insert; live threads check the flag on the next line read.
+#[tauri::command]
+fn cancel_chat_stream(stream_id: u64) -> Result<(), String> {
+    mark_stream_cancelled(stream_id);
+    Ok(())
 }
 
 // --- Terminal.app spawn/kill lifecycle (Task #24) ---
@@ -1281,10 +1350,62 @@ pub fn run() {
             rewind_snapshot,
             rewind_apply,
             start_chat,
+            cancel_chat_stream,
             spawn_agent,
             kill_spawned_agent,
             list_spawns,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Gap #1 regression: a `rewind_key` containing quotes, backslashes,
+    /// newlines, or a `},"x":"y"` JSON fragment must round-trip through
+    /// serde as a single string field and not break out of the metadata
+    /// object. The `format!`-based predecessor would emit malformed JSON
+    /// or inject additional fields for these inputs.
+    #[test]
+    fn rewind_metadata_json_escapes_adversarial_keys() {
+        let cases = [
+            "plain",
+            "with \"quote\"",
+            "with \\ backslash",
+            "with\nnewline",
+            "with\ttab",
+            "with \"quote\"\nand \\ and\t tab",
+            r#"},"x":"y"#,
+            r#"break"}, "injected": "yes"}"#,
+        ];
+        for key in cases {
+            let raw = build_rewind_metadata_json(key);
+            let parsed: serde_json::Value = serde_json::from_str(&raw)
+                .unwrap_or_else(|e| panic!("invalid JSON for key {key:?}: {e} (raw: {raw})"));
+            let obj = parsed
+                .as_object()
+                .unwrap_or_else(|| panic!("expected object for key {key:?}, got {parsed}"));
+            // Exactly one field, and it must be `rewindKey` with our exact input.
+            assert_eq!(obj.len(), 1, "unexpected extra fields for key {key:?}: {parsed}");
+            assert_eq!(
+                obj.get("rewindKey").and_then(|v| v.as_str()),
+                Some(key),
+                "rewindKey did not round-trip for {key:?}: {parsed}"
+            );
+        }
+    }
+
+    #[test]
+    fn cancel_flag_roundtrip() {
+        // Isolated check: mark/clear affects is_stream_cancelled as expected.
+        // Use a stream_id guaranteed unique across the test binary.
+        let sid = u64::MAX - 42;
+        assert!(!is_stream_cancelled(sid));
+        mark_stream_cancelled(sid);
+        assert!(is_stream_cancelled(sid));
+        clear_stream_cancelled(sid);
+        assert!(!is_stream_cancelled(sid));
+    }
 }

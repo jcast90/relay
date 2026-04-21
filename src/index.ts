@@ -48,6 +48,7 @@ import { handleCrosslinkCommand } from "./crosslink/cli.js";
 import { startDashboard } from "./tui/dashboard.js";
 import { SessionStore } from "./cli/session-store.js";
 import { buildSystemPrompt, resolveChannelRefs, findMcpConfig } from "./cli/chat-context.js";
+import { rewindApply, rewindSnapshot } from "./cli/chat-rewind.js";
 
 export async function main(): Promise<void> {
   const cwd = process.cwd();
@@ -1289,7 +1290,16 @@ async function handleSessionCommand(args: string[]): Promise<void> {
       return;
     }
 
-    await store.deleteSession(channelId, sessionId);
+    // Look up the channel's repo paths so deleteSession can also prune any
+    // `refs/harness-rewind/<sessionId>/*` refs this session accumulated.
+    // Missing channel → treat as no repos (the session may already be
+    // orphaned); deleteSession still scrubs the on-disk JSONL + index.
+    const channelStoreForDelete = new ChannelStore(undefined, getHarnessStore());
+    const channelForDelete = await channelStoreForDelete.getChannel(channelId);
+    const repoPaths =
+      channelForDelete?.repoAssignments?.map((r) => r.repoPath) ?? [];
+
+    await store.deleteSession(channelId, sessionId, { repoPaths });
     jsonOut({ ok: true, deleted: sessionId });
     return;
   }
@@ -1373,77 +1383,6 @@ async function handleChatCommand(
 
   console.error("Usage: rly chat <system-prompt|resolve-refs|mcp-config|rewind-snapshot|rewind-apply>");
   process.exitCode = 1;
-}
-
-async function rewindSnapshot(
-  channelId: string,
-  sessionId: string
-): Promise<{ key: string; snapshots: Array<{ alias: string; repoPath: string; sha: string; ref: string }> }> {
-  const { execFile } = await import("node:child_process");
-  const { promisify } = await import("node:util");
-  const execFileAsync = promisify(execFile);
-
-  const channelStore = new ChannelStore(undefined, getHarnessStore());
-  const channel = await channelStore.getChannel(channelId);
-  if (!channel) throw new Error(`Channel not found: ${channelId}`);
-
-  const key = `${Date.now()}`;
-  const snapshots: Array<{ alias: string; repoPath: string; sha: string; ref: string }> = [];
-  for (const assignment of channel.repoAssignments ?? []) {
-    const refName = `refs/harness-rewind/${sessionId}/${key}`;
-    const { stdout: shaOut } = await execFileAsync("git", ["rev-parse", "HEAD"], {
-      cwd: assignment.repoPath
-    });
-    const sha = shaOut.trim();
-    if (!sha) throw new Error(`git rev-parse HEAD produced empty output in ${assignment.repoPath}`);
-    await execFileAsync("git", ["update-ref", refName, sha], {
-      cwd: assignment.repoPath
-    });
-    snapshots.push({ alias: assignment.alias, repoPath: assignment.repoPath, sha, ref: refName });
-  }
-  return { key, snapshots };
-}
-
-async function rewindApply(
-  channelId: string,
-  sessionId: string,
-  key: string,
-  messageTimestamp: string
-): Promise<{
-  reset: Array<{ alias: string; repoPath: string; sha: string }>;
-  removedMessages: number;
-  clearedClaudeSessions: boolean;
-}> {
-  const { execFile } = await import("node:child_process");
-  const { promisify } = await import("node:util");
-  const execFileAsync = promisify(execFile);
-
-  const channelStore = new ChannelStore(undefined, getHarnessStore());
-  const channel = await channelStore.getChannel(channelId);
-  if (!channel) throw new Error(`Channel not found: ${channelId}`);
-
-  const refName = `refs/harness-rewind/${sessionId}/${key}`;
-  const reset: Array<{ alias: string; repoPath: string; sha: string }> = [];
-  for (const assignment of channel.repoAssignments ?? []) {
-    const { stdout: shaOut } = await execFileAsync("git", ["rev-parse", "--verify", refName], {
-      cwd: assignment.repoPath
-    }).catch((err) => {
-      throw new Error(`Rewind ref ${refName} missing in ${assignment.repoPath} (alias @${assignment.alias}): ${err instanceof Error ? err.message : String(err)}`);
-    });
-    const sha = shaOut.trim();
-    await execFileAsync("git", ["reset", "--hard", sha], { cwd: assignment.repoPath });
-    reset.push({ alias: assignment.alias, repoPath: assignment.repoPath, sha });
-  }
-
-  const sessionStore = new SessionStore();
-  const removedMessages = await sessionStore.truncateBeforeTimestamp(
-    channelId,
-    sessionId,
-    messageTimestamp
-  );
-  const cleared = await sessionStore.clearClaudeSessionIds(channelId, sessionId);
-
-  return { reset, removedMessages, clearedClaudeSessions: cleared !== null };
 }
 
 async function printRunsIndex(

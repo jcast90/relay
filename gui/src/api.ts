@@ -126,6 +126,13 @@ export const api = {
     rewindKey?: string;
   }) => invoke<number>("start_chat", params),
 
+  // Best-effort: signal a running `start_chat` thread to exit without
+  // persisting the assistant message. Called by the rewind flow BEFORE
+  // truncating the session log so the stream can't race truncation and
+  // append a stale assistant turn afterwards.
+  cancelChatStream: (streamId: number) =>
+    invoke<void>("cancel_chat_stream", { streamId }),
+
   // Task #24 contract. These invoke wrappers are thin passthroughs that
   // assume the Rust side registers `spawn_agent`, `list_spawns`, and
   // `kill_spawned_agent` commands that accept / return camelCase via
