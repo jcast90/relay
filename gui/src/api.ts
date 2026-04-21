@@ -7,6 +7,8 @@ import type {
   ChatSession,
   Decision,
   PersistedChatMessage,
+  RewindResult,
+  RewindSnapshot,
   RunIndexEntry,
   Spawn,
   TicketLedgerEntry,
@@ -87,6 +89,7 @@ export const api = {
     role: string,
     content: string,
     agentAlias?: string,
+    metadata?: Record<string, string>,
   ) =>
     invoke<unknown>("append_session_message", {
       channelId,
@@ -94,6 +97,22 @@ export const api = {
       role,
       content,
       agentAlias,
+      metadata,
+    }),
+
+  rewindSnapshot: (channelId: string, sessionId: string) =>
+    invoke<RewindSnapshot>("rewind_snapshot", { channelId, sessionId }),
+  rewindApply: (
+    channelId: string,
+    sessionId: string,
+    key: string,
+    messageTimestamp: string,
+  ) =>
+    invoke<RewindResult>("rewind_apply", {
+      channelId,
+      sessionId,
+      key,
+      messageTimestamp,
     }),
 
   startChat: (params: {
@@ -104,6 +123,7 @@ export const api = {
     cwd?: string;
     claudeSessionId?: string;
     autoApprove: boolean;
+    rewindKey?: string;
   }) => invoke<number>("start_chat", params),
 
   // Task #24 contract. These invoke wrappers are thin passthroughs that

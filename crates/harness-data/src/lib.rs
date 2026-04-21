@@ -414,6 +414,12 @@ pub struct PersistedChatMessage {
     pub content: String,
     pub timestamp: String,
     pub agent_alias: Option<String>,
+    /// Free-form per-message metadata. Used today by the rewind feature to
+    /// tag user turns with a `rewindKey` that points at the git refs
+    /// captured before that turn. `#[serde(default)]` keeps older JSONL
+    /// transcripts (no metadata field) loadable.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub metadata: HashMap<String, String>,
 }
 
 fn sessions_dir(channel_id: &str) -> PathBuf {

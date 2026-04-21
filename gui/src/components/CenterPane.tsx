@@ -140,6 +140,7 @@ export function CenterPane({
           stream={stream}
           onStartStream={setStream}
           onSessionCreated={onSessionCreated}
+          onRefresh={onRefresh}
         />
       )}
       {tab === "board" && (
@@ -185,6 +186,7 @@ function ChatView({
   stream,
   onStartStream,
   onSessionCreated,
+  onRefresh,
 }: {
   channel: Channel;
   sessionId: string | null;
@@ -194,6 +196,7 @@ function ChatView({
   stream: ActiveStream | null;
   onStartStream: (s: ActiveStream | null) => void;
   onSessionCreated: (sessionId: string) => void;
+  onRefresh: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -206,7 +209,16 @@ function ChatView({
     <>
       <div className="content" ref={scrollRef}>
         {sessionId ? (
-          <SessionMessages messages={sessionMessages} />
+          <SessionMessages
+            channel={channel}
+            sessionId={sessionId}
+            messages={sessionMessages}
+            streaming={!!stream}
+            onRewound={() => {
+              onStartStream(null);
+              onRefresh();
+            }}
+          />
         ) : (
           <FeedView entries={feed} />
         )}
@@ -315,23 +327,158 @@ function ActivityStreamCard({
   );
 }
 
-function SessionMessages({ messages }: { messages: PersistedChatMessage[] }) {
+function SessionMessages({
+  channel,
+  sessionId,
+  messages,
+  streaming,
+  onRewound,
+}: {
+  channel: Channel;
+  sessionId: string;
+  messages: PersistedChatMessage[];
+  streaming: boolean;
+  onRewound: () => void;
+}) {
+  const [rewindTarget, setRewindTarget] = useState<PersistedChatMessage | null>(
+    null,
+  );
+
+
   if (messages.length === 0)
     return <div className="empty">No messages in this session yet</div>;
   return (
     <>
-      {messages.map((m, i) => (
-        <div key={i} className={`feed-entry role-${m.role}`}>
-          <div className="feed-header">
-            <span className="feed-author">
-              {m.agentAlias ? `@${m.agentAlias}` : m.role}
-            </span>
-            <span>{formatTime(m.timestamp)}</span>
+      {messages.map((m, i) => {
+        const rewindKey = m.metadata?.rewindKey;
+        const canRewind =
+          m.role === "user" && !!rewindKey && !streaming;
+        return (
+          <div key={i} className={`feed-entry role-${m.role}`}>
+            <div className="feed-header">
+              <span className="feed-author">
+                {m.agentAlias ? `@${m.agentAlias}` : m.role}
+              </span>
+              <span className="feed-header-right">
+                {formatTime(m.timestamp)}
+                {m.role === "user" && rewindKey && (
+                  <button
+                    type="button"
+                    className="rewind-btn"
+                    disabled={!canRewind}
+                    title={
+                      streaming
+                        ? "Finish the current stream before rewinding"
+                        : "Rewind repos + chat to this turn"
+                    }
+                    onClick={() => setRewindTarget(m)}
+                  >
+                    ⟲ Rewind
+                  </button>
+                )}
+              </span>
+            </div>
+            <div className="feed-content">{m.content}</div>
           </div>
-          <div className="feed-content">{m.content}</div>
-        </div>
-      ))}
+        );
+      })}
+      {rewindTarget && (
+        <RewindConfirmModal
+          channel={channel}
+          sessionId={sessionId}
+          target={rewindTarget}
+          onClose={() => setRewindTarget(null)}
+          onDone={() => {
+            setRewindTarget(null);
+            onRewound();
+          }}
+        />
+      )}
     </>
+  );
+}
+
+function RewindConfirmModal({
+  channel,
+  sessionId,
+  target,
+  onClose,
+  onDone,
+}: {
+  channel: Channel;
+  sessionId: string;
+  target: PersistedChatMessage;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const rewindKey = target.metadata?.rewindKey;
+
+  const apply = async () => {
+    if (!rewindKey) {
+      setError("Message has no rewindKey metadata — cannot rewind.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.rewindApply(
+        channel.channelId,
+        sessionId,
+        rewindKey,
+        target.timestamp,
+      );
+      onDone();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">Rewind to this turn?</div>
+        <div className="modal-body">
+          <p>
+            Each repo in this channel will be reset to the commit captured
+            before this message. All messages at or after this turn will be
+            removed from the session, and Claude session IDs will be cleared
+            so the next message starts a fresh conversation.
+          </p>
+          <div className="rewind-repo-list">
+            {channel.repoAssignments.map((r) => (
+              <div key={r.alias} className="rewind-repo-row">
+                <code>@{r.alias}</code>
+                <span className="rewind-repo-path">{r.repoPath}</span>
+              </div>
+            ))}
+          </div>
+          <p className="rewind-warning">
+            <strong>Warning:</strong> this runs <code>git reset --hard</code>.
+            Any uncommitted changes in these repos will be lost. Shell side
+            effects (API calls, spawned processes, database writes) are{" "}
+            <strong>not</strong> undone.
+          </p>
+          {error && <div className="composer-error">{error}</div>}
+        </div>
+        <div className="modal-footer">
+          <button type="button" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="primary"
+            onClick={apply}
+            disabled={busy || !rewindKey}
+          >
+            {busy ? "Rewinding…" : "Rewind"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -396,6 +543,21 @@ function Composer({
         onSessionCreated(activeId);
       }
 
+      // Snapshot every repo in the channel *before* the turn runs so the
+      // user can later click Rewind on this message to restore state.
+      // Snapshot is best-effort — if a repo lacks commits or git errors,
+      // surface it but still let the user send; rewind just won't be
+      // offered for this turn.
+      let rewindKey: string | undefined;
+      if (channel.repoAssignments.length > 0) {
+        try {
+          const snap = await api.rewindSnapshot(channel.channelId, activeId);
+          rewindKey = snap.key;
+        } catch (err) {
+          console.warn("[rewind] snapshot failed:", err);
+        }
+      }
+
       const streamId = await api.startChat({
         channelId: channel.channelId,
         sessionId: activeId,
@@ -404,6 +566,7 @@ function Composer({
         cwd,
         claudeSessionId,
         autoApprove,
+        rewindKey,
       });
       onStartStream({
         streamId,

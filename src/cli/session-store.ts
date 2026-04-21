@@ -269,6 +269,82 @@ export class SessionStore {
     await writeFile(path, lines.join("\n") + "\n", "utf8");
   }
 
+  /**
+   * Drop messages whose timestamp is >= `timestamp`. Rewrites the JSONL file
+   * atomically (temp-file + rename) and updates `messageCount` on the index.
+   * Returns the number of messages removed.
+   *
+   * Used by the rewind flow to roll the chat log back to a checkpoint. Treats
+   * `timestamp` as a string comparison against the stored ISO8601 — safe
+   * because ISO strings sort lexicographically in chronological order.
+   */
+  async truncateBeforeTimestamp(
+    channelId: string,
+    sessionId: string,
+    timestamp: string
+  ): Promise<number> {
+    const path = this.sessionChatPath(channelId, sessionId);
+    let content: string;
+    try {
+      content = await readFile(path, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return 0;
+      }
+      throw err;
+    }
+    const lines = content.trimEnd().split("\n").filter((l) => l.length > 0);
+    const kept: string[] = [];
+    let removed = 0;
+    for (const line of lines) {
+      try {
+        const msg = JSON.parse(line) as PersistedChatMessage;
+        if (msg.timestamp >= timestamp) {
+          removed += 1;
+          continue;
+        }
+        kept.push(line);
+      } catch {
+        // Preserve unparseable lines — don't silently lose data.
+        kept.push(line);
+      }
+    }
+    const next = kept.length > 0 ? kept.join("\n") + "\n" : "";
+    const tmpPath = `${path}.tmp.${process.pid}.${sessionsTmpCounter++}`;
+    await writeFile(tmpPath, next, "utf8");
+    try {
+      await rename(tmpPath, path);
+    } catch (err) {
+      await rm(tmpPath, { force: true }).catch(() => {});
+      throw err;
+    }
+
+    const session = await this.getSession(channelId, sessionId);
+    if (session) {
+      session.messageCount = kept.length;
+      session.updatedAt = new Date().toISOString();
+      await this.updateSession(channelId, session);
+    }
+    return removed;
+  }
+
+  /**
+   * Clear all Claude CLI session ids for a session. Used by rewind so that
+   * the next message after a rollback starts a fresh Claude conversation
+   * (Claude can't itself be rewound server-side).
+   */
+  async clearClaudeSessionIds(
+    channelId: string,
+    sessionId: string
+  ): Promise<ChatSession | null> {
+    const session = await this.getSession(channelId, sessionId);
+    if (!session) return null;
+    session.claudeSessionIds = {};
+    session.updatedAt = new Date().toISOString();
+    await this.updateSession(channelId, session);
+    return session;
+  }
+
   async loadMessages(
     channelId: string,
     sessionId: string,
