@@ -56,6 +56,19 @@ export interface LocalChildProcessExecutorOptions {
    * an option so tests don't have to sleep 2s to exercise the escalation.
    */
   killGraceMs?: number;
+  /**
+   * Hard cap after SIGKILL: if the OS never delivers an exit event within
+   * this window we synthesize one so `wait()` can never hang. See
+   * {@link LocalExecutionHandle}'s `armPostKillWatchdog` for the tradeoff.
+   * Factored out so tests can trip the cap cheaply.
+   */
+  postKillWatchdogMs?: number;
+  /**
+   * Ceiling on emitted heartbeat events. Defense-in-depth for the (rare)
+   * case where finalize never runs: a bounded interval can't flood a
+   * subscriber forever.
+   */
+  maxHeartbeatCount?: number;
 }
 
 const DEFAULT_HEARTBEAT_MS = 30_000;
@@ -64,6 +77,21 @@ const DEFAULT_KILL_GRACE_MS = 2_000;
 const TIMEOUT_EXIT_CODE = 124;
 // 128 + 9 (SIGKILL); matches NoopExecutor and the usual Unix convention.
 const KILLED_EXIT_CODE = 137;
+// Shell conventions surfaced by /bin/sh and bash:
+//   127 = command not found (maps to spawn ENOENT)
+//   126 = found but not executable / permission denied (maps to EACCES)
+// We mirror these so operators can tell apart "binary missing" from "binary
+// ran and exited 1" without having to parse the reason string.
+const COMMAND_NOT_FOUND_EXIT_CODE = 127;
+const PERMISSION_DENIED_EXIT_CODE = 126;
+// Cap after SIGKILL: if the child still hasn't exited within this window we
+// synthesize a terminal exit so `wait()` resolves. See `armPostKillWatchdog`.
+const POST_KILL_WATCHDOG_MS = 5_000;
+// Hard cap on heartbeat emissions. At the default 30s cadence this is ~1h of
+// liveness signal. Past the cap we emit one final heartbeat (with an error
+// marker on the event data) and stop the interval — defense-in-depth so a
+// handle that somehow never finalizes can't flood a subscriber forever.
+const MAX_HEARTBEAT_COUNT = 120;
 const SUMMARY_PREFIX_LENGTH = 120;
 
 function defaultResolveCommand(
@@ -127,6 +155,19 @@ interface HandleDeps {
   timeoutMs?: number;
   heartbeatIntervalMs: number;
   killGraceMs: number;
+  /**
+   * Hard-cap window after SIGKILL before we synthesize an exit and resolve
+   * {@link ExecutionHandle.wait}. Factored out so tests don't sleep 5s.
+   */
+  postKillWatchdogMs?: number;
+  /**
+   * Ceiling on the number of heartbeat events emitted. Factored out so tests
+   * can trip the cap cheaply; production leaves the default.
+   */
+  maxHeartbeatCount?: number;
+  /** Context for teardown-failure warnings (helps operators trace drift). */
+  runId: string;
+  ticketId: string;
   onComplete: (result: ExecutionResult) => Promise<void> | void;
 }
 
@@ -144,7 +185,9 @@ class LocalExecutionHandle implements ExecutionHandle {
   private timeoutHandle: NodeJS.Timeout | null = null;
   private heartbeatHandle: NodeJS.Timeout | null = null;
   private escalationHandle: NodeJS.Timeout | null = null;
+  private postKillWatchdogHandle: NodeJS.Timeout | null = null;
   private childAlive = true;
+  private heartbeatCount = 0;
 
   constructor(private readonly deps: HandleDeps) {
     this.id = deps.id;
@@ -205,6 +248,9 @@ class LocalExecutionHandle implements ExecutionHandle {
     this.killRequested = true;
     if (this.childAlive) {
       this.deps.process.kill(signal);
+      if (signal === "SIGKILL") {
+        this.armPostKillWatchdog();
+      }
     }
   }
 
@@ -275,9 +321,23 @@ class LocalExecutionHandle implements ExecutionHandle {
     });
     this.deps.process.onError((error) => {
       // Spawn-level error (ENOENT etc.): treat as a killed-style terminal so
-      // wait() resolves instead of hanging forever.
+      // wait() resolves instead of hanging forever. Map the POSIX errno into
+      // the shell convention so "binary missing" (127) and "permission
+      // denied" (126) stay distinguishable from a real exit 1 — operators
+      // reading a run log shouldn't have to grep the reason string to tell
+      // those apart. Unknown codes fall through to 1.
       this.stderrBuf += error.message;
-      this.finalize(1, error.message);
+      const code = (error as NodeJS.ErrnoException).code;
+      const reason = code
+        ? `${error.message} (code ${code})`
+        : error.message;
+      let exitCode = 1;
+      if (code === "ENOENT") {
+        exitCode = COMMAND_NOT_FOUND_EXIT_CODE;
+      } else if (code === "EACCES") {
+        exitCode = PERMISSION_DENIED_EXIT_CODE;
+      }
+      this.finalize(exitCode, reason);
     });
     this.deps.process.onExit((code, signal) => {
       this.childAlive = false;
@@ -302,13 +362,63 @@ class LocalExecutionHandle implements ExecutionHandle {
     // Fire the first heartbeat after the interval, not immediately — we just
     // emitted `start`, so an instant heartbeat would be noise. T-301's
     // stuck-agent detector subscribes via `stream()` and reads these.
+    //
+    // Defense in depth: finalize() normally clears this interval. If the
+    // child ever ends up stuck in a state where finalize never runs (the
+    // post-SIGKILL watchdog below is the primary guard), an unbounded
+    // interval would flood every `stream()` subscriber forever. Cap the
+    // emission count — at the default 30s cadence 120 ticks is ~1h, which
+    // is well past any realistic ticket runtime. After the cap we emit one
+    // final heartbeat annotated as terminal-via-error and stop the timer.
+    const maxCount = this.deps.maxHeartbeatCount ?? MAX_HEARTBEAT_COUNT;
     this.heartbeatHandle = setInterval(() => {
       if (this.cachedResult) return;
+      this.heartbeatCount += 1;
+      if (this.heartbeatCount > maxCount) {
+        // One last heartbeat with an error marker so subscribers observe the
+        // cap rather than just silently losing the liveness signal, then
+        // stop ticking.
+        this.bus.emit({
+          kind: "heartbeat",
+          at: new Date().toISOString(),
+          data: "heartbeat-cap-reached"
+        });
+        if (this.heartbeatHandle) clearInterval(this.heartbeatHandle);
+        this.heartbeatHandle = null;
+        return;
+      }
       this.bus.emit({ kind: "heartbeat", at: new Date().toISOString() });
     }, this.deps.heartbeatIntervalMs);
     // Don't keep the event loop alive solely for the heartbeat — tests and
     // short-lived invocations shouldn't block process exit on a pending tick.
     this.heartbeatHandle.unref?.();
+  }
+
+  /**
+   * After SIGKILL is delivered, the OS is supposed to reap the child
+   * immediately — but on macOS/Linux a process blocked in an uninterruptible
+   * syscall (D state) or orphaned with a zombie parent can survive long
+   * enough to hang our `wait()` indefinitely. That would then hang the
+   * scheduler slot it's holding.
+   *
+   * We bound that worst case: start a short timer when SIGKILL fires, and if
+   * the process still hasn't exited when it elapses, finalize with
+   * `KILLED_EXIT_CODE` and a reason string. Callers observing that reason
+   * can tell the exit was synthesized rather than reported by the OS.
+   *
+   * Tradeoff we're explicit about: a false "exited" report is strictly
+   * preferable to a hung scheduler. The alternative — letting `wait()` sit
+   * forever — poisons retries, blocks concurrency slots, and is effectively
+   * undetectable without external liveness probes.
+   */
+  private armPostKillWatchdog(): void {
+    if (this.postKillWatchdogHandle) return;
+    const ms = this.deps.postKillWatchdogMs ?? POST_KILL_WATCHDOG_MS;
+    this.postKillWatchdogHandle = setTimeout(() => {
+      if (this.cachedResult || !this.childAlive) return;
+      this.finalize(KILLED_EXIT_CODE, "killed but never exited");
+    }, ms);
+    this.postKillWatchdogHandle.unref?.();
   }
 
   private armTimeout(): void {
@@ -323,6 +433,10 @@ class LocalExecutionHandle implements ExecutionHandle {
       this.escalationHandle = setTimeout(() => {
         if (!this.cachedResult && this.childAlive) {
           this.deps.process.kill("SIGKILL");
+          // Same stuck-child concern as the explicit kill() path: arm the
+          // watchdog so `wait()` can't hang if SIGKILL doesn't produce an
+          // exit event.
+          this.armPostKillWatchdog();
         }
       }, this.deps.killGraceMs);
       this.escalationHandle.unref?.();
@@ -343,6 +457,7 @@ class LocalExecutionHandle implements ExecutionHandle {
     if (this.timeoutHandle) clearTimeout(this.timeoutHandle);
     if (this.heartbeatHandle) clearInterval(this.heartbeatHandle);
     if (this.escalationHandle) clearTimeout(this.escalationHandle);
+    if (this.postKillWatchdogHandle) clearTimeout(this.postKillWatchdogHandle);
 
     this.bus.emit(
       {
@@ -359,9 +474,15 @@ class LocalExecutionHandle implements ExecutionHandle {
       // onComplete failures (sandbox destroy throwing, etc.) must not block
       // a pending wait() — the result is already cached. Log at warn so the
       // operator can see teardown drift without having to crawl the FS.
+      // Context fields (runId/ticketId/sandbox id) make drift attributable
+      // without grepping a sea of identical messages.
       const message = err instanceof Error ? err.message : String(err);
       // eslint-disable-next-line no-console
-      console.warn(`[local-executor] onComplete hook failed: ${message}`);
+      console.warn(
+        `[local-executor] onComplete hook failed ` +
+          `(runId=${this.deps.runId} ticketId=${this.deps.ticketId} ` +
+          `sandboxId=${this.deps.sandbox.id} handleId=${this.deps.id}): ${message}`
+      );
     });
   }
 }
@@ -418,6 +539,8 @@ export class LocalChildProcessExecutor implements AgentExecutor {
   private readonly resolveCommand: CommandResolver;
   private readonly heartbeatIntervalMs: number;
   private readonly killGraceMs: number;
+  private readonly postKillWatchdogMs: number | undefined;
+  private readonly maxHeartbeatCount: number | undefined;
   private counter = 0;
 
   constructor(options: LocalChildProcessExecutorOptions = {}) {
@@ -426,6 +549,8 @@ export class LocalChildProcessExecutor implements AgentExecutor {
     this.resolveCommand = options.resolveCommand ?? defaultResolveCommand;
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_MS;
     this.killGraceMs = options.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
+    this.postKillWatchdogMs = options.postKillWatchdogMs;
+    this.maxHeartbeatCount = options.maxHeartbeatCount;
 
     if (typeof this.invoker.spawn !== "function") {
       throw new Error(
@@ -478,9 +603,21 @@ export class LocalChildProcessExecutor implements AgentExecutor {
     // Centralize teardown of a provider-created sandbox so every throw path
     // goes through the same code. `ownsSandbox && this.sandboxProvider` gates
     // callers-supplied sandboxes out — we never destroy someone else's ref.
+    //
+    // Destroy failures must not mask the original throw (we're already on
+    // the error path), but we also can't swallow them silently: a leaked
+    // worktree or pod is precisely the kind of resource drift operators
+    // need to see. Log with full context instead.
     const releaseIfOwned = async () => {
       if (ownsSandbox && this.sandboxProvider) {
-        await this.sandboxProvider.destroy(ownedSandbox).catch(() => undefined);
+        await this.sandboxProvider.destroy(ownedSandbox).catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[local-executor] sandbox destroy failed for ${ownedSandbox.id} ` +
+              `(runId=${opts.runId} ticketId=${ticket.id}): ${msg}`
+          );
+        });
       }
     };
 
@@ -521,6 +658,10 @@ export class LocalChildProcessExecutor implements AgentExecutor {
       timeoutMs: opts.timeoutMs,
       heartbeatIntervalMs: this.heartbeatIntervalMs,
       killGraceMs: this.killGraceMs,
+      postKillWatchdogMs: this.postKillWatchdogMs,
+      maxHeartbeatCount: this.maxHeartbeatCount,
+      runId: opts.runId,
+      ticketId: ticket.id,
       onComplete: async () => {
         if (ownsSandbox && providerForCleanup) {
           // Single try/catch path: failure of the destroy surfaces to the

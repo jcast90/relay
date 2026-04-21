@@ -199,6 +199,67 @@ describe("TicketScheduler + executor wiring", () => {
     }
   }, 30_000);
 
+  it("converts an executor.start() throw into an AgentResult blocker so retry engages", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "ts-exec-throw-"));
+    try {
+      const { registry, artifactStore, verificationRunner } =
+        await buildBasics(tmp);
+
+      // Fake executor that rejects on the first start() call and then
+      // succeeds on subsequent calls by delegating to NoopExecutor. If the
+      // scheduler surfaces the throw as a blocker, the retry loop re-runs
+      // the ticket (loop 2) and the NoopExecutor path lets it complete.
+      // If the throw bubbles as an uncaught rejection, this test hangs or
+      // fails with an unhandled rejection — both are loud regressions.
+      let startCalls = 0;
+      const sandboxProvider = new NoopSandboxProvider();
+      const underlying = new NoopExecutor();
+      const events: Array<{ type: RunEventType; phaseId: string; details: Record<string, string> }> = [];
+      const executor: AgentExecutor = {
+        async start(t, opts): Promise<ExecutionHandle> {
+          startCalls += 1;
+          if (startCalls === 1) {
+            throw new Error("simulated spawn failure");
+          }
+          const sandbox = await sandboxProvider.create({ root: tmp }, "main");
+          return underlying.start(t, { ...opts, sandbox });
+        }
+      };
+
+      const scheduler = new TicketScheduler(
+        tmp,
+        artifactStore,
+        verificationRunner,
+        registry,
+        null,
+        (_run, type, phaseId, details) => {
+          events.push({ type, phaseId, details });
+        },
+        { executor, maxConcurrency: 1 }
+      );
+
+      // Bump retry budget so loop-2 runs after the first blocker.
+      const t = ticket("t_throw");
+      t.retryPolicy = { maxAgentAttempts: 1, maxTestFixLoops: 2 };
+      const run = buildRun(tmp, [t]);
+      await scheduler.executeAll(run);
+
+      // The blocker from the throw must have been recorded, and the first
+      // start must have been observed as a failure event — not a raw
+      // exception. The start counter must be at least 2, proving the retry
+      // path actually re-engaged instead of the scheduler dying.
+      expect(startCalls).toBeGreaterThanOrEqual(2);
+      const startFailure = events.find(
+        (e) => e.phaseId === "__executor_start__"
+      );
+      expect(startFailure).toBeDefined();
+      expect(startFailure?.details.error).toContain("simulated spawn failure");
+      expect(startFailure?.details.ticketId).toBe("t_throw");
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it("preserves the legacy dispatch path when no executor is supplied", async () => {
     const tmp = await mkdtemp(join(tmpdir(), "ts-exec-legacy-"));
     try {

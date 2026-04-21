@@ -162,11 +162,67 @@ export class TicketScheduler {
         );
       }
 
-      const handle = await executor.start(ticket, {
-        runId: run.id,
-        repoRoot: this.repoRoot
-      });
-      const result = await handle.wait();
+      // Wrap start/wait in try/catch so an executor that throws (spawn
+      // rejected, sandbox creation failed, provider misconfigured, etc.)
+      // maps back onto an AgentResult-shaped failure instead of bubbling
+      // a raw rejection into the drain loop. The drain loop already knows
+      // how to handle `blockers: [...]` via the retry path — we want a
+      // thrown start() to engage that same machinery rather than crashing
+      // the scheduler with an uncaught exception.
+      let handle;
+      try {
+        handle = await executor.start(ticket, {
+          runId: run.id,
+          repoRoot: this.repoRoot
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        // Record the start-failure on the run event log so operators can
+        // trace which ticket + run tripped the blocker without correlating
+        // stdout lines. We use TicketFailed with a namespaced phaseId so it
+        // doesn't clobber a per-ticket retry record that may follow.
+        try {
+          this.recordEvent(run, "TicketFailed", "__executor_start__", {
+            runId: run.id,
+            ticketId: ticket.id,
+            error: message
+          });
+        } catch {
+          // recordEvent itself must never break the scheduler loop.
+        }
+        return {
+          summary: `executor.start failed: ${message}`,
+          evidence: [`executor.start threw: ${message}`],
+          proposedCommands: [],
+          blockers: [message]
+        };
+      }
+
+      // wait() itself can't realistically reject given the LocalExecutionHandle
+      // contract (finalize always resolves), but defend anyway — a third-party
+      // executor implementation could break that invariant and we still want
+      // the retry path, not an uncaught rejection.
+      let result;
+      try {
+        result = await handle.wait();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        try {
+          this.recordEvent(run, "TicketFailed", "__executor_wait__", {
+            runId: run.id,
+            ticketId: ticket.id,
+            error: message
+          });
+        } catch {
+          /* recordEvent itself must never break the loop */
+        }
+        return {
+          summary: `executor.wait failed: ${message}`,
+          evidence: [`executor.wait threw: ${message}`],
+          proposedCommands: [],
+          blockers: [message]
+        };
+      }
 
       const evidence: string[] = [];
       if (result.stdout) evidence.push(`stdout: ${result.stdout.slice(0, 2000)}`);

@@ -493,4 +493,156 @@ describe("LocalChildProcessExecutor - sandbox lifecycle via injected provider", 
     ).rejects.toThrow(/kind === "local"/);
     expect(destroyed).toBe(true);
   });
+
+  it("logs a warning with full context when sandbox destroy fails on a throw path", async () => {
+    // The throw path in question: remote-ref rejection during start(). We use
+    // a provider whose destroy() rejects, and assert that the failure message
+    // reaches console.warn *with* runId, ticketId, and sandbox id — silent
+    // catch({}) would leak a sandbox without an operator-visible trace.
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (msg: string) => {
+      warnings.push(msg);
+    };
+    try {
+      const provider: SandboxProvider = {
+        async create(): Promise<SandboxRef> {
+          return {
+            id: "sb-destroy-will-fail",
+            workdir: { kind: "remote", uri: "pod://y" }
+          };
+        },
+        async destroy(): Promise<DestroyResult> {
+          throw new Error("destroy boom");
+        }
+      };
+      const executor = new LocalChildProcessExecutor({
+        invoker: new FakeInvoker(),
+        sandboxProvider: provider,
+        resolveCommand: () => ({ command: "noop", args: [] })
+      });
+
+      await expect(
+        executor.start(makeTicket({ id: "T-destroy-fail" }), {
+          runId: "run-destroy-fail",
+          repoRoot: "/tmp/repo"
+        })
+      ).rejects.toThrow(/kind === "local"/);
+
+      const hit = warnings.find((w) => w.includes("destroy boom"));
+      expect(hit).toBeDefined();
+      expect(hit).toContain("sb-destroy-will-fail");
+      expect(hit).toContain("run-destroy-fail");
+      expect(hit).toContain("T-destroy-fail");
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+});
+
+describe("LocalChildProcessExecutor - stuck-child and failure-mode escape hatches", () => {
+  it("synthesizes an exit if SIGKILL is delivered but the child never exits", async () => {
+    // Fake child that accepts signals but never fires onExit — models a
+    // process stuck in a D-state / zombie-parent situation. wait() would
+    // hang forever without the post-SIGKILL watchdog.
+    const invoker = new FakeInvoker();
+    const executor = new LocalChildProcessExecutor({
+      invoker,
+      resolveCommand: () => ({ command: "noop", args: [] }),
+      postKillWatchdogMs: 30
+    });
+
+    const provider = new NoopSandboxProvider();
+    const sandbox = await provider.create(REPO, "main");
+    const handle = await executor.start(makeTicket(), {
+      runId: "run-stuck",
+      repoRoot: "/tmp/repo",
+      sandbox
+    });
+
+    const waitP = handle.wait();
+    await handle.kill("SIGKILL");
+    // Do NOT emit exit. The watchdog should finalize within ~30ms.
+    const started = Date.now();
+    const result = await waitP;
+    const elapsed = Date.now() - started;
+    expect(elapsed).toBeLessThan(1000);
+    expect(result.exitCode).toBe(137);
+    expect(result.summary).toBe("killed but never exited");
+    expect(handle.status).toBe("killed");
+  });
+
+  it("maps ENOENT to exit 127 (command not found) and EACCES to exit 126 (permission denied)", async () => {
+    for (const [code, expectedExit] of [
+      ["ENOENT", 127],
+      ["EACCES", 126]
+    ] as const) {
+      const invoker = new FakeInvoker();
+      const executor = new LocalChildProcessExecutor({
+        invoker,
+        resolveCommand: () => ({ command: "noop", args: [] })
+      });
+
+      const provider = new NoopSandboxProvider();
+      const sandbox = await provider.create(REPO, "main");
+      const handle = await executor.start(makeTicket(), {
+        runId: `run-err-${code}`,
+        repoRoot: "/tmp/repo",
+        sandbox
+      });
+
+      const err: NodeJS.ErrnoException = new Error(`spawn ${code}`);
+      err.code = code;
+      invoker.spawned[0].emitError(err);
+
+      const result = await handle.wait();
+      expect(result.exitCode).toBe(expectedExit);
+      // The reason surfaces err.code so operators can grep for the underlying
+      // POSIX errno, not just a numeric exit.
+      expect(result.summary).toContain(code);
+    }
+  });
+
+  it("caps heartbeat emissions and emits a terminal cap marker", async () => {
+    // Short interval + small cap so we can trip the guard in test time.
+    const invoker = new FakeInvoker();
+    const executor = new LocalChildProcessExecutor({
+      invoker,
+      resolveCommand: () => ({ command: "noop", args: [] }),
+      heartbeatIntervalMs: 5,
+      maxHeartbeatCount: 3
+    });
+
+    const provider = new NoopSandboxProvider();
+    const sandbox = await provider.create(REPO, "main");
+    const handle = await executor.start(makeTicket(), {
+      runId: "run-hb-cap",
+      repoRoot: "/tmp/repo",
+      sandbox
+    });
+
+    // Collect events in the background. We'll emit exit after the cap trips
+    // so the stream can terminate cleanly.
+    const collected: ExecutionEvent[] = [];
+    const streamIter = handle.stream();
+    const collectP = (async () => {
+      for await (const ev of streamIter) {
+        collected.push(ev);
+      }
+    })();
+
+    // Wait long enough for heartbeats to trip the cap.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    invoker.spawned[0].emitExit(0, null);
+    await handle.wait();
+    await collectP;
+
+    const heartbeats = collected.filter((e) => e.kind === "heartbeat");
+    // Cap is 3 "regular" ticks + 1 terminal cap event = 4.
+    expect(heartbeats.length).toBeLessThanOrEqual(4);
+    const capMarker = heartbeats.find((e) => e.data === "heartbeat-cap-reached");
+    expect(capMarker).toBeDefined();
+    // Stream must still terminate (await collectP returned).
+    expect(collected[collected.length - 1].kind).toBe("exit");
+  });
 });
