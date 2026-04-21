@@ -334,9 +334,12 @@ describe("PodExecutor", () => {
     const events = await collect(handle.stream(), 20);
     await waitPromise;
     const stdoutEvents = events.filter((e) => e.kind === "stdout");
-    // Either the streaming hook or a post-exit drain should produce stdout.
+    // Deterministic assertion: the streaming hook writes the configured
+    // chunk synchronously (via setImmediate), so at least one stdout event
+    // MUST be observed and MUST include the seeded chunk.
+    expect(stdoutEvents.length).toBeGreaterThan(0);
     const concatenated = stdoutEvents.map((e) => String(e.data)).join("");
-    expect(concatenated.length === 0 || concatenated.includes("chunk-A")).toBe(true);
+    expect(concatenated).toContain("chunk-A");
     expect(events.some((e) => e.kind === "start")).toBe(true);
     expect(events.some((e) => e.kind === "exit")).toBe(true);
   });
@@ -379,6 +382,234 @@ describe("PodExecutor", () => {
     const result = await handle.wait();
     expect(noStreamClient.logReads.length).toBeGreaterThanOrEqual(1);
     expect(result.stdout).toContain("polled-line");
+  });
+
+  it("kill() after wait() resolves is a no-op (idempotent)", async () => {
+    // Parity with LocalChildProcessExecutor contract: kill() after exit is
+    // a no-op and must not tear down an already-cleaned resource a second
+    // time. We prove it by counting deleteJob calls.
+    const handle = await executor.start(makeTicket({ id: "T1" }), {
+      runId: "r",
+      repoRoot: "/tmp/fake",
+      sandbox
+    });
+    const jobName = client.jobCreates[0].metadata?.name!;
+    client.podsForJob.set(jobName, [
+      {
+        metadata: { name: `${jobName}-pod` },
+        status: {
+          containerStatuses: [
+            { name: "worker", state: { terminated: { exitCode: 0 } } }
+          ]
+        }
+      }
+    ]);
+    setTimeout(() => {
+      const rec = client.jobs.get(jobName)!;
+      rec.succeeded = 1;
+    }, 5);
+    const result = await handle.wait();
+    expect(result.exitCode).toBe(0);
+    const jobDeletesBefore = client.jobDeletes.length;
+    const podDeletesBefore = client.podDeletes.length;
+    await handle.kill();
+    expect(client.jobDeletes).toHaveLength(jobDeletesBefore);
+    expect(client.podDeletes).toHaveLength(podDeletesBefore);
+    expect(handle.status).toBe("exited");
+  });
+
+  it("double kill() is a no-op on the second call", async () => {
+    const handle = await executor.start(makeTicket({ id: "T1" }), {
+      runId: "r",
+      repoRoot: "/tmp/fake",
+      sandbox
+    });
+    const jobName = client.jobCreates[0].metadata?.name!;
+    client.podsForJob.set(jobName, [{ metadata: { name: `${jobName}-pod` } }]);
+    await handle.kill();
+    const jobDeletesAfterFirst = client.jobDeletes.length;
+    const podDeletesAfterFirst = client.podDeletes.length;
+    await handle.kill();
+    // Second kill must NOT re-issue API calls.
+    expect(client.jobDeletes).toHaveLength(jobDeletesAfterFirst);
+    expect(client.podDeletes).toHaveLength(podDeletesAfterFirst);
+    await handle.wait();
+    expect(handle.status).toBe("killed");
+  });
+
+  it("post-kill watchdog synthesizes exit 137 when the Job never flips", async () => {
+    // Fake never marks the job as failed/succeeded after deleteJob. The
+    // watchdog must fire within postKillWatchdogMs and finalize the handle
+    // with exit 137 and reason "killed but never exited".
+    const stuckClient = makeStreamCapableClient();
+    // Override deleteJob so the Job record stays put and readJob keeps
+    // returning running status. This simulates a wedged kubelet/api where
+    // the Job stays "active" indefinitely.
+    stuckClient.deleteJob = async (_ns: string, name: string) => {
+      stuckClient.jobDeletes.push(name);
+      // Deliberately DO NOT delete from `stuckClient.jobs` so readJob still returns running.
+    };
+    const sb = await createSandbox(stuckClient, "rr", "TW");
+    const exec2 = new PodExecutor({
+      sandboxProvider: new PVCSandboxProvider({
+        namespace: "relay-test",
+        k8sClient: stuckClient
+      }),
+      k8sClient: stuckClient,
+      namespace: "relay-test",
+      workerImage: "ghcr.io/example/worker:latest",
+      pollIntervalMs: 5,
+      postKillWatchdogMs: 30
+    });
+    const handle = await exec2.start(makeTicket({ id: "TW" }), {
+      runId: "rr",
+      repoRoot: "/tmp/fake",
+      sandbox: sb
+    });
+    const jobName = stuckClient.jobCreates[0].metadata?.name!;
+    stuckClient.podsForJob.set(jobName, [{ metadata: { name: `${jobName}-pod` } }]);
+    await handle.kill();
+    const result = await handle.wait();
+    expect(result.exitCode).toBe(137);
+    expect(result.summary).toContain("killed but never exited");
+  });
+
+  it("initTimeoutMs exceeded causes sandbox create() to reject", async () => {
+    // The init job never reports succeeded/failed; the provider must give
+    // up after initTimeoutMs and surface a timeout error.
+    const slowClient = new FakeK8sClient();
+    // Do not flip succeeded. Default FakeK8sClient leaves both at 0.
+    const slow = new PVCSandboxProvider({
+      namespace: "relay-test",
+      k8sClient: slowClient,
+      initPollIntervalMs: 2,
+      initTimeoutMs: 15
+    });
+    await expect(
+      slow.create(
+        { root: "/tmp/fake", remoteUrl: "https://example.com/repo.git" },
+        "main",
+        { runId: "slow", ticketId: "T" }
+      )
+    ).rejects.toThrow(/did not complete within/);
+  });
+
+  it("slug collision: two creates with ids that slugify the same throw label-mismatch", async () => {
+    // "MY_RUN" lowercases to "my_run", then `_` collapses to `-` → "my-run".
+    // "my-run" slugifies to itself. Both produce pvc-my-run-t1, but the
+    // labels (preserved via sanitizeK8sLabelValue, which keeps `_`) differ.
+    // The second create() must refuse rather than silently reuse a foreign
+    // run's volume.
+    const collideClient = new FakeK8sClient();
+    const provider = new PVCSandboxProvider({
+      namespace: "relay-test",
+      k8sClient: collideClient,
+      initPollIntervalMs: 1,
+      initTimeoutMs: 1_000
+    });
+    // Auto-succeed init jobs so create() doesn't hang on the first call.
+    const originalCreate = collideClient.createJob.bind(collideClient);
+    collideClient.createJob = async (ns, job) => {
+      const res = await originalCreate(ns, job);
+      const name = job.metadata?.name ?? "";
+      const rec = collideClient.jobs.get(name);
+      if (rec) rec.succeeded = 1;
+      return res;
+    };
+    await provider.create(
+      { root: "/tmp/fake", remoteUrl: "https://example.com/repo.git" },
+      "main",
+      { runId: "MY_RUN", ticketId: "T1" }
+    );
+    await expect(
+      provider.create(
+        { root: "/tmp/fake", remoteUrl: "https://example.com/repo.git" },
+        "main",
+        { runId: "my-run", ticketId: "T1" }
+      )
+    ).rejects.toThrow(/already exists with labels/);
+  });
+
+  it("readJob transient failures are retried up to maxConsecutivePollFailures", async () => {
+    // Three transient failures then success: wait() must still resolve.
+    const handle = await executor.start(makeTicket({ id: "T1" }), {
+      runId: "r",
+      repoRoot: "/tmp/fake",
+      sandbox
+    });
+    const jobName = client.jobCreates[0].metadata?.name!;
+    client.podsForJob.set(jobName, [
+      {
+        metadata: { name: `${jobName}-pod` },
+        status: {
+          containerStatuses: [
+            { name: "worker", state: { terminated: { exitCode: 0 } } }
+          ]
+        }
+      }
+    ]);
+    let calls = 0;
+    const realReadJob = client.readJob.bind(client);
+    client.readJob = async (ns, name) => {
+      calls += 1;
+      if (calls <= 3) throw new Error(`simulated transient 5xx #${calls}`);
+      return realReadJob(ns, name);
+    };
+    setTimeout(() => {
+      const rec = client.jobs.get(jobName)!;
+      rec.succeeded = 1;
+    }, 20);
+    const result = await handle.wait();
+    expect(result.exitCode).toBe(0);
+    expect(calls).toBeGreaterThan(3);
+  });
+
+  it("readJob persistent failures finalize with an API-unavailable error", async () => {
+    const sb2 = await createSandbox(client, "r", "TX");
+    const exec2 = new PodExecutor({
+      sandboxProvider: new PVCSandboxProvider({
+        namespace: "relay-test",
+        k8sClient: client
+      }),
+      k8sClient: client,
+      namespace: "relay-test",
+      workerImage: "ghcr.io/example/worker:latest",
+      pollIntervalMs: 2,
+      postKillWatchdogMs: 50,
+      maxConsecutivePollFailures: 3
+    });
+    const handle = await exec2.start(makeTicket({ id: "TX" }), {
+      runId: "r",
+      repoRoot: "/tmp/fake",
+      sandbox: sb2
+    });
+    // Force readJob to fail forever.
+    client.readJob = async () => {
+      throw new Error("simulated persistent API down");
+    };
+    const result = await handle.wait();
+    expect(result.summary).toMatch(/K8s API unavailable after 3 retries/);
+    expect(result.stderr).toMatch(/K8s API unavailable after 3 retries/);
+  });
+
+  it("surfaces an actionable error when the k8s client module fails to load", async () => {
+    // `wrapK8sLoader` is the exported helper that wraps the dynamic import
+    // in `createDefaultK8sClient`. Feeding it a rejecting loader simulates
+    // the real `ERR_MODULE_NOT_FOUND` shape an operator sees when they run
+    // `HARNESS_EXECUTOR=pod` without installing `@kubernetes/client-node`.
+    const { wrapK8sLoader } = await import("../../src/execution/k8s-client.js");
+    const brokenLoader = () =>
+      Promise.reject(
+        Object.assign(new Error("Cannot find package '@kubernetes/client-node'"), {
+          code: "ERR_MODULE_NOT_FOUND"
+        })
+      );
+    await expect(wrapK8sLoader(brokenLoader)).rejects.toThrow(
+      /@kubernetes\/client-node is required for HARNESS_EXECUTOR=pod/
+    );
+    await expect(wrapK8sLoader(brokenLoader)).rejects.toThrow(
+      /pnpm add @kubernetes\/client-node/
+    );
   });
 
   it("requires a remote sandbox in the matching namespace", async () => {
