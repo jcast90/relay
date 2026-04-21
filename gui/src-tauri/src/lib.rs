@@ -233,7 +233,12 @@ fn append_session_message(
     role: String,
     content: String,
     agent_alias: Option<String>,
+    metadata: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
+    let metadata_json = metadata
+        .as_ref()
+        .map(|v| serde_json::to_string(v).map_err(|e| e.to_string()))
+        .transpose()?;
     let mut args: Vec<&str> = vec![
         "session", "append", "--channel", &channel_id, "--session", &session_id, "--role", &role,
     ];
@@ -241,8 +246,48 @@ fn append_session_message(
         args.push("--alias");
         args.push(alias);
     }
+    if let Some(ref md) = metadata_json {
+        args.push("--metadata");
+        args.push(md);
+    }
     args.push(&content);
     cli_json(&args)
+}
+
+#[tauri::command]
+fn rewind_snapshot(
+    channel_id: String,
+    session_id: String,
+) -> Result<serde_json::Value, String> {
+    cli_json(&[
+        "chat",
+        "rewind-snapshot",
+        "--channel",
+        &channel_id,
+        "--session",
+        &session_id,
+    ])
+}
+
+#[tauri::command]
+fn rewind_apply(
+    channel_id: String,
+    session_id: String,
+    key: String,
+    message_timestamp: String,
+) -> Result<serde_json::Value, String> {
+    cli_json(&[
+        "chat",
+        "rewind-apply",
+        "--channel",
+        &channel_id,
+        "--session",
+        &session_id,
+        "--key",
+        &key,
+        "--message-timestamp",
+        &message_timestamp,
+    ])
 }
 
 // --- Chat streaming (claude-cli subprocess + Tauri events) ---
@@ -302,17 +347,28 @@ fn start_chat(
     cwd: Option<String>,
     claude_session_id: Option<String>,
     auto_approve: bool,
+    rewind_key: Option<String>,
 ) -> Result<u64, String> {
     let stream_id = CHAT_SEQ.fetch_add(1, Ordering::SeqCst);
 
     // Persist user message immediately so UI reflects history on reload.
+    // `rewind_key`, if supplied, is attached as `rewindKey` metadata so the
+    // frontend can later offer a Rewind button that resets repos to the
+    // snapshot captured before this turn.
     let alias_arg = alias.clone();
+    let metadata_json = rewind_key
+        .as_ref()
+        .map(|k| format!("{{\"rewindKey\":\"{}\"}}", k.replace('"', "\\\"")));
     let mut append_args: Vec<&str> = vec![
         "session", "append", "--channel", &channel_id, "--session", &session_id, "--role", "user",
     ];
     if let Some(ref a) = alias_arg {
         append_args.push("--alias");
         append_args.push(a);
+    }
+    if let Some(ref md) = metadata_json {
+        append_args.push("--metadata");
+        append_args.push(md);
     }
     append_args.push(&message);
     let _ = cli_run(&append_args);
@@ -948,6 +1004,8 @@ pub fn run() {
             create_session,
             delete_session,
             append_session_message,
+            rewind_snapshot,
+            rewind_apply,
             start_chat,
             spawn_agent,
             kill_spawned_agent,

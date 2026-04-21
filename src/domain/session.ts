@@ -12,6 +12,10 @@ export interface PersistedChatMessage {
   content: string;
   timestamp: string;
   agentAlias: string | null;
+  /** Free-form per-message metadata. Populated by the rewind feature with
+   *  `rewindKey` on user turns. Optional for back-compat with transcripts
+   *  written before the field existed. */
+  metadata?: Record<string, string>;
 }
 
 export function buildSessionId(): string {

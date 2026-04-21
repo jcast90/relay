@@ -1199,19 +1199,40 @@ async function handleSessionCommand(args: string[]): Promise<void> {
     const sessionId = parseNamedArg(args, "--session");
     const role = parseNamedArg(args, "--role") ?? "user";
     const alias = parseNamedArg(args, "--alias") ?? null;
+    const metadataRaw = parseNamedArg(args, "--metadata");
     const content = extractPositionals(args).slice(1).join(" ");
 
     if (!channelId || !sessionId || !content) {
-      console.error("Usage: rly session append --channel <id> --session <id> --role <role> [--alias <name>] <content>");
+      console.error("Usage: rly session append --channel <id> --session <id> --role <role> [--alias <name>] [--metadata <json>] <content>");
       process.exitCode = 1;
       return;
+    }
+
+    let metadata: Record<string, string> | undefined;
+    if (metadataRaw) {
+      try {
+        const parsed = JSON.parse(metadataRaw);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          metadata = {};
+          for (const [k, v] of Object.entries(parsed)) {
+            metadata[k] = typeof v === "string" ? v : JSON.stringify(v);
+          }
+        } else {
+          throw new Error("--metadata must be a JSON object of string values");
+        }
+      } catch (err) {
+        console.error(`Invalid --metadata JSON: ${err instanceof Error ? err.message : String(err)}`);
+        process.exitCode = 1;
+        return;
+      }
     }
 
     await store.appendMessage(channelId, sessionId, {
       role,
       content,
       timestamp: new Date().toISOString(),
-      agentAlias: alias
+      agentAlias: alias,
+      ...(metadata ? { metadata } : {})
     });
 
     jsonOut({ ok: true });
@@ -1322,8 +1343,107 @@ async function handleChatCommand(
     return;
   }
 
-  console.error("Usage: rly chat <system-prompt|resolve-refs|mcp-config>");
+  if (sub === "rewind-snapshot") {
+    const channelId = parseNamedArg(args, "--channel");
+    const sessionId = parseNamedArg(args, "--session");
+    if (!channelId || !sessionId) {
+      console.error("Usage: rly chat rewind-snapshot --channel <id> --session <id>");
+      process.exitCode = 1;
+      return;
+    }
+    const result = await rewindSnapshot(channelId, sessionId);
+    jsonOut(result);
+    return;
+  }
+
+  if (sub === "rewind-apply") {
+    const channelId = parseNamedArg(args, "--channel");
+    const sessionId = parseNamedArg(args, "--session");
+    const key = parseNamedArg(args, "--key");
+    const messageTimestamp = parseNamedArg(args, "--message-timestamp");
+    if (!channelId || !sessionId || !key || !messageTimestamp) {
+      console.error("Usage: rly chat rewind-apply --channel <id> --session <id> --key <ref-key> --message-timestamp <iso8601>");
+      process.exitCode = 1;
+      return;
+    }
+    const result = await rewindApply(channelId, sessionId, key, messageTimestamp);
+    jsonOut(result);
+    return;
+  }
+
+  console.error("Usage: rly chat <system-prompt|resolve-refs|mcp-config|rewind-snapshot|rewind-apply>");
   process.exitCode = 1;
+}
+
+async function rewindSnapshot(
+  channelId: string,
+  sessionId: string
+): Promise<{ key: string; snapshots: Array<{ alias: string; repoPath: string; sha: string; ref: string }> }> {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
+
+  const channelStore = new ChannelStore(undefined, getHarnessStore());
+  const channel = await channelStore.getChannel(channelId);
+  if (!channel) throw new Error(`Channel not found: ${channelId}`);
+
+  const key = `${Date.now()}`;
+  const snapshots: Array<{ alias: string; repoPath: string; sha: string; ref: string }> = [];
+  for (const assignment of channel.repoAssignments ?? []) {
+    const refName = `refs/harness-rewind/${sessionId}/${key}`;
+    const { stdout: shaOut } = await execFileAsync("git", ["rev-parse", "HEAD"], {
+      cwd: assignment.repoPath
+    });
+    const sha = shaOut.trim();
+    if (!sha) throw new Error(`git rev-parse HEAD produced empty output in ${assignment.repoPath}`);
+    await execFileAsync("git", ["update-ref", refName, sha], {
+      cwd: assignment.repoPath
+    });
+    snapshots.push({ alias: assignment.alias, repoPath: assignment.repoPath, sha, ref: refName });
+  }
+  return { key, snapshots };
+}
+
+async function rewindApply(
+  channelId: string,
+  sessionId: string,
+  key: string,
+  messageTimestamp: string
+): Promise<{
+  reset: Array<{ alias: string; repoPath: string; sha: string }>;
+  removedMessages: number;
+  clearedClaudeSessions: boolean;
+}> {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
+
+  const channelStore = new ChannelStore(undefined, getHarnessStore());
+  const channel = await channelStore.getChannel(channelId);
+  if (!channel) throw new Error(`Channel not found: ${channelId}`);
+
+  const refName = `refs/harness-rewind/${sessionId}/${key}`;
+  const reset: Array<{ alias: string; repoPath: string; sha: string }> = [];
+  for (const assignment of channel.repoAssignments ?? []) {
+    const { stdout: shaOut } = await execFileAsync("git", ["rev-parse", "--verify", refName], {
+      cwd: assignment.repoPath
+    }).catch((err) => {
+      throw new Error(`Rewind ref ${refName} missing in ${assignment.repoPath} (alias @${assignment.alias}): ${err instanceof Error ? err.message : String(err)}`);
+    });
+    const sha = shaOut.trim();
+    await execFileAsync("git", ["reset", "--hard", sha], { cwd: assignment.repoPath });
+    reset.push({ alias: assignment.alias, repoPath: assignment.repoPath, sha });
+  }
+
+  const sessionStore = new SessionStore();
+  const removedMessages = await sessionStore.truncateBeforeTimestamp(
+    channelId,
+    sessionId,
+    messageTimestamp
+  );
+  const cleared = await sessionStore.clearClaudeSessionIds(channelId, sessionId);
+
+  return { reset, removedMessages, clearedClaudeSessions: cleared !== null };
 }
 
 async function printRunsIndex(

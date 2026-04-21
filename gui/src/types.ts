@@ -67,6 +67,25 @@ export type PersistedChatMessage = {
   content: string;
   timestamp: string;
   agentAlias?: string;
+  // Free-form per-message metadata. Rewind tags user turns with
+  // `rewindKey` to identify which git refs to restore.
+  metadata?: Record<string, string>;
+};
+
+export type RewindSnapshot = {
+  key: string;
+  snapshots: Array<{
+    alias: string;
+    repoPath: string;
+    sha: string;
+    ref: string;
+  }>;
+};
+
+export type RewindResult = {
+  reset: Array<{ alias: string; repoPath: string; sha: string }>;
+  removedMessages: number;
+  clearedClaudeSessions: boolean;
 };
 
 export type TicketLedgerEntry = {
