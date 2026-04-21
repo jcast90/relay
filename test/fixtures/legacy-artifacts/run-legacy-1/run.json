@@ -1,0 +1,17 @@
+{
+  "runId": "run-legacy-1",
+  "featureRequest": "Legacy feature",
+  "state": "COMPLETE",
+  "startedAt": "2026-04-20T00:00:00.000Z",
+  "updatedAt": "2026-04-20T00:00:01.000Z",
+  "completedAt": "2026-04-20T00:00:01.000Z",
+  "channelId": null,
+  "classification": null,
+  "plan": null,
+  "ticketPlan": null,
+  "evidence": [],
+  "artifacts": [],
+  "phaseLedger": [],
+  "ticketLedger": [],
+  "eventCount": 2
+}

@@ -14,6 +14,9 @@ import type {
   RunEvent,
   RunIndexEntry
 } from "../domain/run.js";
+import { buildHarnessStore } from "../storage/factory.js";
+import { STORE_NS } from "../storage/namespaces.js";
+import type { HarnessStore } from "../storage/store.js";
 
 export interface SaveCommandArtifactInput {
   runId: string;
@@ -92,50 +95,135 @@ export interface ArtifactStore {
   readApprovalRecord(runId: string): Promise<{ decision: "approved" | "rejected"; feedback?: string; timestamp: string } | null>;
 }
 
+/**
+ * Coordination record written through the injected `HarnessStore` every time a
+ * Rust/GUI-visible run artifact is mutated. Rust and the Tauri GUI read the
+ * on-disk JSON/JSONL files directly (`runs-index.json`, `<runId>/run.json`,
+ * `<runId>/ticket-ledger.json`, `<runId>/phase-ledger.json`,
+ * `<runId>/pr-lifecycle.json`, `<runId>/events.jsonl`), so the data itself
+ * stays direct-file. This small record serializes concurrent writers through
+ * `store.mutate` — on Postgres (T-402) it runs under
+ * `pg_advisory_xact_lock`, giving multi-process schedulers a cross-process
+ * coordination hook. Advisory-only; nothing reads it today.
+ */
+interface RunArtifactCoordRecord {
+  kind:
+    | "run-snapshot"
+    | "runs-index"
+    | "phase-ledger"
+    | "ticket-ledger"
+    | "pr-lifecycle"
+    | "events";
+  updatedAt: string;
+  count?: number;
+}
+
+function coordId(runId: string, kind: RunArtifactCoordRecord["kind"]): string {
+  // Flat id encoding — `HarnessStore` rejects slashes in ids, so the runId
+  // and the record kind are joined with a double-underscore separator that
+  // cannot appear in a runId (`run-<ts>-<rand>`) or in the fixed kind set.
+  return `${runId}__${kind}`;
+}
+
+function blobId(runId: string, phaseId: string, artifactId: string): string {
+  return `${runId}__${phaseId}__${artifactId}`;
+}
+
+const BLOB_URI_PREFIX = "blob://";
+
+function buildBlobUri(id: string): string {
+  return `${BLOB_URI_PREFIX}${STORE_NS.runArtifacts}/${id}`;
+}
+
+function parseBlobUri(
+  uri: string
+): { ns: string; id: string } | null {
+  if (!uri.startsWith(BLOB_URI_PREFIX)) return null;
+  const rest = uri.slice(BLOB_URI_PREFIX.length);
+  const slash = rest.indexOf("/");
+  if (slash < 0) return null;
+  return { ns: rest.slice(0, slash), id: rest.slice(slash + 1) };
+}
+
 export class LocalArtifactStore implements ArtifactStore {
-  constructor(private readonly rootDir: string) {}
+  private readonly store: HarnessStore;
+
+  /**
+   * @param rootDir On-disk artifact root. This is the workspace-scoped
+   *   `artifacts/` directory that Rust's `crates/harness-data` and the Tauri
+   *   GUI read from directly — see `load_runs_for_workspace`,
+   *   `load_ticket_ledger`. Do not move these paths without also updating
+   *   the Rust crate and the desktop app.
+   * @param store `HarnessStore` used for artifacts that have migrated off
+   *   direct filesystem access (command results, failure classifications,
+   *   classification docs, approval records, design docs) and for the
+   *   coordination records written alongside Rust-compat writes. Defaults to
+   *   `buildHarnessStore()` so callers that don't inject one pick up the
+   *   process-wide default through the factory. Tests substitute a
+   *   `FakeHarnessStore` here.
+   *
+   * NOTE: The Rust-visible artifacts (`runs-index.json`,
+   * `<runId>/{run.json,events.jsonl,ticket-ledger.json,phase-ledger.json,
+   * pr-lifecycle.json}`) continue to be written directly to `rootDir`. A
+   * small coordination record is written through the store per mutation so
+   * T-402's Postgres backend can layer cross-process coordination on top.
+   * T-103a tracks aligning the Rust crate so the data itself can flow
+   * through `HarnessStore`.
+   */
+  constructor(
+    private readonly rootDir: string,
+    store?: HarnessStore
+  ) {
+    this.store = store ?? buildHarnessStore();
+  }
 
   async saveCommandResult(
     input: SaveCommandArtifactInput
   ): Promise<ArtifactRecord> {
     const artifactId = buildArtifactId();
-    const phaseDir = join(this.rootDir, input.runId, input.phaseId);
+    const content: CommandArtifactContent = {
+      artifactId,
+      phaseId: input.phaseId,
+      command: input.command,
+      cwd: input.cwd,
+      exitCode: input.result.exitCode,
+      stdout: input.result.stdout,
+      stderr: input.result.stderr,
+      capturedAt: new Date().toISOString()
+    };
 
-    await mkdir(phaseDir, {
-      recursive: true
+    const id = blobId(input.runId, input.phaseId, artifactId);
+    const bytes = new TextEncoder().encode(JSON.stringify(content, null, 2));
+    await this.store.putBlob(STORE_NS.runArtifacts, id, bytes, {
+      contentType: "application/json",
+      runId: input.runId,
+      phaseId: input.phaseId,
+      artifactType: "command_result"
     });
-
-    const path = join(phaseDir, `${artifactId}.json`);
-
-    await writeFile(
-      path,
-      JSON.stringify(
-        {
-          artifactId,
-          phaseId: input.phaseId,
-          command: input.command,
-          cwd: input.cwd,
-          exitCode: input.result.exitCode,
-          stdout: input.result.stdout,
-          stderr: input.result.stderr,
-          capturedAt: new Date().toISOString()
-        },
-        null,
-        2
-      )
-    );
 
     return {
       artifactId,
       phaseId: input.phaseId,
       type: "command_result",
-      path,
+      path: buildBlobUri(id),
       command: input.command,
       exitCode: input.result.exitCode
     };
   }
 
   async readCommandResult(path: string): Promise<CommandArtifactContent> {
+    const ref = parseBlobUri(path);
+    if (ref) {
+      const bytes = await this.store.getBlob({
+        ns: ref.ns,
+        id: ref.id,
+        size: 0
+      });
+      return JSON.parse(new TextDecoder().decode(bytes)) as CommandArtifactContent;
+    }
+    // Legacy: pre-T-103 artifacts stored as loose files under `<runId>/<phaseId>/<artifactId>.json`.
+    // Existing run histories still carry those absolute paths in `run.json`,
+    // so we fall back to a direct read when the path isn't a blob URI.
     return JSON.parse(await readFile(path, "utf8")) as CommandArtifactContent;
   }
 
@@ -145,35 +233,29 @@ export class LocalArtifactStore implements ArtifactStore {
     classification: FailureClassification;
   }): Promise<ArtifactRecord> {
     const artifactId = buildArtifactId();
-    const phaseDir = join(this.rootDir, input.runId, input.phaseId);
+    const content: FailureClassificationArtifactContent = {
+      artifactId,
+      phaseId: input.phaseId,
+      category: input.classification.category,
+      rationale: input.classification.rationale,
+      nextAction: input.classification.nextAction,
+      capturedAt: new Date().toISOString()
+    };
 
-    await mkdir(phaseDir, {
-      recursive: true
+    const id = blobId(input.runId, input.phaseId, artifactId);
+    const bytes = new TextEncoder().encode(JSON.stringify(content, null, 2));
+    await this.store.putBlob(STORE_NS.runArtifacts, id, bytes, {
+      contentType: "application/json",
+      runId: input.runId,
+      phaseId: input.phaseId,
+      artifactType: "failure_classification"
     });
-
-    const path = join(phaseDir, `${artifactId}.json`);
-
-    await writeFile(
-      path,
-      JSON.stringify(
-        {
-          artifactId,
-          phaseId: input.phaseId,
-          category: input.classification.category,
-          rationale: input.classification.rationale,
-          nextAction: input.classification.nextAction,
-          capturedAt: new Date().toISOString()
-        },
-        null,
-        2
-      )
-    );
 
     return {
       artifactId,
       phaseId: input.phaseId,
       type: "failure_classification",
-      path,
+      path: buildBlobUri(id),
       category: input.classification.category,
       rationale: input.classification.rationale,
       nextAction: input.classification.nextAction
@@ -183,6 +265,17 @@ export class LocalArtifactStore implements ArtifactStore {
   async readFailureClassification(
     path: string
   ): Promise<FailureClassificationArtifactContent> {
+    const ref = parseBlobUri(path);
+    if (ref) {
+      const bytes = await this.store.getBlob({
+        ns: ref.ns,
+        id: ref.id,
+        size: 0
+      });
+      return JSON.parse(
+        new TextDecoder().decode(bytes)
+      ) as FailureClassificationArtifactContent;
+    }
     return JSON.parse(
       await readFile(path, "utf8")
     ) as FailureClassificationArtifactContent;
@@ -213,6 +306,7 @@ export class LocalArtifactStore implements ArtifactStore {
       )
     );
 
+    await this.writeCoordRecord(input.runId, "phase-ledger", input.phaseLedger.length);
     return path;
   }
 
@@ -238,6 +332,9 @@ export class LocalArtifactStore implements ArtifactStore {
       )
     );
 
+    // Index-wide coordination record — shares the `runs-index` sentinel runId
+    // since there is only one index per rootDir (workspace).
+    await this.writeCoordRecord("runs-index", "runs-index", next.length);
     return path;
   }
 
@@ -278,6 +375,7 @@ export class LocalArtifactStore implements ArtifactStore {
     };
 
     await writeFile(path, JSON.stringify(snapshot, null, 2));
+    await this.writeCoordRecord(run.id, "run-snapshot", run.events.length);
     return path;
   }
 
@@ -297,6 +395,7 @@ export class LocalArtifactStore implements ArtifactStore {
 
     const path = join(runDir, "events.jsonl");
     await appendFile(path, JSON.stringify(event) + "\n");
+    await this.writeCoordRecord(runId, "events");
   }
 
   async readEventLog(runId: string): Promise<RunEvent[]> {
@@ -320,6 +419,7 @@ export class LocalArtifactStore implements ArtifactStore {
 
     const path = join(runDir, "pr-lifecycle.json");
     await writeFile(path, JSON.stringify(lifecycle, null, 2));
+    await this.writeCoordRecord(lifecycle.runId, "pr-lifecycle");
     return path;
   }
 
@@ -355,6 +455,11 @@ export class LocalArtifactStore implements ArtifactStore {
       )
     );
 
+    await this.writeCoordRecord(
+      input.runId,
+      "ticket-ledger",
+      input.ticketLedger.length
+    );
     return path;
   }
 
@@ -375,37 +480,28 @@ export class LocalArtifactStore implements ArtifactStore {
     runId: string;
     classification: ClassificationResult;
   }): Promise<string> {
-    const runDir = join(this.rootDir, input.runId);
-    await mkdir(runDir, { recursive: true });
-
-    const path = join(runDir, "classification.json");
-
-    await writeFile(
-      path,
-      JSON.stringify(
-        {
-          runId: input.runId,
-          ...input.classification,
-          classifiedAt: new Date().toISOString()
-        },
-        null,
-        2
-      )
-    );
-
-    return path;
+    const id = `${input.runId}__classification`;
+    const doc = {
+      runId: input.runId,
+      ...input.classification,
+      classifiedAt: new Date().toISOString()
+    };
+    await this.store.putDoc(STORE_NS.runArtifacts, id, doc);
+    return buildBlobUri(id);
   }
 
   async saveDesignDoc(input: {
     runId: string;
     content: string;
   }): Promise<string> {
-    const runDir = join(this.rootDir, input.runId);
-    await mkdir(runDir, { recursive: true });
-
-    const path = join(runDir, "design-doc.md");
-    await writeFile(path, input.content);
-    return path;
+    const id = `${input.runId}__design-doc`;
+    const bytes = new TextEncoder().encode(input.content);
+    await this.store.putBlob(STORE_NS.runArtifacts, id, bytes, {
+      contentType: "text/markdown",
+      runId: input.runId,
+      artifactType: "design_doc"
+    });
+    return buildBlobUri(id);
   }
 
   async saveApprovalRecord(input: {
@@ -413,26 +509,15 @@ export class LocalArtifactStore implements ArtifactStore {
     decision: "approved" | "rejected";
     feedback?: string;
   }): Promise<string> {
-    const runDir = join(this.rootDir, input.runId);
-    await mkdir(runDir, { recursive: true });
-
-    const path = join(runDir, "approval.json");
-
-    await writeFile(
-      path,
-      JSON.stringify(
-        {
-          runId: input.runId,
-          decision: input.decision,
-          feedback: input.feedback ?? null,
-          timestamp: new Date().toISOString()
-        },
-        null,
-        2
-      )
-    );
-
-    return path;
+    const id = `${input.runId}__approval`;
+    const doc = {
+      runId: input.runId,
+      decision: input.decision,
+      feedback: input.feedback ?? null,
+      timestamp: new Date().toISOString()
+    };
+    await this.store.putDoc(STORE_NS.runArtifacts, id, doc);
+    return buildBlobUri(id);
   }
 
   async readApprovalRecord(runId: string): Promise<{
@@ -440,17 +525,41 @@ export class LocalArtifactStore implements ArtifactStore {
     feedback?: string;
     timestamp: string;
   } | null> {
-    const path = join(this.rootDir, runId, "approval.json");
+    const id = `${runId}__approval`;
+    const doc = await this.store.getDoc<{
+      runId: string;
+      decision: "approved" | "rejected";
+      feedback: string | null;
+      timestamp: string;
+    }>(STORE_NS.runArtifacts, id);
+    if (!doc) return null;
+    return {
+      decision: doc.decision,
+      feedback: doc.feedback ?? undefined,
+      timestamp: doc.timestamp
+    };
+  }
 
-    try {
-      return JSON.parse(await readFile(path, "utf8")) as {
-        decision: "approved" | "rejected";
-        feedback?: string;
-        timestamp: string;
-      };
-    } catch {
-      return null;
-    }
+  /**
+   * Advisory coordination record for Rust-visible run artifacts. See the
+   * `RunArtifactCoordRecord` doc for rationale. Uses `mutate` so the call
+   * runs under the backend's serialization primitive (in-process Promise
+   * chain on `FileHarnessStore`; `pg_advisory_xact_lock` on Postgres).
+   */
+  private async writeCoordRecord(
+    runId: string,
+    kind: RunArtifactCoordRecord["kind"],
+    count?: number
+  ): Promise<void> {
+    await this.store.mutate<RunArtifactCoordRecord>(
+      STORE_NS.runArtifacts,
+      coordId(runId, kind),
+      () => ({
+        kind,
+        updatedAt: new Date().toISOString(),
+        ...(count !== undefined ? { count } : {})
+      })
+    );
   }
 }
 

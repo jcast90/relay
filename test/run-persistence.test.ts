@@ -5,7 +5,18 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { LocalArtifactStore } from "../src/execution/artifact-store.js";
+import { FileHarnessStore } from "../src/storage/file-store.js";
 import type { HarnessRun, RunEvent } from "../src/domain/run.js";
+
+async function makeStore(): Promise<{ root: string; store: LocalArtifactStore; storeRoot: string }> {
+  const root = await mkdtemp(join(tmpdir(), "run-persist-"));
+  const storeRoot = await mkdtemp(join(tmpdir(), "run-persist-hs-"));
+  return {
+    root,
+    storeRoot,
+    store: new LocalArtifactStore(root, new FileHarnessStore(storeRoot))
+  };
+}
 
 function buildTestRun(overrides?: Partial<HarnessRun>): HarnessRun {
   const now = new Date().toISOString();
@@ -42,8 +53,7 @@ function buildTestRun(overrides?: Partial<HarnessRun>): HarnessRun {
 
 describe("run persistence", () => {
   it("saves and reads a full run snapshot", async () => {
-    const root = await mkdtemp(join(tmpdir(), "run-persist-"));
-    const store = new LocalArtifactStore(root);
+    const { root, store, storeRoot } = await makeStore();
 
     try {
       const run = buildTestRun();
@@ -60,24 +70,24 @@ describe("run persistence", () => {
       expect(snapshot!.eventCount).toBe(1);
     } finally {
       await rm(root, { recursive: true, force: true });
+      await rm(storeRoot, { recursive: true, force: true });
     }
   });
 
   it("returns null for missing run snapshot", async () => {
-    const root = await mkdtemp(join(tmpdir(), "run-persist-"));
-    const store = new LocalArtifactStore(root);
+    const { root, store, storeRoot } = await makeStore();
 
     try {
       const snapshot = await store.readRunSnapshot("nonexistent-run");
       expect(snapshot).toBeNull();
     } finally {
       await rm(root, { recursive: true, force: true });
+      await rm(storeRoot, { recursive: true, force: true });
     }
   });
 
   it("appends and reads events from jsonl log", async () => {
-    const root = await mkdtemp(join(tmpdir(), "run-persist-"));
-    const store = new LocalArtifactStore(root);
+    const { root, store, storeRoot } = await makeStore();
 
     try {
       const event1: RunEvent = {
@@ -104,18 +114,19 @@ describe("run persistence", () => {
       expect(events[1].type).toBe("PlanGenerated");
     } finally {
       await rm(root, { recursive: true, force: true });
+      await rm(storeRoot, { recursive: true, force: true });
     }
   });
 
   it("returns empty array for missing event log", async () => {
-    const root = await mkdtemp(join(tmpdir(), "run-persist-"));
-    const store = new LocalArtifactStore(root);
+    const { root, store, storeRoot } = await makeStore();
 
     try {
       const events = await store.readEventLog("nonexistent");
       expect(events).toEqual([]);
     } finally {
       await rm(root, { recursive: true, force: true });
+      await rm(storeRoot, { recursive: true, force: true });
     }
   });
 });

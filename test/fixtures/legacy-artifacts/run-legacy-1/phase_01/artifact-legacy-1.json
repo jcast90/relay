@@ -1,0 +1,10 @@
+{
+  "artifactId": "artifact-legacy-1",
+  "phaseId": "phase_01",
+  "command": "pnpm test",
+  "cwd": "/tmp/repo",
+  "exitCode": 0,
+  "stdout": "legacy stdout output",
+  "stderr": "",
+  "capturedAt": "2026-04-20T00:00:01.000Z"
+}

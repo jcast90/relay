@@ -351,6 +351,7 @@ function groupTicketsByStatus(
 
 function buildArtifactStore(workspaceId: string): LocalArtifactStore {
   return new LocalArtifactStore(
-    `${getGlobalRoot()}/workspaces/${workspaceId}/artifacts`
+    `${getGlobalRoot()}/workspaces/${workspaceId}/artifacts`,
+    getHarnessStore()
   );
 }

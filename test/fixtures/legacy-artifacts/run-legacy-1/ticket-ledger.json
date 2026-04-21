@@ -1,0 +1,24 @@
+{
+  "runId": "run-legacy-1",
+  "updatedAt": "2026-04-20T00:00:01.000Z",
+  "tickets": [
+    {
+      "ticketId": "ticket-legacy-1",
+      "title": "Legacy ticket",
+      "specialty": "general",
+      "status": "complete",
+      "dependsOn": [],
+      "assignedAgentId": null,
+      "assignedAgentName": null,
+      "crosslinkSessionId": null,
+      "verification": "passed",
+      "lastClassification": null,
+      "chosenNextAction": null,
+      "attempt": 1,
+      "startedAt": "2026-04-20T00:00:00.000Z",
+      "completedAt": "2026-04-20T00:00:01.000Z",
+      "updatedAt": "2026-04-20T00:00:01.000Z",
+      "runId": "run-legacy-1"
+    }
+  ]
+}

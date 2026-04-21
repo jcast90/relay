@@ -10,6 +10,7 @@ import {
   canTransition
 } from "../src/domain/pr-lifecycle.js";
 import { LocalArtifactStore } from "../src/execution/artifact-store.js";
+import { FileHarnessStore } from "../src/storage/file-store.js";
 
 describe("PR lifecycle domain", () => {
   it("creates a lifecycle in branch_created stage", () => {
@@ -60,7 +61,8 @@ describe("PR lifecycle domain", () => {
 describe("PR lifecycle persistence", () => {
   it("saves and reads PR lifecycle from disk", async () => {
     const root = await mkdtemp(join(tmpdir(), "pr-lifecycle-"));
-    const store = new LocalArtifactStore(root);
+    const storeRoot = await mkdtemp(join(tmpdir(), "pr-lifecycle-hs-"));
+    const store = new LocalArtifactStore(root, new FileHarnessStore(storeRoot));
 
     try {
       const lifecycle = createPrLifecycle({
@@ -79,18 +81,21 @@ describe("PR lifecycle persistence", () => {
       expect(read!.currentStage).toBe("branch_created");
     } finally {
       await rm(root, { recursive: true, force: true });
+      await rm(storeRoot, { recursive: true, force: true });
     }
   });
 
   it("returns null for missing PR lifecycle", async () => {
     const root = await mkdtemp(join(tmpdir(), "pr-lifecycle-"));
-    const store = new LocalArtifactStore(root);
+    const storeRoot = await mkdtemp(join(tmpdir(), "pr-lifecycle-hs-"));
+    const store = new LocalArtifactStore(root, new FileHarnessStore(storeRoot));
 
     try {
       const result = await store.readPrLifecycle("nonexistent");
       expect(result).toBeNull();
     } finally {
       await rm(root, { recursive: true, force: true });
+      await rm(storeRoot, { recursive: true, force: true });
     }
   });
 });

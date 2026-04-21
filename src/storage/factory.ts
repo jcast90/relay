@@ -40,7 +40,15 @@ export class NotImplementedError extends Error {
  *                                          On-disk layout stays for
  *                                          Rust/GUI compat — T-101a aligns)
  *   - src/crosslink/store.ts             -> T-104
- *   - src/execution/artifact-store.ts    -> T-103
+ *   - src/execution/artifact-store.ts    -> T-103 (partial: ctor takes a
+ *                                          HarnessStore; command-result and
+ *                                          failure-classification blobs plus
+ *                                          classification/approval/design-doc
+ *                                          migrated; Rust-visible run
+ *                                          snapshots/indexes/ledgers stay
+ *                                          direct-file with a coordination
+ *                                          record written through the store.
+ *                                          T-103a aligns the Rust reader)
  *
  * Other `node:fs/promises` importers (workspace bootstrap, agent wrapper,
  * crosslink hook/tools, config, welcome, mcp server, scripted invoker,

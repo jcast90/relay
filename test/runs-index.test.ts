@@ -5,11 +5,13 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { LocalArtifactStore } from "../src/execution/artifact-store.js";
+import { FileHarnessStore } from "../src/storage/file-store.js";
 
 describe("runs index", () => {
   it("persists recent runs with jump targets", async () => {
     const artifactRoot = await mkdtemp(join(tmpdir(), "agent-harness-runs-index-"));
-    const store = new LocalArtifactStore(artifactRoot);
+    const storeRoot = await mkdtemp(join(tmpdir(), "agent-harness-runs-index-hs-"));
+    const store = new LocalArtifactStore(artifactRoot, new FileHarnessStore(storeRoot));
 
     try {
       const firstPath = await store.saveRunsIndex({
@@ -49,6 +51,10 @@ describe("runs index", () => {
       expect(entries[1]?.runId).toBe("run-1");
     } finally {
       await rm(artifactRoot, {
+        recursive: true,
+        force: true
+      });
+      await rm(storeRoot, {
         recursive: true,
         force: true
       });

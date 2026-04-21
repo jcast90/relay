@@ -16,6 +16,7 @@
 
 import { ChannelStore } from "../src/channels/channel-store.js";
 import { LocalArtifactStore } from "../src/execution/artifact-store.js";
+import { getHarnessStore } from "../src/storage/factory.js";
 import type { HarnessRun } from "../src/domain/run.js";
 import type { TicketDefinition } from "../src/domain/ticket.js";
 import { initializeTicketLedger } from "../src/domain/ticket.js";
@@ -423,7 +424,7 @@ async function main(): Promise<void> {
   const workspace =
     (await resolveWorkspaceForRepo(REPO)) ?? (await registerWorkspace(REPO));
   const artifactsDir = join(getWorkspaceDir(workspace.workspaceId), "artifacts");
-  const artifactStore = new LocalArtifactStore(artifactsDir);
+  const artifactStore = new LocalArtifactStore(artifactsDir, getHarnessStore());
 
   const runId = buildRunId();
   const now = new Date().toISOString();

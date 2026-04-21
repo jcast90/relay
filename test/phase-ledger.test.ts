@@ -5,11 +5,13 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { LocalArtifactStore } from "../src/execution/artifact-store.js";
+import { FileHarnessStore } from "../src/storage/file-store.js";
 
 describe("phase ledger persistence", () => {
   it("writes a compact phase ledger per run", async () => {
     const artifactRoot = await mkdtemp(join(tmpdir(), "agent-harness-ledger-"));
-    const store = new LocalArtifactStore(artifactRoot);
+    const storeRoot = await mkdtemp(join(tmpdir(), "agent-harness-ledger-hs-"));
+    const store = new LocalArtifactStore(artifactRoot, new FileHarnessStore(storeRoot));
 
     try {
       const path = await store.savePhaseLedger({
@@ -48,6 +50,10 @@ describe("phase ledger persistence", () => {
       expect(file.phases[0]?.chosenNextAction).toContain("Repair the tests");
     } finally {
       await rm(artifactRoot, {
+        recursive: true,
+        force: true
+      });
+      await rm(storeRoot, {
         recursive: true,
         force: true
       });
