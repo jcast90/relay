@@ -9,6 +9,12 @@ import type {
   K8sJob,
   K8sPersistentVolumeClaim
 } from "../k8s-client.js";
+import {
+  assertSafePathSegment,
+  finalizeK8sName,
+  sanitizeK8sLabelValue,
+  slugifyForK8s
+} from "../k8s-names.js";
 
 const DEFAULT_STORAGE_SIZE = "1Gi";
 const DEFAULT_INIT_IMAGE = "alpine/git:latest";
@@ -61,25 +67,6 @@ export interface PVCSandboxMeta extends Record<string, string> {
   runId: string;
   ticketId: string;
   workdir: string;
-}
-
-const TRAVERSAL_RE = /[\s/\\\0]|\.\.|^\.$/;
-
-function assertSafePathSegment(value: string, kind: string): void {
-  // Reject traversal / whitespace / null bytes before we attempt to use the id
-  // in any resource name. DNS-1123 legality is handled separately by slugify.
-  if (!value || TRAVERSAL_RE.test(value)) {
-    throw new Error(`Unsafe ${kind} segment: ${JSON.stringify(value)}`);
-  }
-}
-
-function slugifyForK8s(value: string): string {
-  // K8s object names are DNS-1123 labels: lowercase alphanumeric + hyphen,
-  // starting and ending with alphanumeric. We lowercase, replace runs of
-  // non-matching chars with '-', and trim leading/trailing non-alphanum.
-  const lowered = value.toLowerCase().replace(/[^a-z0-9-]+/g, "-");
-  const trimmed = lowered.replace(/^[-]+|[-]+$/g, "");
-  return trimmed || "x";
 }
 
 /**
@@ -138,12 +125,21 @@ export class PVCSandboxProvider implements SandboxProvider {
 
     const runSlug = slugifyForK8s(runId);
     const ticketSlug = slugifyForK8s(ticketId);
-    const pvcName = `pvc-${runSlug}-${ticketSlug}`.slice(0, 63);
-    const jobName = `init-${runSlug}-${ticketSlug}`.slice(0, 63);
+    const pvcName = finalizeK8sName(`pvc-${runSlug}-${ticketSlug}`);
+    const jobName = finalizeK8sName(`init-${runSlug}-${ticketSlug}`);
+    const runLabel = sanitizeK8sLabelValue(runId);
+    const ticketLabel = sanitizeK8sLabelValue(ticketId);
 
-    await this.ensurePvc(pvcName, runId, ticketId);
+    await this.ensurePvc(pvcName, runLabel, ticketLabel);
 
-    const job = this.buildInitJob(jobName, pvcName, repo.remoteUrl, base, runId, ticketId);
+    const job = this.buildInitJob(
+      jobName,
+      pvcName,
+      repo.remoteUrl,
+      base,
+      runLabel,
+      ticketLabel
+    );
     await this.client.createJob(this.namespace, job);
     try {
       await this.waitForJob(jobName);
@@ -152,7 +148,13 @@ export class PVCSandboxProvider implements SandboxProvider {
       // so the namespace stays tidy. The PVC survives for the executor.
       await this.client
         .deleteJob(this.namespace, jobName, { propagationPolicy: "Background" })
-        .catch(() => undefined);
+        .catch((err) => {
+          // Best-effort: the init job had a TTL and will eventually GC itself.
+          // We warn so the operator can investigate repeated leaks.
+          console.warn(
+            `[pvc-sandbox] failed to delete init job ${jobName} in ${this.namespace}: ${formatErr(err)}`
+          );
+        });
     }
 
     const meta: PVCSandboxMeta = {
@@ -191,21 +193,38 @@ export class PVCSandboxProvider implements SandboxProvider {
 
   private async ensurePvc(
     pvcName: string,
-    runId: string,
-    ticketId: string
+    runLabel: string,
+    ticketLabel: string
   ): Promise<void> {
     const existing = await this.client.readPersistentVolumeClaim(
       this.namespace,
       pvcName
     );
-    if (existing) return;
+    if (existing) {
+      // Reuse guard: two different runId/ticketId pairs can slugify to the
+      // same PVC name (e.g. case differences, unicode folding). If the
+      // existing PVC's labels don't match us, we MUST NOT share it — the
+      // init job would overwrite the other run's checkout.
+      const existingRun = existing.metadata?.labels?.["relay.run-id"];
+      const existingTicket = existing.metadata?.labels?.["relay.ticket-id"];
+      if (existingRun !== runLabel || existingTicket !== ticketLabel) {
+        throw new Error(
+          `PVC ${pvcName} in namespace ${this.namespace} already exists with ` +
+            `labels run-id=${JSON.stringify(existingRun)} ticket-id=${JSON.stringify(existingTicket)}, ` +
+            `but this create() call is for run-id=${JSON.stringify(runLabel)} ticket-id=${JSON.stringify(ticketLabel)}. ` +
+            `Two ids that slugify to the same name cannot share a PVC — ` +
+            `choose distinct ids or delete the existing PVC.`
+        );
+      }
+      return;
+    }
     const pvc: K8sPersistentVolumeClaim = {
       metadata: {
         name: pvcName,
         namespace: this.namespace,
         labels: {
-          "relay.run-id": runId,
-          "relay.ticket-id": ticketId,
+          "relay.run-id": runLabel,
+          "relay.ticket-id": ticketLabel,
           "relay.role": "sandbox"
         }
       },
@@ -223,16 +242,16 @@ export class PVCSandboxProvider implements SandboxProvider {
     pvcName: string,
     remoteUrl: string,
     base: string,
-    runId: string,
-    ticketId: string
+    runLabel: string,
+    ticketLabel: string
   ): K8sJob {
     return {
       metadata: {
         name: jobName,
         namespace: this.namespace,
         labels: {
-          "relay.run-id": runId,
-          "relay.ticket-id": ticketId,
+          "relay.run-id": runLabel,
+          "relay.ticket-id": ticketLabel,
           "relay.role": "sandbox-init"
         }
       },
@@ -242,8 +261,8 @@ export class PVCSandboxProvider implements SandboxProvider {
         template: {
           metadata: {
             labels: {
-              "relay.run-id": runId,
-              "relay.ticket-id": ticketId,
+              "relay.run-id": runLabel,
+              "relay.ticket-id": ticketLabel,
               "relay.role": "sandbox-init"
             }
           },
@@ -311,4 +330,8 @@ function shellEscape(value: string): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function formatErr(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
