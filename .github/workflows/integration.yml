@@ -1,0 +1,161 @@
+name: Integration
+
+# Integration tier — runs the suites that are `describe.skip`'d in the
+# default `ci.yml` because they need external services (Postgres, real
+# `git`, a GitHub token). The fast PR tier stays scripted-mode and
+# deterministic; this workflow is the long-poll:
+#
+#   * Nightly at 06:00 UTC on `main`.
+#   * On-demand via `workflow_dispatch` from the Actions UI.
+#
+# Jobs that need secrets a repo admin hasn't added yet are wired with
+# `if: ${{ secrets.SOMETHING != '' }}` or explicit no-op skips so the
+# workflow stays green until the secrets are provisioned.
+
+on:
+  schedule:
+    # 06:00 UTC ~ 23:00 PT the prior day — well after normal PR churn.
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      suites:
+        description: "Which suites to run (all|postgres|git|pr-watcher)"
+        required: false
+        default: "all"
+
+concurrency:
+  # Only one nightly at a time per ref; a manual dispatch cancels a running
+  # nightly on the same ref, which is the usual intent.
+  group: "integration-${{ github.ref }}"
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Postgres store + migration runner. Uses a service container so we don't
+  # need secrets; the connection string is constructed from the service's
+  # well-known credentials.
+  # ---------------------------------------------------------------------------
+  postgres:
+    name: postgres-integration
+    if: >-
+      ${{ github.event_name == 'schedule' ||
+          github.event.inputs.suites == 'all' ||
+          github.event.inputs.suites == 'postgres' }}
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: relay_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      HARNESS_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/relay_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Postgres integration suites
+        run: pnpm test test/storage/postgres-store.integration.test.ts test/storage/postgres-migrations.integration.test.ts
+
+  # ---------------------------------------------------------------------------
+  # Real-git worktree sandbox. No network, no secrets — just needs the system
+  # `git` and the `RELAY_TEST_REAL_GIT=1` flag to un-skip the suite.
+  # ---------------------------------------------------------------------------
+  git-worktree:
+    name: git-worktree-integration
+    if: >-
+      ${{ github.event_name == 'schedule' ||
+          github.event.inputs.suites == 'all' ||
+          github.event.inputs.suites == 'git' }}
+    runs-on: ubuntu-latest
+    env:
+      RELAY_TEST_REAL_GIT: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run git-worktree sandbox integration suite
+        run: pnpm test test/execution/git-worktree-sandbox.test.ts
+
+  # ---------------------------------------------------------------------------
+  # Live-GitHub pr-watcher-factory suite. Needs a real token — the test block
+  # is empty today, but this job is the slot it'll wire into once it grows
+  # cases. Skips cleanly until `INTEGRATION_GITHUB_TOKEN` is provisioned.
+  # ---------------------------------------------------------------------------
+  pr-watcher:
+    name: pr-watcher-live
+    if: >-
+      ${{ github.event_name == 'schedule' ||
+          github.event.inputs.suites == 'all' ||
+          github.event.inputs.suites == 'pr-watcher' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect INTEGRATION_GITHUB_TOKEN secret
+        id: detect
+        env:
+          TOKEN_PRESENT: ${{ secrets.INTEGRATION_GITHUB_TOKEN != '' }}
+        run: echo "present=$TOKEN_PRESENT" >> "$GITHUB_OUTPUT"
+
+      - name: Skip — no GitHub token provisioned
+        if: steps.detect.outputs.present != 'true'
+        run: |
+          echo "Skipping pr-watcher-live: add the INTEGRATION_GITHUB_TOKEN"
+          echo "repo secret (a fine-grained token with read access to the"
+          echo "pr-watcher fixture repo) to enable this tier. See CI.md."
+
+      - uses: pnpm/action-setup@v4
+        if: steps.detect.outputs.present == 'true'
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        if: steps.detect.outputs.present == 'true'
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        if: steps.detect.outputs.present == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Run pr-watcher live suite
+        if: steps.detect.outputs.present == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.INTEGRATION_GITHUB_TOKEN }}
+          HARNESS_LIVE: "1"
+        run: pnpm test test/cli/pr-watcher-factory.test.ts

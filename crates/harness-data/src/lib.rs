@@ -387,6 +387,51 @@ pub fn is_active_state(state: &str) -> bool {
     ACTIVE_STATES.contains(&state)
 }
 
+/// Kind of path segment being validated. Used only for error messages so
+/// callers can tell which input was unsafe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SegmentKind {
+    /// A namespace (top-level directory under the store root).
+    Namespace,
+    /// An identifier (leaf filename without extension).
+    Id,
+}
+
+impl SegmentKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            SegmentKind::Namespace => "ns",
+            SegmentKind::Id => "id",
+        }
+    }
+}
+
+/// Rust mirror of `assertSafeSegment` in `src/storage/file-store.ts`. Rejects
+/// path segments that could escape the store root via traversal (`..`),
+/// collapse to the parent (`.`), pierce a directory boundary (`/`, `\`), or
+/// trip the kernel's null-byte guard. Empty strings are also rejected because
+/// they deserialize ambiguously in several of the file layouts this crate
+/// reads.
+///
+/// Returns `Ok(())` for safe segments, `Err(String)` with a human-readable
+/// message for unsafe ones. Never panics.
+pub fn assert_safe_segment(segment: &str, kind: SegmentKind) -> Result<(), String> {
+    if segment.is_empty()
+        || segment == "."
+        || segment == ".."
+        || segment.contains('/')
+        || segment.contains('\\')
+        || segment.contains('\0')
+    {
+        return Err(format!(
+            "Unsafe path segment in {}: {:?}",
+            kind.as_str(),
+            segment
+        ));
+    }
+    Ok(())
+}
+
 fn load_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
     let content = fs::read_to_string(path).ok()?;
     serde_json::from_str(&content).ok()
@@ -546,4 +591,444 @@ pub fn migrate_legacy_chat(channel_id: &str) {
 
     // Remove legacy file
     let _ = fs::remove_file(&legacy_path);
+}
+
+// --- Tests -----------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    //! Schema-drift guards. These tests hand-write the JSON the TUI and GUI
+    //! expect to see on disk. If the TS orchestrator renames, drops, or
+    //! re-cases a field, the dashboards silently display nothing — these
+    //! tests fail loudly instead. See `AGENTS.md` > "Cross-dashboard
+    //! contract" for the why.
+    use super::*;
+
+    // --- assert_safe_segment -------------------------------------------------
+
+    #[test]
+    fn safe_segment_accepts_normal_ids() {
+        for ok in [
+            "channels",
+            "channel-123",
+            "sess_01HZ",
+            "ticket.T-42",
+            "run-000-aaa",
+            "a",
+        ] {
+            assert!(
+                assert_safe_segment(ok, SegmentKind::Id).is_ok(),
+                "expected {:?} to be accepted",
+                ok
+            );
+        }
+    }
+
+    #[test]
+    fn safe_segment_rejects_empty() {
+        let err = assert_safe_segment("", SegmentKind::Id).unwrap_err();
+        assert!(err.contains("id"));
+    }
+
+    #[test]
+    fn safe_segment_rejects_dot_and_dotdot() {
+        assert!(assert_safe_segment(".", SegmentKind::Id).is_err());
+        assert!(assert_safe_segment("..", SegmentKind::Id).is_err());
+    }
+
+    #[test]
+    fn safe_segment_rejects_slashes_and_backslashes() {
+        assert!(assert_safe_segment("foo/bar", SegmentKind::Id).is_err());
+        assert!(assert_safe_segment("/absolute", SegmentKind::Id).is_err());
+        assert!(assert_safe_segment("foo\\bar", SegmentKind::Id).is_err());
+        assert!(assert_safe_segment("..\\windows", SegmentKind::Id).is_err());
+    }
+
+    #[test]
+    fn safe_segment_rejects_null_byte() {
+        assert!(assert_safe_segment("foo\0bar", SegmentKind::Id).is_err());
+        assert!(assert_safe_segment("\0", SegmentKind::Id).is_err());
+    }
+
+    #[test]
+    fn safe_segment_error_mentions_kind() {
+        let ns_err = assert_safe_segment("..", SegmentKind::Namespace).unwrap_err();
+        let id_err = assert_safe_segment("..", SegmentKind::Id).unwrap_err();
+        assert!(ns_err.contains("ns"), "ns error was: {}", ns_err);
+        assert!(id_err.contains("id"), "id error was: {}", id_err);
+    }
+
+    // --- is_active_state -----------------------------------------------------
+
+    #[test]
+    fn active_state_recognizes_known_states() {
+        for s in [
+            "CLASSIFYING",
+            "DRAFT_PLAN",
+            "TICKETS_EXECUTING",
+            "TICKETS_COMPLETE",
+        ] {
+            assert!(is_active_state(s), "{} should be active", s);
+        }
+    }
+
+    #[test]
+    fn active_state_rejects_unknown_and_casing_variants() {
+        assert!(!is_active_state("DONE"));
+        assert!(!is_active_state(""));
+        // Casing matters — orchestrator writes upper-snake-case.
+        assert!(!is_active_state("classifying"));
+    }
+
+    // --- workspace / runs / ticket ledger -----------------------------------
+
+    #[test]
+    fn workspace_entry_round_trip() {
+        let json = r#"{"workspaceId":"ws-1","repoPath":"/tmp/repo"}"#;
+        let w: WorkspaceEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(w.workspace_id, "ws-1");
+        assert_eq!(w.repo_path, "/tmp/repo");
+        let out = serde_json::to_string(&w).unwrap();
+        assert!(out.contains("\"workspaceId\":\"ws-1\""));
+    }
+
+    #[test]
+    fn workspace_registry_deserializes_list() {
+        let json = r#"{"workspaces":[
+            {"workspaceId":"a","repoPath":"/a"},
+            {"workspaceId":"b","repoPath":"/b"}
+        ]}"#;
+        let reg: WorkspaceRegistry = serde_json::from_str(json).unwrap();
+        assert_eq!(reg.workspaces.len(), 2);
+        assert_eq!(reg.workspaces[1].workspace_id, "b");
+    }
+
+    #[test]
+    fn run_index_entry_handles_optional_fields() {
+        let json = r#"{
+            "runId":"r-1",
+            "featureRequest":"do a thing",
+            "state":"TICKETS_EXECUTING",
+            "startedAt":"2024-01-01T00:00:00Z",
+            "updatedAt":"2024-01-01T00:01:00Z"
+        }"#;
+        let r: RunIndexEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(r.run_id, "r-1");
+        assert!(r.channel_id.is_none());
+        assert!(r.completed_at.is_none());
+    }
+
+    #[test]
+    fn runs_index_missing_runs_is_none() {
+        let idx: RunsIndex = serde_json::from_str("{}").unwrap();
+        assert!(idx.runs.is_none());
+    }
+
+    #[test]
+    fn ticket_ledger_entry_with_assigned_alias() {
+        let json = r#"{
+            "ticketId":"T-1",
+            "title":"do X",
+            "specialty":"general",
+            "status":"TODO",
+            "dependsOn":["T-0"],
+            "verification":"tests",
+            "attempt":0,
+            "assignedAlias":"ui"
+        }"#;
+        let t: TicketLedgerEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(t.ticket_id, "T-1");
+        assert_eq!(t.depends_on, vec!["T-0"]);
+        assert_eq!(t.assigned_alias.as_deref(), Some("ui"));
+        assert!(t.assigned_agent_id.is_none());
+    }
+
+    #[test]
+    fn ticket_ledger_entry_back_compat_without_assigned_alias() {
+        // Old ticket files predate per-repo routing — must still parse.
+        let json = r#"{
+            "ticketId":"T-2",
+            "title":"old ticket",
+            "specialty":"general",
+            "status":"DONE",
+            "dependsOn":[],
+            "verification":"tests",
+            "attempt":3
+        }"#;
+        let t: TicketLedgerEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(t.attempt, 3);
+        assert!(t.assigned_alias.is_none());
+    }
+
+    #[test]
+    fn ticket_ledger_wraps_optional_tickets_vec() {
+        let wrapped: TicketLedger =
+            serde_json::from_str(r#"{"tickets":[]}"#).unwrap();
+        assert!(wrapped.tickets.unwrap().is_empty());
+        let empty: TicketLedger = serde_json::from_str("{}").unwrap();
+        assert!(empty.tickets.is_none());
+    }
+
+    // --- channel / members / refs -------------------------------------------
+
+    #[test]
+    fn channel_full_round_trip() {
+        let json = r#"{
+            "channelId":"c-1",
+            "name":"general",
+            "description":"chat",
+            "status":"active",
+            "members":[{
+                "agentId":"a-1",
+                "displayName":"Claude",
+                "role":"worker",
+                "provider":"claude",
+                "status":"online"
+            }],
+            "pinnedRefs":[{
+                "type":"ticket",
+                "targetId":"T-1",
+                "label":"spec"
+            }],
+            "repoAssignments":[{
+                "alias":"ui",
+                "workspaceId":"ws-1",
+                "repoPath":"/tmp/ui"
+            }],
+            "primaryWorkspaceId":"ws-1",
+            "createdAt":"2024-01-01T00:00:00Z",
+            "updatedAt":"2024-01-02T00:00:00Z"
+        }"#;
+        let ch: Channel = serde_json::from_str(json).unwrap();
+        assert_eq!(ch.channel_id, "c-1");
+        assert_eq!(ch.members.len(), 1);
+        assert_eq!(ch.members[0].provider, "claude");
+        assert_eq!(ch.pinned_refs[0].ref_type, "ticket");
+        assert_eq!(ch.repo_assignments[0].alias, "ui");
+        assert_eq!(ch.primary_workspace_id.as_deref(), Some("ws-1"));
+    }
+
+    #[test]
+    fn channel_back_compat_omits_new_fields() {
+        // Predates repoAssignments / primaryWorkspaceId / createdAt / updatedAt.
+        let json = r#"{
+            "channelId":"c-legacy",
+            "name":"legacy",
+            "description":"",
+            "status":"active",
+            "members":[],
+            "pinnedRefs":[]
+        }"#;
+        let ch: Channel = serde_json::from_str(json).unwrap();
+        assert!(ch.repo_assignments.is_empty());
+        assert!(ch.primary_workspace_id.is_none());
+        assert!(ch.created_at.is_none());
+        assert!(ch.updated_at.is_none());
+    }
+
+    #[test]
+    fn channel_ref_renames_type_field() {
+        // The Rust field is `ref_type` but the JSON key is `type`. Regression
+        // test: if someone drops `#[serde(rename = "type")]` every pinned ref
+        // silently drops.
+        let r: ChannelRef = serde_json::from_str(
+            r#"{"type":"decision","targetId":"d-1","label":"L"}"#,
+        )
+        .unwrap();
+        assert_eq!(r.ref_type, "decision");
+        let out = serde_json::to_string(&r).unwrap();
+        assert!(out.contains("\"type\":\"decision\""));
+        // Must not accidentally emit `refType`.
+        assert!(!out.contains("refType"));
+    }
+
+    // --- channel feed / agent names / decisions -----------------------------
+
+    #[test]
+    fn channel_entry_round_trip_with_metadata() {
+        let json = r#"{
+            "entryId":"e-1",
+            "channelId":"c-1",
+            "type":"message",
+            "fromAgentId":"a-1",
+            "fromDisplayName":"Claude",
+            "content":"hello",
+            "metadata":{"k":"v"},
+            "createdAt":"2024-01-01T00:00:00Z"
+        }"#;
+        let e: ChannelEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(e.entry_type, "message");
+        assert_eq!(e.metadata.get("k").map(String::as_str), Some("v"));
+        assert_eq!(e.from_display_name.as_deref(), Some("Claude"));
+    }
+
+    #[test]
+    fn channel_entry_allows_null_agent_fields() {
+        // System-posted feed entries have no author.
+        let json = r#"{
+            "entryId":"e-2",
+            "channelId":"c-1",
+            "type":"system",
+            "fromAgentId":null,
+            "fromDisplayName":null,
+            "content":"joined",
+            "metadata":{},
+            "createdAt":"2024-01-01T00:00:00Z"
+        }"#;
+        let e: ChannelEntry = serde_json::from_str(json).unwrap();
+        assert!(e.from_agent_id.is_none());
+        assert!(e.metadata.is_empty());
+    }
+
+    #[test]
+    fn agent_name_entry_round_trip() {
+        let json = r#"{
+            "agentId":"a-1",
+            "displayName":"Claude",
+            "provider":"claude",
+            "role":"worker"
+        }"#;
+        let a: AgentNameEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(a.display_name, "Claude");
+        let out = serde_json::to_string(&a).unwrap();
+        assert!(out.contains("\"agentId\":\"a-1\""));
+    }
+
+    #[test]
+    fn decision_round_trip() {
+        let json = r#"{
+            "decisionId":"d-1",
+            "title":"Adopt X",
+            "description":"...",
+            "rationale":"why",
+            "alternatives":["A","B"],
+            "decidedByName":"human",
+            "createdAt":"2024-01-01T00:00:00Z"
+        }"#;
+        let d: Decision = serde_json::from_str(json).unwrap();
+        assert_eq!(d.decision_id, "d-1");
+        assert_eq!(d.alternatives, vec!["A", "B"]);
+        assert_eq!(d.decided_by_name, "human");
+    }
+
+    #[test]
+    fn channel_run_link_round_trip() {
+        let json = r#"{"runId":"r-1","workspaceId":"ws-1"}"#;
+        let link: ChannelRunLink = serde_json::from_str(json).unwrap();
+        assert_eq!(link.run_id, "r-1");
+        assert_eq!(link.workspace_id, "ws-1");
+    }
+
+    // --- config -------------------------------------------------------------
+
+    #[test]
+    fn harness_config_defaults_empty_project_dirs() {
+        let c: HarnessConfig = serde_json::from_str("{}").unwrap();
+        assert!(c.project_dirs.is_empty());
+    }
+
+    #[test]
+    fn harness_config_parses_list() {
+        let c: HarnessConfig = serde_json::from_str(
+            r#"{"projectDirs":["~/code","/abs"]}"#,
+        )
+        .unwrap();
+        assert_eq!(c.project_dirs, vec!["~/code", "/abs"]);
+    }
+
+    // --- chat sessions ------------------------------------------------------
+
+    #[test]
+    fn chat_session_round_trip_with_claude_ids() {
+        let json = r#"{
+            "sessionId":"sess-1",
+            "title":"t",
+            "createdAt":"2024-01-01T00:00:00Z",
+            "updatedAt":"2024-01-01T00:01:00Z",
+            "messageCount":3,
+            "claudeSessionIds":{"ui":"claude-abc"}
+        }"#;
+        let s: ChatSession = serde_json::from_str(json).unwrap();
+        assert_eq!(s.session_id, "sess-1");
+        assert_eq!(s.message_count, 3);
+        assert_eq!(
+            s.claude_session_ids.get("ui").map(String::as_str),
+            Some("claude-abc")
+        );
+    }
+
+    #[test]
+    fn chat_session_back_compat_without_claude_ids() {
+        let json = r#"{
+            "sessionId":"sess-1",
+            "title":"t",
+            "createdAt":"2024-01-01T00:00:00Z",
+            "updatedAt":"2024-01-01T00:00:00Z",
+            "messageCount":0
+        }"#;
+        let s: ChatSession = serde_json::from_str(json).unwrap();
+        assert!(s.claude_session_ids.is_empty());
+    }
+
+    #[test]
+    fn persisted_chat_message_with_metadata() {
+        let json = r#"{
+            "role":"user",
+            "content":"hi",
+            "timestamp":"2024-01-01T00:00:00Z",
+            "agentAlias":null,
+            "metadata":{"rewindKey":"abc"}
+        }"#;
+        let m: PersistedChatMessage = serde_json::from_str(json).unwrap();
+        assert_eq!(m.role, "user");
+        assert_eq!(m.metadata.get("rewindKey").map(String::as_str), Some("abc"));
+    }
+
+    #[test]
+    fn persisted_chat_message_omits_metadata_when_empty_on_serialize() {
+        // `skip_serializing_if = "HashMap::is_empty"` keeps JSONL transcripts
+        // small on disk. If someone flips that, older readers start pulling
+        // a field they don't expect. Guard against a drive-by change.
+        let m = PersistedChatMessage {
+            role: "assistant".into(),
+            content: "hello".into(),
+            timestamp: "2024-01-01T00:00:00Z".into(),
+            agent_alias: Some("ui".into()),
+            metadata: HashMap::new(),
+        };
+        let out = serde_json::to_string(&m).unwrap();
+        assert!(!out.contains("metadata"), "unexpected metadata in: {}", out);
+        assert!(out.contains("\"agentAlias\":\"ui\""));
+    }
+
+    #[test]
+    fn persisted_chat_message_back_compat_without_metadata() {
+        let json = r#"{
+            "role":"assistant",
+            "content":"ok",
+            "timestamp":"2024-01-01T00:00:00Z",
+            "agentAlias":"ui"
+        }"#;
+        let m: PersistedChatMessage = serde_json::from_str(json).unwrap();
+        assert!(m.metadata.is_empty());
+    }
+
+    // --- negative: drift detector ------------------------------------------
+
+    #[test]
+    fn channel_rejects_snake_case_keys() {
+        // If the TS side accidentally starts writing snake_case (or someone
+        // drops `#[serde(rename_all = "camelCase")]`), this fails so the
+        // dashboards don't silently go blank.
+        let json = r#"{
+            "channel_id":"c-1",
+            "name":"x",
+            "description":"",
+            "status":"active",
+            "members":[],
+            "pinned_refs":[]
+        }"#;
+        let res: Result<Channel, _> = serde_json::from_str(json);
+        assert!(res.is_err(), "expected snake_case to be rejected");
+    }
 }

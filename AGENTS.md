@@ -49,6 +49,7 @@ cd gui && pnpm build
 - Live-network tests (real Claude / Codex / GitHub / Linear) sit inside `describe.skip(...)` blocks. Don't enable them in default CI paths.
 - **Scripted mode is the default.** With `HARNESS_LIVE` unset, the orchestrator uses `ScriptedInvoker` (`src/simulation/`) — fast, deterministic, no real API calls. Orchestrator tests assume scripted mode; only flip to `HARNESS_LIVE=1` when you're specifically testing adapter plumbing.
 - **No snapshot tests for orchestrator output.** Assert on shape — ticket count, status transitions, specific fields — not on stringified blobs. Snapshots turn every legitimate plan-shape change into churn.
+- **Two CI tiers.** Fast scripted tier on every PR (`.github/workflows/ci.yml`); integration tier for Postgres / real-git / K8s / live-GitHub runs nightly or on-demand (`.github/workflows/integration.yml`). See [`CI.md`](./CI.md) for the matrix and the secrets an admin needs to add.
 
 ## Code style
 
