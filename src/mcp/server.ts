@@ -54,7 +54,7 @@ export async function buildMcpMessageHandler(
 ): Promise<{ handler: McpMessageHandler; context: McpHandlerContext }> {
   const paths = getHarnessWorkspacePaths(workspaceRoot);
   const artifactStore = new LocalArtifactStore(paths.artifactsDir, getHarnessStore());
-  const crosslinkStore = new CrosslinkStore();
+  const crosslinkStore = new CrosslinkStore(undefined, getHarnessStore());
   const crosslinkState: CrosslinkToolState = {
     sessionId: null,
     store: crosslinkStore

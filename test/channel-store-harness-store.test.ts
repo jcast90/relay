@@ -40,7 +40,10 @@ class FakeHarnessStore implements HarnessStore {
     return (v as T | undefined) ?? null;
   }
 
+  readonly putCalls: Array<{ ns: string; id: string }> = [];
+
   async putDoc<T>(ns: string, id: string, doc: T): Promise<void> {
+    this.putCalls.push({ ns, id });
     this.docs.set(this.key(ns, id), doc);
   }
 
@@ -209,6 +212,117 @@ describe("ChannelStore with HarnessStore injection", () => {
       description: "default-ctor"
     });
     expect(channel.channelId).toMatch(/^channel-/);
+  });
+
+  it("mirrors recorded decisions through HarnessStore.putDoc", async () => {
+    const channel = await store.createChannel({
+      name: "#decisions",
+      description: "decision-mirror-test"
+    });
+
+    const decision = await store.recordDecision(channel.channelId, {
+      runId: null,
+      ticketId: null,
+      title: "Adopt zustand",
+      description: "Replace context-based state with zustand.",
+      rationale: "Smaller re-renders, simpler API.",
+      alternatives: ["redux", "context-only"],
+      decidedBy: "planner-claude",
+      decidedByName: "Claude (Planner)",
+      linkedArtifacts: []
+    });
+
+    // Primary source of truth still lives at channels/<id>/decisions/<did>.json
+    // — Rust's `load_channel_decisions` depends on that path.
+    const onDiskPath = join(
+      channelsDir,
+      channel.channelId,
+      "decisions",
+      `${decision.decisionId}.json`
+    );
+    const onDisk = JSON.parse(await readFile(onDiskPath, "utf8")) as {
+      decisionId: string;
+    };
+    expect(onDisk.decisionId).toBe(decision.decisionId);
+
+    // And a coordination mirror is published under STORE_NS.decision at
+    // `<channelId>:<decisionId>` so store-watchers can observe new
+    // decisions without tailing the filesystem.
+    const storeId = `${channel.channelId}:${decision.decisionId}`;
+    expect(fake.putCalls).toContainEqual({
+      ns: STORE_NS.decision,
+      id: storeId
+    });
+    const mirrored = await fake.getDoc<{ decisionId: string; title: string }>(
+      STORE_NS.decision,
+      storeId
+    );
+    expect(mirrored).not.toBeNull();
+    expect(mirrored!.title).toBe("Adopt zustand");
+  });
+
+  it("swallows HarnessStore mirror failures when recording a decision", async () => {
+    // Decisions are durably persisted to disk before the mirror runs. A
+    // mirror outage must never surface as a recordDecision failure, or
+    // the Rust/GUI readers would be out of sync with callers who retry.
+    const flaky: HarnessStore = {
+      getDoc: async () => null,
+      putDoc: async () => {
+        throw new Error("simulated mirror outage");
+      },
+      listDocs: async () => {
+        throw new Error("not implemented");
+      },
+      deleteDoc: async () => {
+        throw new Error("not implemented");
+      },
+      appendLog: async () => {
+        throw new Error("not implemented");
+      },
+      readLog: async () => {
+        throw new Error("not implemented");
+      },
+      putBlob: async () => {
+        throw new Error("not implemented");
+      },
+      getBlob: async () => {
+        throw new Error("not implemented");
+      },
+      mutate: async <T>(
+        _ns: string,
+        _id: string,
+        fn: (prev: T | null) => T
+      ): Promise<T> => fn(null),
+      watch: async function* () {
+        throw new Error("not implemented");
+      }
+    };
+    const flakyStore = new ChannelStore(channelsDir, flaky);
+    const channel = await flakyStore.createChannel({
+      name: "#flaky",
+      description: "flaky-mirror"
+    });
+
+    const decision = await flakyStore.recordDecision(channel.channelId, {
+      runId: null,
+      ticketId: null,
+      title: "Stay resilient",
+      description: "Keep disk primary.",
+      rationale: "Mirror is advisory.",
+      alternatives: [],
+      decidedBy: "planner-claude",
+      decidedByName: "Claude (Planner)",
+      linkedArtifacts: []
+    });
+
+    // Disk copy still landed.
+    const onDiskPath = join(
+      channelsDir,
+      channel.channelId,
+      "decisions",
+      `${decision.decisionId}.json`
+    );
+    await expect(stat(onDiskPath)).resolves.toBeTruthy();
   });
 
   it("serializes concurrent upsertChannelTickets on the same channel", async () => {

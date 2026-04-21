@@ -48,6 +48,19 @@ interface TicketLockRecord {
   count: number;
 }
 
+/**
+ * Build the `STORE_NS.decision` doc id for a channel decision. The mirror
+ * key is `<channelId>:<decisionId>` — a flat keyspace under a single
+ * namespace so `listDocs(decision, <channelId>:)` can enumerate every
+ * decision in a channel without listing every channel. Colon is a safe
+ * segment char in `FileHarnessStore` (`assertSafeSegment` blocks only `.`,
+ * `..`, `/`, `\`, null, empty) and round-trips through the Postgres text
+ * column unchanged.
+ */
+function decisionStoreId(channelId: string, decisionId: string): string {
+  return `${channelId}:${decisionId}`;
+}
+
 export class ChannelStore {
   private readonly channelsDir: string;
   private readonly store: HarnessStore;
@@ -645,6 +658,18 @@ export class ChannelStore {
 
   // --- Decisions ---
 
+  /**
+   * Persist a decision and post the accompanying channel-feed entry. Decisions
+   * continue to live on disk at `channels/<channelId>/decisions/<id>.json`
+   * because the Rust reader (`load_channel_decisions` in
+   * `crates/harness-data/src/lib.rs`) scans that directory directly. After the
+   * disk write succeeds, a mirror is published through the injected
+   * `HarnessStore` at `(decision, <channelId>:<decisionId>)` so future
+   * coordination consumers (Postgres `LISTEN/NOTIFY` watchers for cross-agent
+   * decision announcements, T-402) can observe new decisions without tailing
+   * the filesystem. Follows the same primary-disk-then-mirror pattern T-101
+   * uses for `upsertChannelTickets`.
+   */
   async recordDecision(
     channelId: string,
     input: Omit<Decision, "decisionId" | "channelId" | "createdAt">
@@ -659,10 +684,27 @@ export class ChannelStore {
       createdAt: new Date().toISOString()
     };
 
-    await writeFile(
-      join(decisionsDir, `${decision.decisionId}.json`),
-      JSON.stringify(decision, null, 2)
-    );
+    const path = join(decisionsDir, `${decision.decisionId}.json`);
+    const tmpPath = `${path}.tmp.${process.pid}`;
+    await writeFile(tmpPath, JSON.stringify(decision, null, 2));
+    await rename(tmpPath, path);
+
+    // Mirror through HarnessStore *after* the Rust-visible disk write has
+    // committed. If the mirror throws, swallow: the source of truth is on
+    // disk, and a future caller's `recordDecision` will pick up where we
+    // left off (mirror is purely additive; no historical replay needed).
+    try {
+      await this.store.putDoc(
+        STORE_NS.decision,
+        decisionStoreId(channelId, decision.decisionId),
+        decision
+      );
+    } catch {
+      // Intentional: never let a coordination-mirror failure surface as a
+      // decision-recording failure. The decision is durably persisted via
+      // the atomic rename above; consumers reading through Rust / GUI see
+      // it immediately.
+    }
 
     await this.postEntry(channelId, {
       type: "decision",

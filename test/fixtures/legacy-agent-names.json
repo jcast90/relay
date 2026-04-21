@@ -1,0 +1,16 @@
+[
+  {
+    "agentId": "planner-claude",
+    "displayName": "Claude (Planner)",
+    "provider": "claude",
+    "role": "planner",
+    "updatedAt": "2025-01-01T12:00:00.000Z"
+  },
+  {
+    "agentId": "implementer-codex",
+    "displayName": "Codex (Implementer)",
+    "provider": "codex",
+    "role": "implementer",
+    "updatedAt": "2025-01-01T12:05:00.000Z"
+  }
+]

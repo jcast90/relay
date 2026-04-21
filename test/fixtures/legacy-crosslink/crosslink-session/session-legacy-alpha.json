@@ -1,0 +1,11 @@
+{
+  "sessionId": "session-legacy-alpha",
+  "pid": 1,
+  "repoPath": "/tmp/legacy-repo-alpha",
+  "description": "Pre-existing crosslink session (legacy-alpha).",
+  "capabilities": ["general", "architecture"],
+  "agentProvider": "claude",
+  "registeredAt": "2025-01-01T10:00:00.000Z",
+  "lastHeartbeat": "2025-01-01T10:00:00.000Z",
+  "status": "active"
+}
