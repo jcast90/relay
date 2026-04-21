@@ -42,15 +42,22 @@ reviewable:
 
 | File | Ticket |
 | --- | --- |
-| `src/channels/channel-store.ts` | T-101 |
-| `src/cli/workspace-registry.ts` | T-102 |
-| `src/cli/session-store.ts` | T-102 |
+| `src/channels/channel-store.ts` | T-101 (partial) |
+| `src/cli/workspace-registry.ts` | T-102 (partial) |
+| `src/cli/session-store.ts` | T-102 (partial) |
 | `src/execution/artifact-store.ts` | T-103 |
 | `src/crosslink/store.ts` | T-104 |
 
 Until those tickets land, these files are exempt from a "no direct fs in
 storage code" lint. The canonical list lives as a comment in
 `src/storage/factory.ts` so it stays in sync with the code.
+
+T-101 and T-102 followed Option A: the ctor takes an injected
+`HarnessStore` and migrates coordination primitives (registry-level and
+per-session mutation records) through it, while the authoritative data
+stays on the filesystem paths the Rust crate `harness-data` reads. The
+remaining ticket for each file covers migrating the authoritative reads
+once the Rust reader is updated.
 
 Other `node:fs/promises` importers in `src/` (bootstrap, config, agent
 wrapper, MCP server, scripted invoker, etc.) are not storage backends —

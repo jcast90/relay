@@ -32,8 +32,16 @@ export class NotImplementedError extends Error {
  * canonical record of unmigrated state surfaces so reviewers don't flag them
  * in unrelated PRs:
  *
- *   - src/cli/workspace-registry.ts      -> T-102
- *   - src/cli/session-store.ts           -> T-102
+ *   - src/cli/workspace-registry.ts      -> T-102 (partial: ctor takes a
+ *                                          HarnessStore; registry-level
+ *                                          coordination record migrated.
+ *                                          On-disk layout stays for
+ *                                          Rust/GUI compat — T-101a aligns)
+ *   - src/cli/session-store.ts           -> T-102 (partial: ctor takes a
+ *                                          HarnessStore; per-session
+ *                                          coordination record migrated.
+ *                                          On-disk layout stays for
+ *                                          Rust/GUI compat — T-101a aligns)
  *   - src/channels/channel-store.ts      -> T-101 (partial: ctor takes a
  *                                          HarnessStore; ticket-board
  *                                          coordination record migrated.

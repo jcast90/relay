@@ -1,0 +1,10 @@
+[
+  {
+    "sessionId": "sess-legacy-1",
+    "title": "Imported conversation",
+    "createdAt": "2025-01-01T12:00:00.000Z",
+    "updatedAt": "2025-01-01T12:05:00.000Z",
+    "messageCount": 2,
+    "claudeSessionIds": {}
+  }
+]
