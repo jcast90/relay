@@ -162,15 +162,13 @@ function reduceStream(current: ActiveStream, event: ChatEvent): ActiveStream {
     case "chunk":
       return { ...current, accum: current.accum + event.text };
     case "activity": {
-      const next = [
-        ...current.activity,
-        { text: event.text, ts: Date.now() },
-      ];
-      const trimmed =
-        next.length > ACTIVITY_STACK_MAX
-          ? next.slice(next.length - ACTIVITY_STACK_MAX)
-          : next;
-      return { ...current, activity: trimmed };
+      // Cap BEFORE pushing so a runaway tool-use burst can't transiently
+      // queue thousands of entries before the slice kicks in.
+      const keep = current.activity.slice(-(ACTIVITY_STACK_MAX - 1));
+      return {
+        ...current,
+        activity: [...keep, { text: event.text, ts: Date.now() }],
+      };
     }
     default:
       return current;

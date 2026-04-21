@@ -8,6 +8,38 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::Emitter;
 
+/// Defense-in-depth validator for IDs crossing the Tauri IPC boundary.
+///
+/// The shared `harness-data` crate already rejects traversal-y segments when
+/// it builds paths, but a compromised renderer should hit this guard first.
+/// Rules:
+///   - non-empty
+///   - not `.` or `..`
+///   - no `/`, `\`, or null byte
+///   - only ASCII alphanumerics plus `.`, `_`, `-`
+///
+/// These match the character class that IDs elsewhere in the codebase
+/// ultimately land on (see `assertSafeSegment` in `src/storage/file-store.ts`)
+/// while being a little stricter at the edge.
+fn validate_id_segment<'a>(value: &'a str, field: &str) -> Result<&'a str, String> {
+    if value.is_empty() {
+        return Err(format!("{} must not be empty", field));
+    }
+    if value == "." || value == ".." {
+        return Err(format!("{} must not be '.' or '..'", field));
+    }
+    for ch in value.chars() {
+        let ok = ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-';
+        if !ok {
+            return Err(format!(
+                "{} contains disallowed character '{}'; allowed: A-Z a-z 0-9 . _ -",
+                field, ch
+            ));
+        }
+    }
+    Ok(value)
+}
+
 #[tauri::command]
 fn list_workspaces() -> Vec<data::WorkspaceEntry> {
     data::load_workspaces()
@@ -19,20 +51,23 @@ fn list_channels() -> Vec<data::Channel> {
 }
 
 #[tauri::command]
-fn get_channel(channel_id: String) -> Option<data::Channel> {
-    data::load_channels()
+fn get_channel(channel_id: String) -> Result<Option<data::Channel>, String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    Ok(data::load_channels()
         .into_iter()
-        .find(|c| c.channel_id == channel_id)
+        .find(|c| c.channel_id == channel_id))
 }
 
 #[tauri::command]
-fn list_feed(channel_id: String, limit: usize) -> Vec<data::ChannelEntry> {
-    data::load_channel_feed(&channel_id, limit)
+fn list_feed(channel_id: String, limit: usize) -> Result<Vec<data::ChannelEntry>, String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    Ok(data::load_channel_feed(&channel_id, limit))
 }
 
 #[tauri::command]
-fn list_sessions(channel_id: String) -> Vec<data::ChatSession> {
-    data::load_sessions(&channel_id)
+fn list_sessions(channel_id: String) -> Result<Vec<data::ChatSession>, String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    Ok(data::load_sessions(&channel_id))
 }
 
 #[tauri::command]
@@ -40,33 +75,44 @@ fn load_session(
     channel_id: String,
     session_id: String,
     limit: usize,
-) -> Vec<data::PersistedChatMessage> {
-    data::load_session_chat(&channel_id, &session_id, limit)
+) -> Result<Vec<data::PersistedChatMessage>, String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    validate_id_segment(&session_id, "sessionId")?;
+    Ok(data::load_session_chat(&channel_id, &session_id, limit))
 }
 
 #[tauri::command]
-fn list_channel_tickets(channel_id: String) -> Vec<data::TicketLedgerEntry> {
-    data::load_channel_tickets(&channel_id)
+fn list_channel_tickets(channel_id: String) -> Result<Vec<data::TicketLedgerEntry>, String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    Ok(data::load_channel_tickets(&channel_id))
 }
 
 #[tauri::command]
-fn list_channel_decisions(channel_id: String) -> Vec<data::Decision> {
-    data::load_channel_decisions(&channel_id)
+fn list_channel_decisions(channel_id: String) -> Result<Vec<data::Decision>, String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    Ok(data::load_channel_decisions(&channel_id))
 }
 
 #[tauri::command]
-fn list_channel_runs(channel_id: String) -> Vec<data::ChannelRunLink> {
-    data::load_channel_run_links(&channel_id)
+fn list_channel_runs(channel_id: String) -> Result<Vec<data::ChannelRunLink>, String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    Ok(data::load_channel_run_links(&channel_id))
 }
 
 #[tauri::command]
-fn list_runs(workspace_id: String) -> Vec<data::RunIndexEntry> {
-    data::load_runs_for_workspace(&workspace_id)
+fn list_runs(workspace_id: String) -> Result<Vec<data::RunIndexEntry>, String> {
+    validate_id_segment(&workspace_id, "workspaceId")?;
+    Ok(data::load_runs_for_workspace(&workspace_id))
 }
 
 #[tauri::command]
-fn list_ticket_ledger(workspace_id: String, run_id: String) -> Vec<data::TicketLedgerEntry> {
-    data::load_ticket_ledger(&workspace_id, &run_id)
+fn list_ticket_ledger(
+    workspace_id: String,
+    run_id: String,
+) -> Result<Vec<data::TicketLedgerEntry>, String> {
+    validate_id_segment(&workspace_id, "workspaceId")?;
+    validate_id_segment(&run_id, "runId")?;
+    Ok(data::load_ticket_ledger(&workspace_id, &run_id))
 }
 
 #[tauri::command]
@@ -126,10 +172,62 @@ fn cli_json(args: &[&str]) -> Result<serde_json::Value, String> {
     })
 }
 
+/// Subcommands the renderer is allowed to invoke through `run_cli`.
+///
+/// As of this commit, no call site in `gui/src/` uses `run_cli` — the
+/// frontend reaches the CLI through the typed wrappers (`create_channel`,
+/// `post_to_channel`, etc.). `run_cli` stays for escape-hatch diagnostics
+/// but is locked down to a short read-only list so a compromised renderer
+/// can't trigger destructive operations. Add entries here as the renderer
+/// grows legitimate needs.
+const RUN_CLI_ALLOWED_SUBCOMMANDS: &[&[&str]] = &[
+    &["channel", "list"],
+    &["channel", "show"],
+    &["session", "list"],
+    &["chat", "mcp-config"],
+    &["chat", "system-prompt"],
+    &["inspect-mcp"],
+    &["version"],
+    &["--version"],
+    &["--help"],
+];
+
+/// Subcommand verbs that are *never* allowed through `run_cli`, regardless
+/// of whether they appear in `RUN_CLI_ALLOWED_SUBCOMMANDS`. Reviewers
+/// adding to the allow-list: this denylist still wins.
+const RUN_CLI_DENIED_VERBS: &[&str] = &[
+    "archive", "delete", "remove", "rm", "destroy", "purge", "drop", "reset",
+];
+
+fn check_run_cli_allowed(args: &[&str]) -> Result<(), String> {
+    if args.is_empty() {
+        return Err("run_cli requires at least one argument".into());
+    }
+    for part in args {
+        if RUN_CLI_DENIED_VERBS.contains(part) {
+            return Err(format!(
+                "run_cli: destructive subcommand '{}' is not permitted from the renderer",
+                part
+            ));
+        }
+    }
+    let matches_prefix = RUN_CLI_ALLOWED_SUBCOMMANDS.iter().any(|prefix| {
+        prefix.len() <= args.len() && prefix.iter().zip(args.iter()).all(|(a, b)| a == b)
+    });
+    if !matches_prefix {
+        return Err(format!(
+            "run_cli: subcommand '{}' is not in the renderer allow-list",
+            args.join(" ")
+        ));
+    }
+    Ok(())
+}
+
 #[tauri::command]
-fn run_cli(args: Vec<String>) -> CliResult {
+fn run_cli(args: Vec<String>) -> Result<CliResult, String> {
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    cli_run(&refs)
+    check_run_cli_allowed(&refs)?;
+    Ok(cli_run(&refs))
 }
 
 #[derive(serde::Deserialize)]
@@ -155,6 +253,14 @@ fn create_channel(
     repos: Vec<RepoAssignmentInput>,
     #[allow(non_snake_case)] primaryWorkspaceId: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    for repo in &repos {
+        validate_id_segment(&repo.alias, "repo.alias")?;
+        validate_id_segment(&repo.workspace_id, "repo.workspaceId")?;
+    }
+    if let Some(ref id) = primaryWorkspaceId {
+        validate_id_segment(id, "primaryWorkspaceId")?;
+    }
+
     // Resolve the primary workspace id (if provided) to the matching alias —
     // the CLI takes `--primary <alias>` because aliases are user-facing, but
     // the GUI works with workspace ids. When the id isn't in the repos list
@@ -180,6 +286,7 @@ fn create_channel(
 
 #[tauri::command]
 fn archive_channel(channel_id: String) -> Result<serde_json::Value, String> {
+    validate_id_segment(&channel_id, "channelId")?;
     cli_json(&["channel", "archive", &channel_id, "--json"])
 }
 
@@ -188,6 +295,11 @@ fn update_channel_repos(
     channel_id: String,
     repos: Vec<RepoAssignmentInput>,
 ) -> Result<serde_json::Value, String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    for repo in &repos {
+        validate_id_segment(&repo.alias, "repo.alias")?;
+        validate_id_segment(&repo.workspace_id, "repo.workspaceId")?;
+    }
     let repos = repos_arg(&repos);
     cli_json(&["channel", "update", &channel_id, "--repos", &repos, "--json"])
 }
@@ -199,6 +311,7 @@ fn post_to_channel(
     from: Option<String>,
     entry_type: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    validate_id_segment(&channel_id, "channelId")?;
     let from = from.unwrap_or_else(|| "GUI".to_string());
     let entry_type = entry_type.unwrap_or_else(|| "message".to_string());
     cli_json(&[
@@ -211,6 +324,7 @@ fn create_session(
     channel_id: String,
     title: String,
 ) -> Result<serde_json::Value, String> {
+    validate_id_segment(&channel_id, "channelId")?;
     cli_json(&[
         "session", "create", "--channel", &channel_id, "--title", &title,
     ])
@@ -221,6 +335,8 @@ fn delete_session(
     channel_id: String,
     session_id: String,
 ) -> Result<serde_json::Value, String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    validate_id_segment(&session_id, "sessionId")?;
     cli_json(&[
         "session", "delete", "--channel", &channel_id, "--session", &session_id,
     ])
@@ -235,6 +351,11 @@ fn append_session_message(
     agent_alias: Option<String>,
     metadata: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    validate_id_segment(&session_id, "sessionId")?;
+    if let Some(ref alias) = agent_alias {
+        validate_id_segment(alias, "agentAlias")?;
+    }
     let metadata_json = metadata
         .as_ref()
         .map(|v| serde_json::to_string(v).map_err(|e| e.to_string()))
@@ -259,6 +380,8 @@ fn rewind_snapshot(
     channel_id: String,
     session_id: String,
 ) -> Result<serde_json::Value, String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    validate_id_segment(&session_id, "sessionId")?;
     cli_json(&[
         "chat",
         "rewind-snapshot",
@@ -276,6 +399,8 @@ fn rewind_apply(
     key: String,
     message_timestamp: String,
 ) -> Result<serde_json::Value, String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    validate_id_segment(&session_id, "sessionId")?;
     cli_json(&[
         "chat",
         "rewind-apply",
@@ -349,6 +474,11 @@ fn start_chat(
     auto_approve: bool,
     rewind_key: Option<String>,
 ) -> Result<u64, String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    validate_id_segment(&session_id, "sessionId")?;
+    if let Some(ref a) = alias {
+        validate_id_segment(a, "alias")?;
+    }
     let stream_id = CHAT_SEQ.fetch_add(1, Ordering::SeqCst);
 
     // Persist user message immediately so UI reflects history on reload.
@@ -780,6 +910,8 @@ fn spawn_agent(
     alias: String,
     repo_path: String,
 ) -> Result<Spawn, String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    validate_id_segment(&alias, "alias")?;
     if std::env::consts::OS != "macos" {
         return Err(
             "spawn is macOS-only — run `rly claude` in the repo manually on this platform".into(),
@@ -865,6 +997,8 @@ fn try_sigterm_matching_session(repo_path: &str) {
 
 #[tauri::command]
 fn kill_spawned_agent(channel_id: String, alias: String) -> Result<(), String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    validate_id_segment(&alias, "alias")?;
     let mut file = load_spawns_file(&channel_id);
     let Some(entry) = file.spawns.remove(&alias) else {
         // Already gone — treat as success.
@@ -916,6 +1050,7 @@ fn kill_spawned_agent(channel_id: String, alias: String) -> Result<(), String> {
 
 #[tauri::command]
 fn list_spawns(channel_id: String) -> Result<Vec<Spawn>, String> {
+    validate_id_segment(&channel_id, "channelId")?;
     let mut file = load_spawns_file(&channel_id);
 
     // Build a lookup of live crosslink sessions keyed by repoPath. A session
@@ -977,6 +1112,145 @@ fn load_live_crosslink_repos() -> std::collections::HashSet<String> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{check_run_cli_allowed, validate_id_segment};
+
+    // --- validate_id_segment ---
+
+    #[test]
+    fn validate_id_segment_accepts_alphanumeric_and_dash_underscore_dot() {
+        for ok in [
+            "abc",
+            "ABC123",
+            "channel-1776812897693-lmps9a",
+            "session_42",
+            "a.b.c",
+            "X-1_2.3",
+        ] {
+            assert!(
+                validate_id_segment(ok, "id").is_ok(),
+                "expected {:?} to be accepted",
+                ok
+            );
+        }
+    }
+
+    #[test]
+    fn validate_id_segment_rejects_empty_and_dot_segments() {
+        for bad in ["", ".", ".."] {
+            assert!(
+                validate_id_segment(bad, "id").is_err(),
+                "expected {:?} to be rejected",
+                bad
+            );
+        }
+    }
+
+    #[test]
+    fn validate_id_segment_rejects_path_separators_and_nulls() {
+        for bad in [
+            "../etc/passwd",
+            "foo/bar",
+            "foo\\bar",
+            "foo\0bar",
+            "../",
+            "a/b",
+        ] {
+            assert!(
+                validate_id_segment(bad, "id").is_err(),
+                "expected {:?} to be rejected",
+                bad
+            );
+        }
+    }
+
+    #[test]
+    fn validate_id_segment_rejects_whitespace_and_shell_metachars() {
+        for bad in ["a b", "a;b", "a|b", "a&b", "a`b`", "a$b", "a\nb"] {
+            assert!(
+                validate_id_segment(bad, "id").is_err(),
+                "expected {:?} to be rejected",
+                bad
+            );
+        }
+    }
+
+    // --- check_run_cli_allowed ---
+
+    #[test]
+    fn run_cli_allows_whitelisted_prefixes() {
+        for args in [
+            vec!["channel", "list"],
+            vec!["channel", "list", "--json"],
+            vec!["session", "list", "--channel", "c-123"],
+            vec!["chat", "mcp-config"],
+            vec!["chat", "system-prompt", "--channel", "c-123"],
+            vec!["inspect-mcp"],
+            vec!["version"],
+            vec!["--version"],
+        ] {
+            assert!(
+                check_run_cli_allowed(&args).is_ok(),
+                "expected {:?} to be allowed",
+                args
+            );
+        }
+    }
+
+    #[test]
+    fn run_cli_rejects_empty_args() {
+        assert!(check_run_cli_allowed(&[]).is_err());
+    }
+
+    #[test]
+    fn run_cli_rejects_non_whitelisted_subcommands() {
+        for args in [
+            vec!["channel", "create", "new", "desc"],
+            vec!["session", "append", "--channel", "c"],
+            vec!["chat", "rewind-apply"],
+            vec!["random-verb"],
+            vec!["claude"],
+        ] {
+            assert!(
+                check_run_cli_allowed(&args).is_err(),
+                "expected {:?} to be rejected",
+                args
+            );
+        }
+    }
+
+    #[test]
+    fn run_cli_rejects_destructive_verbs_everywhere() {
+        // Even if a prefix looks legitimate, destructive verbs as tokens
+        // in the arg list must kill the request.
+        for args in [
+            vec!["channel", "archive", "c-123"],
+            vec!["channel", "delete", "c-123"],
+            vec!["session", "remove", "s-1"],
+            vec!["rm", "-rf"],
+            vec!["chat", "reset"],
+            vec!["workspace", "purge"],
+            vec!["channel", "list", "drop"],
+        ] {
+            let err = check_run_cli_allowed(&args).unwrap_err();
+            assert!(
+                err.contains("destructive") || err.contains("allow-list"),
+                "expected rejection reason for {:?}, got {}",
+                args,
+                err
+            );
+        }
+    }
+
+    #[test]
+    fn run_cli_destructive_denylist_message_is_descriptive() {
+        let err = check_run_cli_allowed(&["channel", "archive", "c-123"]).unwrap_err();
+        assert!(err.contains("destructive"), "got: {}", err);
+        assert!(err.contains("archive"), "got: {}", err);
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
