@@ -13,3 +13,9 @@ gui/tsconfig.tsbuildinfo
 # on demand by `pnpm tauri icon`.
 gui/src-tauri/icons/android/
 gui/src-tauri/icons/ios/
+# Local env files — never commit. The tracked template stays.
+.env
+.env.*
+config.env
+config.env.*
+!config.env.template

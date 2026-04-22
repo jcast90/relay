@@ -26,6 +26,9 @@ importers:
       tsx:
         specifier: ^4.20.6
         version: 4.21.0
+      zod:
+        specifier: ^3.24.4
+        version: 3.25.76
     devDependencies:
       '@types/node':
         specifier: ^22.15.30
@@ -39,9 +42,6 @@ importers:
       vitest:
         specifier: ^3.2.4
         version: 3.2.4(@types/node@22.19.15)(tsx@4.21.0)(yaml@2.8.3)
-      zod:
-        specifier: ^3.24.4
-        version: 3.25.76
 
 packages:
 
