@@ -63,9 +63,34 @@ import { getWorkspaceDir } from "./cli/workspace-registry.js";
 
 export async function main(): Promise<void> {
   const cwd = process.cwd();
-  const command = process.argv[2] ?? "run";
+  const rawCommand = process.argv[2];
   const args = process.argv.slice(3);
   const live = process.env.HARNESS_LIVE === "1";
+
+  // Top-level help / version short-circuit. These run BEFORE workspace
+  // bootstrap so `rly --help` / `rly --version` on a fresh machine print
+  // cleanly without creating a `~/.relay/` tree or a `.relay/` in cwd.
+  if (
+    rawCommand === undefined ||
+    rawCommand === "--help" ||
+    rawCommand === "-h" ||
+    rawCommand === "help"
+  ) {
+    await printTopLevelHelp();
+    return;
+  }
+
+  if (
+    rawCommand === "--version" ||
+    rawCommand === "-v" ||
+    rawCommand === "version"
+  ) {
+    const version = await readPackageVersion();
+    console.log(`rly v${version}`);
+    return;
+  }
+
+  const command = rawCommand;
   const packageVersion = await readPackageVersion();
   const workspace = await ensureHarnessWorkspace(cwd, packageVersion);
   const artifactStore = new LocalArtifactStore(workspace.paths.artifactsDir, getHarnessStore());
@@ -85,7 +110,7 @@ export async function main(): Promise<void> {
     return;
   }
 
-  if (command === "list-workspaces") {
+  if (command === "list-workspaces" || command === "workspaces") {
     await printWorkspaces(args);
     return;
   }
@@ -2079,6 +2104,39 @@ async function readPackageVersion(): Promise<string> {
   ) as { version?: string };
 
   return packageJson.version ?? "0.0.0";
+}
+
+async function printTopLevelHelp(): Promise<void> {
+  const version = await readPackageVersion();
+  const lines = [
+    `rly v${version} — Relay CLI`,
+    "",
+    "Usage: rly <command> [options]",
+    "",
+    "Commands:",
+    "  run <request>            Classify + plan + execute a feature request",
+    "  channel <subcommand>     Manage channels (list/create/feed/archive/update)",
+    "  session <subcommand>     Manage sessions",
+    "  board <channelId>        Kanban view of tickets",
+    "  decisions <channelId>    List decisions",
+    "  chat <subcommand>        Chat utilities (rewind-snapshot/rewind-apply/...)",
+    "  config <subcommand>      Manage global config",
+    "  pr-watch <pr>            Track a GitHub PR",
+    "  pr-status                List tracked PRs",
+    "  serve                    Run the MCP server",
+    "  workspaces               List registered workspaces",
+    "  up                       Register current repo as a workspace",
+    "  welcome                  Interactive first-run walkthrough",
+    "  tui                      Launch the ratatui dashboard",
+    "  gui                      Launch the Tauri desktop app",
+    "  rebuild                  Rebuild native artifacts (tui/gui)",
+    "  inspect-mcp              Print MCP tool definitions",
+    "  version | --version      Print version",
+    "",
+    "Run `rly <command> --help` for command-specific help.",
+    "Docs: https://github.com/jcast90/relay#readme"
+  ];
+  console.log(lines.join("\n"));
 }
 
 function resolveCliEntrypoint(): string {
