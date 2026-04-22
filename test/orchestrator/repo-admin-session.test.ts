@@ -5,7 +5,8 @@
  *  - boot() wires the child and emits `booted`
  *  - unexpected exit emits `exited-unexpected` with stderr tail
  *  - stop() SIGTERM → SIGKILL escalation
- *  - dispatchTicket() throws (AL-13 stub guard)
+ *  - dispatchTicket() enqueues + emits `ticket-received` (AL-13)
+ *  - dispatchTicket() rejects once the session is `stopped` (AL-13)
  *
  * Uses a FakeSpawner so no real `claude` binary is invoked. The fake
  * exposes hooks for the test to fire onExit / onStderr / onError at the
@@ -20,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { SpawnedProcess } from "../../src/agents/command-invoker.js";
 import type { RepoAssignment } from "../../src/domain/channel.js";
+import type { TicketLedgerEntry } from "../../src/domain/ticket.js";
 import {
   RepoAdminSession,
   STDERR_DIAGNOSTIC_LINES,
@@ -27,6 +29,28 @@ import {
   type RepoAdminSessionEvent,
   type RepoAdminSpawnArgs,
 } from "../../src/orchestrator/repo-admin-session.js";
+
+function buildLedgerEntry(ticketId: string, alias: string): TicketLedgerEntry {
+  return {
+    ticketId,
+    title: `ticket ${ticketId}`,
+    specialty: "general",
+    status: "ready",
+    dependsOn: [],
+    assignedAgentId: null,
+    assignedAgentName: null,
+    crosslinkSessionId: null,
+    verification: "pending",
+    lastClassification: null,
+    chosenNextAction: null,
+    attempt: 0,
+    startedAt: null,
+    completedAt: null,
+    updatedAt: new Date().toISOString(),
+    runId: null,
+    assignedAlias: alias,
+  };
+}
 
 type ExitListener = (code: number | null, signal: NodeJS.Signals | null) => void;
 type StderrListener = (chunk: string) => void;
@@ -262,11 +286,44 @@ describe("RepoAdminSession", () => {
     expect(terms).toHaveLength(1);
   });
 
-  it("dispatchTicket throws — AL-13 stub guard", async () => {
+  it("dispatchTicket enqueues the ticket and emits `ticket-received` (AL-13)", async () => {
+    const { session } = buildSession();
+    const events: RepoAdminSessionEvent[] = [];
+    session.onEvent((evt) => events.push(evt));
+    await session.start();
+
+    const ticket = buildLedgerEntry("t-1", "frontend");
+    await session.dispatchTicket(ticket);
+
+    expect(session.pendingTickets()).toHaveLength(1);
+    expect(session.pendingTickets()[0].ticketId).toBe("t-1");
+
+    const received = events.find((e) => e.kind === "ticket-received");
+    expect(received).toBeDefined();
+    if (received?.kind === "ticket-received") {
+      expect(received.ticketId).toBe("t-1");
+      expect(received.sessionId).toBe(session.sessionId);
+    }
+  });
+
+  it("dispatchTicket is idempotent on duplicate ticketIds (AL-13)", async () => {
     const { session } = buildSession();
     await session.start();
-    await expect(session.dispatchTicket({ ticketId: "t-1" })).rejects.toThrow(
-      /implemented in AL-13/
+    const ticket = buildLedgerEntry("t-dup", "frontend");
+    await session.dispatchTicket(ticket);
+    await session.dispatchTicket(ticket);
+    expect(session.pendingTickets()).toHaveLength(1);
+  });
+
+  it("dispatchTicket rejects after stop() (AL-13)", async () => {
+    const { session, spawner } = buildSession();
+    await session.start();
+    const stopP = session.stop("test");
+    spawner.last().emitExit(0, "SIGTERM");
+    await stopP;
+
+    await expect(session.dispatchTicket(buildLedgerEntry("t-late", "frontend"))).rejects.toThrow(
+      /after stop/
     );
   });
 

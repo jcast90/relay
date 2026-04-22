@@ -15,6 +15,12 @@ export function buildRetryObjective(
       return `${phaseGoal} Prioritize repairing tests, fixtures, mocks, or verification setup before changing product logic.`;
     case "bad_command_plan":
       return `${phaseGoal} Do not change product code first. Repair the verification command plan or execution setup.`;
+    case "routing_error":
+      // Router-sourced classifications are terminal: the ticket is blocked
+      // pending operator fix-up of `assignedAlias` / `repoAssignments`. If a
+      // routing_error ever reaches the retry path something is wrong, but
+      // falling back to the bare objective is safer than crashing the loop.
+      return phaseGoal;
   }
 }
 

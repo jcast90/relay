@@ -40,6 +40,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import type { RepoAssignment } from "../domain/channel.js";
+import type { TicketLedgerEntry } from "../domain/ticket.js";
 import {
   NodeCommandInvoker,
   type CommandInvoker,
@@ -109,6 +110,19 @@ export type RepoAdminSessionEvent =
       sessionId: string;
       reason: string;
       exitCode: number | null;
+    }
+  | {
+      /**
+       * AL-13: emitted when {@link RepoAdminSession.dispatchTicket} enqueues
+       * a new ticket on the in-memory queue. The session only records
+       * *intent* here — worker spawning + execution is AL-14's scope. The
+       * event exists so observers (TUI, tests, later the autonomous-loop
+       * driver) can confirm a routing decision landed without polling the
+       * queue.
+       */
+      kind: "ticket-received";
+      sessionId: string;
+      ticketId: string;
     };
 
 export interface RepoAdminSessionOptions {
@@ -221,12 +235,19 @@ export class RepoAdminSession {
   private child: SpawnedProcess | null = null;
 
   /**
-   * Scaffolding for AL-13's ticket dispatch. Nothing enqueues here today;
-   * the field is shaped + documented so the pool-shutdown / restart paths
-   * don't have to change when AL-13 lands. Preserving the queue across
-   * restarts is how we honor the "ticket in-flight survives" criterion.
+   * In-memory queue of tickets routed to this admin. AL-13 writes here via
+   * {@link dispatchTicket}; AL-14 will drain it by spawning worker child
+   * processes. The queue is preserved across restarts — we deliberately do
+   * NOT clear it in `handleExit` so an unexpected death followed by the
+   * pool's respawn leaves in-flight work intact.
+   *
+   * The contents are `TicketLedgerEntry`s (the same shape the channel's
+   * ticket board stores) rather than `TicketDefinition`s because the
+   * router's input is the ledger entry: it already carries the
+   * `assignedAlias` routing decision and the `status` the router will
+   * flip once the admin actually picks it up (AL-14).
    */
-  private readonly pendingDispatches: unknown[] = [];
+  private readonly pendingDispatches: TicketLedgerEntry[] = [];
 
   private stopRequested = false;
   private stopReason: string | null = null;
@@ -262,11 +283,24 @@ export class RepoAdminSession {
   }
 
   /**
-   * Snapshot of pending dispatches. AL-13 will push to this list through
-   * `dispatchTicket`; tests for AL-12 inspect it to confirm restart
-   * preservation.
+   * Snapshot of pending dispatches. AL-13 pushes via `dispatchTicket`;
+   * AL-14 will drain into worker processes. The array returned is a copy
+   * — callers mutating it must not expect the session to see their
+   * changes.
+   *
+   * Kept as `unknown[]` on the public surface for historical reasons (the
+   * AL-12 scaffolding typed it that way to avoid pulling in ticket shapes
+   * before they were needed). New code should prefer {@link pendingTickets}.
    */
   getPendingDispatches(): unknown[] {
+    return this.pendingDispatches.slice();
+  }
+
+  /**
+   * AL-13 + AL-14 consumer API. Returns the current pending queue, typed.
+   * Same copy semantics as {@link getPendingDispatches}.
+   */
+  pendingTickets(): TicketLedgerEntry[] {
     return this.pendingDispatches.slice();
   }
 
@@ -451,12 +485,38 @@ export class RepoAdminSession {
   }
 
   /**
-   * AL-13 placeholder. Signature matches the intended contract so
-   * call-sites (and the typecheck) stay stable when AL-13 wires the
-   * actual dispatch.
+   * AL-13: record a routing decision on this admin. The ticket is pushed
+   * onto {@link pendingDispatches} and a `ticket-received` event fires so
+   * observers can confirm the handoff landed. Worker spawning and actual
+   * execution are AL-14's scope — this method only marks intent.
+   *
+   * Idempotent: dispatching the same `ticketId` twice is a no-op on the
+   * second call (the event still fires so observers can track re-routes
+   * without duplicating work). This matches how the router is likely to
+   * behave in practice: a channel ticket board re-read that happens to
+   * cover tickets already routed in the previous scan shouldn't grow the
+   * queue unboundedly.
+   *
+   * Throws if the session has been stopped — dispatching into a dead
+   * admin is a programming error the router should catch via
+   * `pool.getSession(alias)`.
    */
-  async dispatchTicket(_ticketDef: unknown): Promise<never> {
-    throw new Error("RepoAdminSession.dispatchTicket: ticket dispatch is implemented in AL-13.");
+  async dispatchTicket(ticket: TicketLedgerEntry): Promise<void> {
+    if (this._state === "stopped") {
+      throw new Error(
+        `RepoAdminSession(${this.alias}): cannot dispatchTicket after stop(); ` +
+          `route through a fresh session.`
+      );
+    }
+    const existing = this.pendingDispatches.find((t) => t.ticketId === ticket.ticketId);
+    if (!existing) {
+      this.pendingDispatches.push(ticket);
+    }
+    this.emit({
+      kind: "ticket-received",
+      sessionId: this._currentSessionId,
+      ticketId: ticket.ticketId,
+    });
   }
 
   // --- internals ----------------------------------------------------------
