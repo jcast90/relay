@@ -256,9 +256,58 @@ export function Composer({
   const disabled = busy || streaming;
   const showMentions = !!mention && (filteredAliases.length > 0 || !!attachCandidate);
 
+  // Scan the drafted text for @alias mentions of registered-but-unattached
+  // workspaces. The user can still send — we just surface a heads-up that
+  // those agents won't be routed to. One-click attach per offender.
+  const unattachedMentions = computeUnattachedMentions(text, channel, workspaces);
+  const attachFromWarning = async (ws: { workspaceId: string; repoPath: string; alias: string }) => {
+    setAttaching(ws.workspaceId);
+    try {
+      const next = [
+        ...channel.repoAssignments.map((r) => ({
+          alias: r.alias,
+          workspaceId: r.workspaceId,
+          repoPath: r.repoPath,
+        })),
+        { alias: ws.alias, workspaceId: ws.workspaceId, repoPath: ws.repoPath },
+      ];
+      await api.updateChannelRepos(channel.channelId, next);
+    } catch (err) {
+      alert(`Attach failed: ${err}`);
+    } finally {
+      setAttaching(null);
+    }
+  };
+
   return (
     <div className="composer">
       {error && <div className="composer-error">{error}</div>}
+      {unattachedMentions.length > 0 && (
+        <div className="composer-warn" role="status">
+          <span>
+            ⚠{" "}
+            {unattachedMentions.map((m, i) => (
+              <span key={m.workspaceId}>
+                {i > 0 && ", "}
+                <code className="mention mention-repo-attached">@{m.alias}</code>
+              </span>
+            ))}{" "}
+            {unattachedMentions.length === 1 ? "is" : "are"} registered but not attached — won't be
+            routed.
+          </span>
+          {unattachedMentions.map((m) => (
+            <button
+              key={m.workspaceId}
+              type="button"
+              disabled={attaching === m.workspaceId}
+              onClick={() => attachFromWarning(m)}
+              title={`Attach @${m.alias} (${m.repoPath}) to this channel`}
+            >
+              {attaching === m.workspaceId ? "…" : `Attach @${m.alias}`}
+            </button>
+          ))}
+        </div>
+      )}
       {primaryAlias && (
         <div className="composer-routing">
           <span>→</span>
@@ -376,6 +425,44 @@ function MentionPopover({
 
 function basename(p: string): string {
   return p.split("/").filter(Boolean).pop() ?? p;
+}
+
+/**
+ * Scan `text` for `@alias` mentions where `alias` matches a registered
+ * workspace that's NOT currently attached to the channel. Returns the
+ * unique list so the composer can warn the user pre-send; the message is
+ * still deliverable, the warning is advisory.
+ */
+function computeUnattachedMentions(
+  text: string,
+  channel: Channel,
+  workspaces: WorkspaceEntry[]
+): Array<{ workspaceId: string; repoPath: string; alias: string }> {
+  if (!text.trim()) return [];
+  const attachedAliases = new Set(channel.repoAssignments.map((r) => r.alias.toLowerCase()));
+  const attachedWorkspaceIds = new Set(
+    channel.repoAssignments.map((r) => r.workspaceId)
+  );
+  const candidatesByAlias = new Map<
+    string,
+    { workspaceId: string; repoPath: string; alias: string }
+  >();
+  for (const w of workspaces) {
+    if (attachedWorkspaceIds.has(w.workspaceId)) continue;
+    const alias = basename(w.repoPath).replace(/[^a-z0-9-]/gi, "").toLowerCase().slice(0, 12);
+    if (!alias) continue;
+    if (!candidatesByAlias.has(alias)) {
+      candidatesByAlias.set(alias, { workspaceId: w.workspaceId, repoPath: w.repoPath, alias });
+    }
+  }
+  const hits = new Map<string, { workspaceId: string; repoPath: string; alias: string }>();
+  for (const match of text.matchAll(/(?:^|\s)@([a-zA-Z0-9_-]+)/g)) {
+    const alias = match[1].toLowerCase();
+    if (attachedAliases.has(alias)) continue;
+    const cand = candidatesByAlias.get(alias);
+    if (cand) hits.set(cand.workspaceId, cand);
+  }
+  return Array.from(hits.values());
 }
 
 function parseAliasPrefix(

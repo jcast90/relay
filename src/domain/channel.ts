@@ -5,6 +5,21 @@ import type { AgentProvider, AgentRole } from "./agent.js";
 export const ChannelStatusSchema = z.enum(["active", "archived"]);
 export type ChannelStatus = z.infer<typeof ChannelStatusSchema>;
 
+/**
+ * Classifier-assigned tier surfaced in the channel header pill. The
+ * heuristic classifier in `harness-data` seeds this on channel create; the
+ * LLM classifier (orchestrator) refines it when a run is dispatched into
+ * the channel. Optional for back-compat with older channel files.
+ */
+export const ChannelTierSchema = z.enum([
+  "feature_large",
+  "feature",
+  "bugfix",
+  "chore",
+  "question",
+]);
+export type ChannelTier = z.infer<typeof ChannelTierSchema>;
+
 export const MemberStatusSchema = z.enum(["active", "idle", "offline"]);
 export type MemberStatus = z.infer<typeof MemberStatusSchema>;
 
@@ -84,6 +99,22 @@ export interface Channel {
    * `false` at every read site.
    */
   fullAccess?: boolean;
+  /**
+   * Classifier-assigned tier. Seeded by the heuristic classifier in
+   * harness-data at channel-create time; refined by the orchestrator's LLM
+   * classifier on first run dispatch. Optional for back-compat.
+   */
+  tier?: ChannelTier;
+  /**
+   * Pinned to the Starred section of the sidebar. Always written by the Rust
+   * side; undefined on older files is treated as `false`.
+   */
+  starred?: boolean;
+  /**
+   * "channel" (default) or "dm". DMs are kickoff surfaces — same storage +
+   * streaming path as a channel, but the sidebar segregates them.
+   */
+  kind?: "channel" | "dm";
   createdAt: string;
   updatedAt: string;
 }

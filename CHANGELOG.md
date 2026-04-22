@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0
+
+### Minor Changes
+
+- Backend-adjacent Tidewater completion:
+  - **LLM classifier → Channel.tier**: The orchestrator's `ClassificationResult` now refines the heuristic tier seed whenever a run dispatches into a channel. New `classifierTierToChannelTier` mapper collapses the 6-variant `ComplexityTier` onto the 5-variant `ChannelTier` header pill (`architectural` + `multi_repo` → `feature_large`; `trivial` → `chore`; `feature_small` → `feature`). Best-effort update — a write failure logs but doesn't fail the run.
+  - **Absent-repo mention warning**: Composer scans the drafted message for `@alias` tokens that match a registered-but-unattached workspace and surfaces a pre-send warning banner with a one-click Attach action per offender. The user can still send as-is; the warning is advisory.
+  - **Channel.tier / starred / kind** now first-class on the TS `Channel` interface (previously Rust-only on-disk, back-compat via serde defaults).
+
+  Tests: 4 new for `classifierTierToChannelTier`.
+
 ## 0.4.0
 
 ### Minor Changes

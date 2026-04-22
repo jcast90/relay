@@ -20,6 +20,7 @@ import type { ArtifactStore } from "../execution/artifact-store.js";
 import type { AgentExecutor } from "../execution/executor.js";
 import type { VerificationRunner } from "../execution/verification-runner.js";
 import type { ChannelStore } from "../channels/channel-store.js";
+import { classifierTierToChannelTier } from "../domain/tier-mapper.js";
 import { classifyRequest } from "./classifier.js";
 import { decomposePlanToTickets, buildTicketPlanFromPhases } from "./ticket-decomposer.js";
 import { checkApproval } from "./approval-gate.js";
@@ -170,6 +171,22 @@ export class OrchestratorV2 {
       runId: run.id,
       classification,
     });
+
+    // Propagate the LLM tier back onto the channel so the header pill
+    // refines beyond the heuristic seed. Best-effort: a failed update is
+    // recorded but doesn't fail the run.
+    if (run.channelId && this.channelStore) {
+      try {
+        await this.channelStore.updateChannel(run.channelId, {
+          tier: classifierTierToChannelTier(classification.tier),
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[orchestrator] channel tier update failed (runId=${run.id} channelId=${run.channelId}): ${message}`
+        );
+      }
+    }
 
     await this.transition(run, "ClassificationComplete", "phase_00");
     this.recordEvent(run, "ClassificationComplete", "phase_00", {
