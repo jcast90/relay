@@ -9,6 +9,14 @@
  * issue with that marker and skip creation (leaving the project-item +
  * field values to be re-applied so status can drift forward).
  *
+ * Two-axis routing (AL-17): the project mirror carries the `(role, repo)`
+ * routing model the autonomous loop uses. Each item gets a `Repo`
+ * single-select populated from `ticket.assignedAlias` (fallback: the
+ * channel's primary repo alias) and an `Admin` text field carrying
+ * `repo-admin-<alias>`. Both fields are created on the project lazily if
+ * they don't exist yet — the script is safe to re-run against a board that
+ * was already bootstrapped manually via the web UI.
+ *
  * Usage:
  *   tsx scripts/push-tickets-to-github.ts --channel <channelId>
  *     [--repo jcast90/relay] [--owner jcast90] [--project-number 3]
@@ -36,9 +44,11 @@ type Args = {
   dryRun: boolean;
 };
 
-// Project #3 (Relay) field ids — discovered via the GraphQL schema query.
-// Hard-coded so the script doesn't round-trip discovery on every run; swap
-// via --project-id + a discovery pass if the project changes.
+// Project #3 (Relay) static field ids — discovered once via the GraphQL
+// schema query and hard-coded so the happy path doesn't round-trip
+// discovery on every run. The `Repo` and `Admin` fields are resolved
+// lazily below (see `discoverTwoAxisFields`) because those are created by
+// this script the first time it runs against a fresh project.
 const FIELDS = {
   status: {
     id: "PVTSSF_lAHOAPon-c4BVZUpzhQ1aBc",
@@ -54,6 +64,30 @@ const FIELDS = {
     options: { S: "73175763", M: "3eaa7fc6", L: "5f8d4460" },
   },
   dependsOn: "PVTF_lAHOAPon-c4BVZUpzhQ2Jik",
+};
+
+// Two-axis routing field names — the script creates-or-reuses these on
+// Project #3. Names are matched case-sensitively against the project's
+// existing field list. GitHub reserves the literal `Repo` / `Repository`
+// field name (there's already a built-in Repository column), so the
+// single-select field is called `Target Repo` instead.
+const REPO_FIELD_NAME = "Target Repo";
+const ADMIN_FIELD_NAME = "Admin";
+
+// Default palette colors for single-select option creation. The GitHub
+// GraphQL enum values are UPPERCASE; rotate through them so a freshly
+// populated field doesn't end up all-gray.
+const OPTION_COLORS = ["BLUE", "GREEN", "PURPLE", "ORANGE", "PINK", "YELLOW", "RED"] as const;
+
+type TwoAxisFields = {
+  repoFieldId: string;
+  adminFieldId: string;
+  // Map from alias → option id for the `Repo` single-select field.
+  repoOptions: Map<string, string>;
+  // Full option list (name + color + description) so we can round-trip it
+  // through `updateProjectV2Field` when we need to append a new alias —
+  // GitHub's mutation replaces the option set wholesale.
+  repoOptionDefs: Array<{ id?: string; name: string; color: string; description: string }>;
 };
 
 function parseArgs(argv: string[]): Args {
@@ -276,15 +310,382 @@ mutation SetText($projectId: ID!, $itemId: ID!, $fieldId: ID!, $text: String!) {
   ]);
 }
 
-async function loadRunForChannel(
-  channelId: string
-): Promise<{ tickets: TicketDefinition[]; relayStatusById: Map<string, string> }> {
+type ProjectFieldNode =
+  | {
+      __typename: "ProjectV2Field";
+      id: string;
+      name: string;
+      dataType: string;
+    }
+  | {
+      __typename: "ProjectV2SingleSelectField";
+      id: string;
+      name: string;
+      dataType: string;
+      options: Array<{ id: string; name: string; color?: string; description?: string }>;
+    };
+
+function listProjectFields(owner: string, projectNumber: number): ProjectFieldNode[] {
+  const out = gh([
+    "api",
+    "graphql",
+    "-f",
+    `query=
+query ProjectFields($owner: String!, $number: Int!) {
+  user(login: $owner) {
+    projectV2(number: $number) {
+      fields(first: 50) {
+        nodes {
+          __typename
+          ... on ProjectV2Field { id name dataType }
+          ... on ProjectV2SingleSelectField {
+            id
+            name
+            dataType
+            options { id name color description }
+          }
+        }
+      }
+    }
+  }
+}`,
+    "-F",
+    `owner=${owner}`,
+    "-F",
+    `number=${projectNumber}`,
+  ]);
+  const parsed = JSON.parse(out) as {
+    data?: { user?: { projectV2?: { fields?: { nodes?: ProjectFieldNode[] } } } };
+  };
+  return parsed.data?.user?.projectV2?.fields?.nodes ?? [];
+}
+
+function createTextField(projectId: string, name: string): string {
+  const out = gh([
+    "api",
+    "graphql",
+    "-f",
+    `query=
+mutation CreateTextField($projectId: ID!, $name: String!) {
+  createProjectV2Field(input: {
+    projectId: $projectId
+    dataType: TEXT
+    name: $name
+  }) { projectV2Field { ... on ProjectV2Field { id name dataType } } }
+}`,
+    "-f",
+    `projectId=${projectId}`,
+    "-f",
+    `name=${name}`,
+  ]);
+  const parsed = JSON.parse(out) as {
+    data?: { createProjectV2Field?: { projectV2Field?: { id: string } } };
+  };
+  const id = parsed.data?.createProjectV2Field?.projectV2Field?.id;
+  if (!id) throw new Error(`createProjectV2Field(TEXT, ${name}) returned no id: ${out}`);
+  return id;
+}
+
+function createSingleSelectField(
+  projectId: string,
+  name: string,
+  options: Array<{ name: string; color: string; description: string }>
+): { id: string; options: Array<{ id: string; name: string; color?: string }> } {
+  // `singleSelectOptions` must be a JSON array on the GraphQL variable slot
+  // — `gh api -f/-F` both stringify, so pipe a pre-constructed payload
+  // through `--input -` to preserve array shape.
+  const query = `mutation CreateSelectField($projectId: ID!, $name: String!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
+  createProjectV2Field(input: {
+    projectId: $projectId
+    dataType: SINGLE_SELECT
+    name: $name
+    singleSelectOptions: $options
+  }) {
+    projectV2Field {
+      ... on ProjectV2SingleSelectField {
+        id
+        name
+        options { id name color description }
+      }
+    }
+  }
+}`;
+  const payload = JSON.stringify({
+    query,
+    variables: { projectId, name, options },
+  });
+  const out = gh(["api", "graphql", "--input", "-"], payload);
+  const parsed = JSON.parse(out) as {
+    data?: {
+      createProjectV2Field?: {
+        projectV2Field?: {
+          id: string;
+          options?: Array<{ id: string; name: string; color?: string }>;
+        };
+      };
+    };
+  };
+  const field = parsed.data?.createProjectV2Field?.projectV2Field;
+  if (!field?.id) {
+    throw new Error(`createProjectV2Field(SINGLE_SELECT, ${name}) returned no id: ${out}`);
+  }
+  return { id: field.id, options: field.options ?? [] };
+}
+
+function pickOptionColor(index: number): string {
+  return OPTION_COLORS[index % OPTION_COLORS.length];
+}
+
+/**
+ * Look up the `Repo` + `Admin` fields on the project, creating them when
+ * they don't exist yet. Safe to call on re-runs — creation is guarded by
+ * a name match against the field list we fetched first.
+ */
+function discoverTwoAxisFields(
+  projectId: string,
+  owner: string,
+  projectNumber: number,
+  seedAliases: string[]
+): TwoAxisFields {
+  const nodes = listProjectFields(owner, projectNumber);
+  let repo = nodes.find(
+    (n): n is Extract<ProjectFieldNode, { __typename: "ProjectV2SingleSelectField" }> =>
+      n.__typename === "ProjectV2SingleSelectField" && n.name === REPO_FIELD_NAME
+  );
+  let admin = nodes.find(
+    (n): n is Extract<ProjectFieldNode, { __typename: "ProjectV2Field" }> =>
+      n.__typename === "ProjectV2Field" && n.name === ADMIN_FIELD_NAME
+  );
+
+  if (!repo) {
+    const options = seedAliases.map((alias, i) => ({
+      name: alias,
+      color: pickOptionColor(i),
+      description: `Repo alias: ${alias}`,
+    }));
+    // Always seed at least one option so the select is usable immediately.
+    if (options.length === 0) {
+      options.push({ name: "relay", color: pickOptionColor(0), description: "Repo alias: relay" });
+    }
+    const created = createSingleSelectField(projectId, REPO_FIELD_NAME, options);
+    console.error(
+      `[AL-17] Created ${REPO_FIELD_NAME} single-select field ${created.id} with options ${created.options
+        .map((o) => `${o.name}=${o.id}`)
+        .join(", ")}`
+    );
+    repo = {
+      __typename: "ProjectV2SingleSelectField",
+      id: created.id,
+      name: REPO_FIELD_NAME,
+      dataType: "SINGLE_SELECT",
+      options: created.options.map((o) => ({
+        id: o.id,
+        name: o.name,
+        color: o.color,
+        description: "",
+      })),
+    };
+  }
+  if (!admin) {
+    const id = createTextField(projectId, ADMIN_FIELD_NAME);
+    console.error(`[AL-17] Created ${ADMIN_FIELD_NAME} text field ${id}`);
+    admin = {
+      __typename: "ProjectV2Field",
+      id,
+      name: ADMIN_FIELD_NAME,
+      dataType: "TEXT",
+    };
+  }
+
+  const repoOptions = new Map<string, string>();
+  const repoOptionDefs: TwoAxisFields["repoOptionDefs"] = [];
+  for (const [i, opt] of repo.options.entries()) {
+    repoOptions.set(opt.name, opt.id);
+    repoOptionDefs.push({
+      id: opt.id,
+      name: opt.name,
+      color: (opt.color ?? "").toUpperCase() || pickOptionColor(i),
+      description: opt.description ?? "",
+    });
+  }
+
+  return {
+    repoFieldId: repo.id,
+    adminFieldId: admin.id,
+    repoOptions,
+    repoOptionDefs,
+  };
+}
+
+/**
+ * Add a new alias option to the existing `Repo` single-select field.
+ * `updateProjectV2Field` replaces the option set wholesale, so we pass
+ * every existing option (without ids — matching is by name) plus the new
+ * one. If the replacement somehow drops ids for existing options GitHub
+ * re-issues them; values on already-assigned items re-resolve by name.
+ */
+function addRepoOption(projectId: string, fields: TwoAxisFields, alias: string): string {
+  const next = [
+    ...fields.repoOptionDefs.map((o) => ({
+      name: o.name,
+      color: o.color || pickOptionColor(0),
+      description: o.description ?? "",
+    })),
+    {
+      name: alias,
+      color: pickOptionColor(fields.repoOptionDefs.length),
+      description: `Repo alias: ${alias}`,
+    },
+  ];
+  const query = `mutation AppendOption($fieldId: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
+  updateProjectV2Field(input: {
+    fieldId: $fieldId
+    singleSelectOptions: $options
+  }) {
+    projectV2Field {
+      ... on ProjectV2SingleSelectField {
+        id
+        options { id name color description }
+      }
+    }
+  }
+}`;
+  const payload = JSON.stringify({
+    query,
+    variables: { fieldId: fields.repoFieldId, options: next },
+  });
+  const out = gh(["api", "graphql", "--input", "-"], payload);
+  const parsed = JSON.parse(out) as {
+    data?: {
+      updateProjectV2Field?: {
+        projectV2Field?: { options?: Array<{ id: string; name: string; color?: string }> };
+      };
+    };
+    errors?: Array<{ message: string }>;
+  };
+  if (parsed.errors?.length) {
+    throw new Error(
+      `updateProjectV2Field failed — likely can't append options via API on this project: ` +
+        parsed.errors.map((e) => e.message).join("; ") +
+        `. Add the '${alias}' option manually via the project UI and re-run.`
+    );
+  }
+  const options = parsed.data?.updateProjectV2Field?.projectV2Field?.options ?? [];
+  // Refresh the local cache so a subsequent ticket with the same alias
+  // doesn't re-add it.
+  fields.repoOptions.clear();
+  fields.repoOptionDefs.length = 0;
+  for (const [i, opt] of options.entries()) {
+    fields.repoOptions.set(opt.name, opt.id);
+    fields.repoOptionDefs.push({
+      id: opt.id,
+      name: opt.name,
+      color: (opt.color ?? "").toUpperCase() || pickOptionColor(i),
+      description: "",
+    });
+  }
+  const created = fields.repoOptions.get(alias);
+  if (!created) {
+    throw new Error(`updateProjectV2Field returned no option id for ${alias}: ${out}`);
+  }
+  return created;
+}
+
+type ItemFieldValues = {
+  repoOptionName?: string;
+  adminText?: string;
+  relayIdText?: string;
+  effortOptionName?: string;
+  statusOptionName?: string;
+  dependsOnText?: string;
+};
+
+/**
+ * Fetch the current field values for a single project item. Lets the
+ * write path skip no-op mutations — cheap single query vs. potentially 5
+ * field writes per ticket on re-run.
+ */
+function getItemFieldValues(itemId: string): ItemFieldValues {
+  const out = gh([
+    "api",
+    "graphql",
+    "-f",
+    `query=
+query ItemFields($itemId: ID!) {
+  node(id: $itemId) {
+    ... on ProjectV2Item {
+      fieldValues(first: 30) {
+        nodes {
+          __typename
+          ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2Field { name } } }
+          ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
+        }
+      }
+    }
+  }
+}`,
+    "-f",
+    `itemId=${itemId}`,
+  ]);
+  const parsed = JSON.parse(out) as {
+    data?: {
+      node?: {
+        fieldValues?: {
+          nodes?: Array<{
+            __typename: string;
+            text?: string;
+            name?: string;
+            field?: { name?: string };
+          }>;
+        };
+      };
+    };
+  };
+  const values: ItemFieldValues = {};
+  for (const node of parsed.data?.node?.fieldValues?.nodes ?? []) {
+    const fieldName = node.field?.name;
+    if (!fieldName) continue;
+    if (node.__typename === "ProjectV2ItemFieldTextValue") {
+      if (fieldName === REPO_FIELD_NAME) values.repoOptionName = node.text ?? undefined;
+      if (fieldName === ADMIN_FIELD_NAME) values.adminText = node.text ?? undefined;
+      if (fieldName === "Relay ID") values.relayIdText = node.text ?? undefined;
+      if (fieldName === "Depends on") values.dependsOnText = node.text ?? undefined;
+    } else if (node.__typename === "ProjectV2ItemFieldSingleSelectValue") {
+      if (fieldName === "Status") values.statusOptionName = node.name ?? undefined;
+      if (fieldName === "Effort") values.effortOptionName = node.name ?? undefined;
+      if (fieldName === REPO_FIELD_NAME) values.repoOptionName = node.name ?? undefined;
+    }
+  }
+  return values;
+}
+
+async function loadRunForChannel(channelId: string): Promise<{
+  tickets: TicketDefinition[];
+  relayStatusById: Map<string, string>;
+  assignedAliasById: Map<string, string | undefined>;
+  primaryAlias: string | null;
+}> {
   const channelStore = new ChannelStore();
+  const channel = await channelStore.getChannel(channelId);
+  const primaryAlias = channel ? (channelStore.getPrimaryAssignment(channel)?.alias ?? null) : null;
+  const knownAliases = new Set((channel?.repoAssignments ?? []).map((a) => a.alias));
+
   const ledger = await channelStore.readChannelTickets(channelId);
   if (ledger.length === 0) {
     throw new Error(`Channel ${channelId} has no tickets on its board`);
   }
   const relayStatusById = new Map(ledger.map((t) => [t.ticketId, t.status]));
+  const assignedAliasById = new Map<string, string | undefined>();
+  for (const t of ledger) {
+    if (t.assignedAlias && !knownAliases.has(t.assignedAlias)) {
+      console.error(
+        `[AL-17] warning: ticket ${t.ticketId} has assignedAlias=${t.assignedAlias} but channel ${channelId} has no matching repoAssignment — leaving Repo/Admin unset for this ticket.`
+      );
+      assignedAliasById.set(t.ticketId, undefined);
+    } else {
+      assignedAliasById.set(t.ticketId, t.assignedAlias);
+    }
+  }
 
   // Tickets on the channel board are TicketLedgerEntry (status/metadata only)
   // — the rich definition (objective + acceptance criteria) lives in the
@@ -307,12 +708,19 @@ async function loadRunForChannel(
   const run = JSON.parse(raw) as {
     ticketPlan: { tickets: TicketDefinition[] };
   };
-  return { tickets: run.ticketPlan.tickets, relayStatusById };
+  return {
+    tickets: run.ticketPlan.tickets,
+    relayStatusById,
+    assignedAliasById,
+    primaryAlias,
+  };
 }
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
-  const { tickets, relayStatusById } = await loadRunForChannel(args.channel);
+  const { tickets, relayStatusById, assignedAliasById, primaryAlias } = await loadRunForChannel(
+    args.channel
+  );
 
   if (!args.dryRun) {
     // Make sure the labels exist so `gh issue create --label` doesn't fail.
@@ -323,7 +731,28 @@ async function main(): Promise<void> {
     ensureLabel(args.repo, "size/L", "f9d0c4", "Large");
   }
 
-  const rows: Array<{ ticket: string; status: string; url: string; action: string }> = [];
+  // Seed aliases for the Repo single-select: union of every ticket's
+  // routed alias + the channel's primary alias. Deduped, deterministic.
+  const seedAliases = Array.from(
+    new Set(
+      [primaryAlias, ...tickets.map((t) => assignedAliasById.get(t.id) ?? primaryAlias)].filter(
+        (a): a is string => Boolean(a)
+      )
+    )
+  );
+
+  const twoAxis = args.dryRun
+    ? null
+    : discoverTwoAxisFields(args.projectId, args.owner, args.projectNumber, seedAliases);
+
+  const rows: Array<{
+    ticket: string;
+    status: string;
+    url: string;
+    action: string;
+    repo?: string;
+    admin?: string;
+  }> = [];
 
   for (const t of tickets) {
     const effort = parseEffort(t.title);
@@ -350,11 +779,27 @@ async function main(): Promise<void> {
       action = "created";
     }
 
-    if (!args.dryRun) {
+    // Resolve the per-ticket routing axis. Falls back to the channel's
+    // primary repo alias when the ticket itself doesn't route.
+    const routedAlias = assignedAliasById.get(t.id) ?? primaryAlias ?? undefined;
+    const adminText = routedAlias ? `repo-admin-${routedAlias}` : undefined;
+
+    if (!args.dryRun && twoAxis) {
       const itemId = addItemToProject(args.projectId, issueUrl);
-      setSingleSelectField(args.projectId, itemId, FIELDS.status.id, FIELDS.status.options[bucket]);
-      setTextField(args.projectId, itemId, FIELDS.relayId, t.id);
-      if (effort) {
+      const current = getItemFieldValues(itemId);
+
+      if (current.statusOptionName !== buildStatusName(bucket)) {
+        setSingleSelectField(
+          args.projectId,
+          itemId,
+          FIELDS.status.id,
+          FIELDS.status.options[bucket]
+        );
+      }
+      if (current.relayIdText !== t.id) {
+        setTextField(args.projectId, itemId, FIELDS.relayId, t.id);
+      }
+      if (effort && current.effortOptionName !== effort) {
         setSingleSelectField(
           args.projectId,
           itemId,
@@ -362,15 +807,64 @@ async function main(): Promise<void> {
           FIELDS.effort.options[effort]
         );
       }
-      if (t.dependsOn.length > 0) {
-        setTextField(args.projectId, itemId, FIELDS.dependsOn, t.dependsOn.join(", "));
+      const depsText = t.dependsOn.length > 0 ? t.dependsOn.join(", ") : "";
+      if (depsText && current.dependsOnText !== depsText) {
+        setTextField(args.projectId, itemId, FIELDS.dependsOn, depsText);
+      }
+
+      if (routedAlias) {
+        let optionId = twoAxis.repoOptions.get(routedAlias);
+        if (!optionId) {
+          optionId = addRepoOption(args.projectId, twoAxis, routedAlias);
+        }
+        if (current.repoOptionName !== routedAlias) {
+          setSingleSelectField(args.projectId, itemId, twoAxis.repoFieldId, optionId);
+        }
+      }
+      if (adminText && current.adminText !== adminText) {
+        setTextField(args.projectId, itemId, twoAxis.adminFieldId, adminText);
       }
     }
 
-    rows.push({ ticket: t.id, status: relayStatus, url: issueUrl, action });
+    rows.push({
+      ticket: t.id,
+      status: relayStatus,
+      url: issueUrl,
+      action,
+      repo: routedAlias,
+      admin: adminText,
+    });
   }
 
-  console.log(JSON.stringify({ project: args.projectId, repo: args.repo, rows }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        project: args.projectId,
+        repo: args.repo,
+        twoAxisFields: twoAxis
+          ? {
+              repoFieldId: twoAxis.repoFieldId,
+              adminFieldId: twoAxis.adminFieldId,
+              repoOptions: Object.fromEntries(twoAxis.repoOptions),
+            }
+          : null,
+        rows,
+      },
+      null,
+      2
+    )
+  );
+}
+
+function buildStatusName(bucket: "todo" | "inProgress" | "done"): string {
+  switch (bucket) {
+    case "todo":
+      return "Todo";
+    case "inProgress":
+      return "In Progress";
+    case "done":
+      return "Done";
+  }
 }
 
 main().catch((err) => {
