@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { URL } from "node:url";
 
 import type { JsonRpcMessage, McpMessageHandler } from "./server.js";
@@ -326,11 +326,29 @@ function authorizeRequest(
     return false;
   }
   const provided = header.slice("Bearer ".length).trim();
-  if (provided !== expected) {
+  if (!compareTokens(provided, expected)) {
     respondJson(res, 401, { error: "unauthorized" });
     return false;
   }
   return true;
+}
+
+/**
+ * Constant-time bearer-token compare. A naive `provided !== expected` leaks
+ * the token bit-by-bit over slow / non-loopback links because JavaScript's
+ * string comparison short-circuits on the first mismatching byte — an
+ * attacker measures per-byte response latency and recovers the secret. We
+ * compare in fixed time via `timingSafeEqual`, which requires equal-length
+ * buffers (it throws otherwise — itself a side channel), so we guard with
+ * an explicit length check first. The length check is unavoidable; an
+ * attacker who can probe lengths still learns only the length, not the
+ * bytes.
+ */
+export function compareTokens(provided: string, expected: string): boolean {
+  const p = Buffer.from(provided, "utf8");
+  const e = Buffer.from(expected, "utf8");
+  if (p.length !== e.length) return false;
+  return timingSafeEqual(p, e);
 }
 
 function respondJson(res: ServerResponse, status: number, body: unknown): void {

@@ -431,4 +431,134 @@ describe("channel store", () => {
       }
     });
   });
+
+  describe("path-segment validation", () => {
+    // Every public method that takes a `channelId` and path-joins it must
+    // reject path-traversal inputs before touching the filesystem. Invariants
+    // further up the stack (CLI / MCP layer) should already be preventing
+    // these, but the store is the last line of defense — if a caller ever
+    // lets caller-controlled input through, these guards keep a malicious
+    // value from escaping `channelsDir`.
+    const badChannelIds = [
+      { label: "parent traversal", value: "../foo" },
+      { label: "directory boundary", value: "foo/bar" },
+      { label: "null byte", value: "foo\0bar" },
+      { label: "empty", value: "" },
+      { label: "dot", value: "." },
+      { label: "dot-dot", value: ".." },
+      { label: "backslash", value: "foo\\bar" }
+    ];
+
+    for (const { label, value } of badChannelIds) {
+      it(`rejects ${label} (${JSON.stringify(value)}) across every public method`, async () => {
+        const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+        const store = new ChannelStore(dir);
+        try {
+          // Sanity: create a good channel so any method that would otherwise
+          // succeed by finding a record has something to find — a reject here
+          // must come from the guard, not from a missing channel.
+          await store.createChannel({ name: "#ok", description: "ok" });
+
+          const expectThrow = async (fn: () => Promise<unknown>): Promise<void> => {
+            await expect(fn()).rejects.toThrow(/Unsafe path segment/);
+          };
+
+          await expectThrow(() => store.getChannel(value));
+          await expectThrow(() =>
+            store.updateChannel(value, { name: "x" })
+          );
+          await expectThrow(() => store.archiveChannel(value));
+          await expectThrow(() =>
+            store.joinChannel(value, {
+              agentId: "a",
+              displayName: "A",
+              role: "planner",
+              provider: "claude",
+              sessionId: null
+            })
+          );
+          await expectThrow(() => store.leaveChannel(value, "a"));
+          await expectThrow(() =>
+            store.postEntry(value, {
+              type: "message",
+              fromAgentId: null,
+              fromDisplayName: null,
+              content: "hi",
+              metadata: {}
+            })
+          );
+          await expectThrow(() => store.post(value, "hi"));
+          await expectThrow(() => store.readFeed(value));
+          await expectThrow(() =>
+            store.addRef(value, { type: "repo", targetId: "x", label: "x" })
+          );
+          await expectThrow(() => store.removeRef(value, "x"));
+          await expectThrow(() => store.linkRun(value, "run-1", "ws-1"));
+          await expectThrow(() => store.readRunLinks(value));
+          await expectThrow(() => store.readTrackedPrs(value));
+          await expectThrow(() => store.writeTrackedPrs(value, []));
+          await expectThrow(() => store.readChannelTickets(value));
+          await expectThrow(() => store.writeChannelTickets(value, []));
+          await expectThrow(() => store.upsertChannelTickets(value, []));
+          await expectThrow(() =>
+            store.recordDecision(value, {
+              runId: null,
+              ticketId: null,
+              title: "t",
+              description: "d",
+              rationale: "r",
+              alternatives: [],
+              decidedBy: "a",
+              decidedByName: "A",
+              linkedArtifacts: []
+            })
+          );
+          await expectThrow(() => store.getDecision(value, "d"));
+          await expectThrow(() => store.listDecisions(value));
+        } finally {
+          await rm(dir, { recursive: true, force: true });
+        }
+      });
+    }
+
+    it("linkRun also validates runId and workspaceId", async () => {
+      // linkRun path-joins channelId only, but runId/workspaceId are
+      // user-controlled in the general case (e.g. a scheduler seeded from a
+      // tracker payload) — guard them too so the store never embeds an
+      // unsafe value in JSON written to disk, even when the channelId is
+      // well-formed.
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      try {
+        const channel = await store.createChannel({
+          name: "#r",
+          description: "r"
+        });
+        await expect(
+          store.linkRun(channel.channelId, "../bad-run", "ws-1")
+        ).rejects.toThrow(/Unsafe path segment/);
+        await expect(
+          store.linkRun(channel.channelId, "run-1", "../bad-ws")
+        ).rejects.toThrow(/Unsafe path segment/);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("getDecision also validates decisionId", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      try {
+        const channel = await store.createChannel({
+          name: "#d",
+          description: "d"
+        });
+        await expect(
+          store.getDecision(channel.channelId, "../escape")
+        ).rejects.toThrow(/Unsafe path segment/);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  });
 });

@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { BodyTooLargeError, startHttpMcpServer } from "../../src/mcp/http-transport.js";
+import {
+  BodyTooLargeError,
+  compareTokens,
+  startHttpMcpServer
+} from "../../src/mcp/http-transport.js";
 import type { JsonRpcMessage, McpMessageHandler } from "../../src/mcp/server.js";
 
 /**
@@ -299,5 +303,44 @@ describe("startHttpMcpServer", () => {
     expect(err.name).toBe("BodyTooLargeError");
     expect(err.byteCount).toBe(1_500_000);
     expect(err.limit).toBe(1_000_000);
+  });
+});
+
+describe("compareTokens", () => {
+  it("returns true for byte-identical tokens", () => {
+    expect(compareTokens("s3cret-token", "s3cret-token")).toBe(true);
+  });
+
+  it("returns false for tokens that differ in a single byte", () => {
+    expect(compareTokens("s3cret-tokeN", "s3cret-token")).toBe(false);
+  });
+
+  it("returns false for tokens of different length without throwing", () => {
+    // Guard against timingSafeEqual's different-length throw: the helper
+    // short-circuits on length mismatch and returns false cleanly.
+    expect(compareTokens("short", "much-longer-token")).toBe(false);
+    expect(compareTokens("much-longer-token", "short")).toBe(false);
+  });
+
+  it("returns false when either side is empty", () => {
+    expect(compareTokens("", "s3cret")).toBe(false);
+    expect(compareTokens("s3cret", "")).toBe(false);
+  });
+
+  it("treats two empty strings as equal", () => {
+    // `authorizeRequest` never calls compareTokens with an unset expected
+    // token (the caller short-circuits on `!expected` first), so this case
+    // is purely for the helper's own correctness.
+    expect(compareTokens("", "")).toBe(true);
+  });
+
+  it("handles multibyte UTF-8 content correctly", () => {
+    // Tokens could contain non-ASCII if a user decides to be creative; the
+    // helper compares bytes, not code points, so the UTF-8 encoded length
+    // is what matters for the mismatch short-circuit.
+    const a = "tökén-\u{1F510}";
+    const b = "tökén-\u{1F510}";
+    expect(compareTokens(a, b)).toBe(true);
+    expect(compareTokens(a, a + "x")).toBe(false);
   });
 });

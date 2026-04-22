@@ -19,6 +19,7 @@ import { buildDecisionId, type Decision } from "../domain/decision.js";
 import type { TrackedPrRow } from "../domain/pr-row.js";
 import type { TicketLedgerEntry } from "../domain/ticket.js";
 import { buildHarnessStore } from "../storage/factory.js";
+import { assertSafeSegment } from "../storage/file-store.js";
 import { STORE_NS } from "../storage/namespaces.js";
 import type { HarnessStore } from "../storage/store.js";
 
@@ -143,6 +144,7 @@ export class ChannelStore {
   }
 
   async getChannel(channelId: string): Promise<Channel | null> {
+    assertSafeSegment(channelId, "channelId");
     try {
       const raw = await readFile(
         join(this.channelsDir, `${channelId}.json`),
@@ -192,6 +194,7 @@ export class ChannelStore {
       >
     >
   ): Promise<Channel | null> {
+    assertSafeSegment(channelId, "channelId");
     const channel = await this.getChannel(channelId);
     if (!channel) return null;
 
@@ -259,6 +262,7 @@ export class ChannelStore {
   }
 
   async archiveChannel(channelId: string): Promise<Channel | null> {
+    assertSafeSegment(channelId, "channelId");
     return this.updateChannel(channelId, { status: "archived" });
   }
 
@@ -278,6 +282,7 @@ export class ChannelStore {
   // --- Members ---
 
   async joinChannel(channelId: string, member: Omit<ChannelMember, "joinedAt" | "status">): Promise<Channel | null> {
+    assertSafeSegment(channelId, "channelId");
     const channel = await this.getChannel(channelId);
     if (!channel) return null;
 
@@ -311,6 +316,7 @@ export class ChannelStore {
   }
 
   async leaveChannel(channelId: string, agentId: string): Promise<Channel | null> {
+    assertSafeSegment(channelId, "channelId");
     const channel = await this.getChannel(channelId);
     if (!channel) return null;
 
@@ -344,6 +350,7 @@ export class ChannelStore {
       metadata: Record<string, unknown>;
     }
   ): Promise<ChannelEntry> {
+    assertSafeSegment(channelId, "channelId");
     const feedDir = join(this.channelsDir, channelId);
     await mkdir(feedDir, { recursive: true });
 
@@ -386,6 +393,7 @@ export class ChannelStore {
       metadata?: Record<string, unknown>;
     }
   ): Promise<string> {
+    assertSafeSegment(channelId, "channelId");
     const entry = await this.postEntry(channelId, {
       type: options?.type ?? "message",
       fromAgentId: options?.fromAgentId ?? null,
@@ -397,6 +405,7 @@ export class ChannelStore {
   }
 
   async readFeed(channelId: string, limit?: number): Promise<ChannelEntry[]> {
+    assertSafeSegment(channelId, "channelId");
     const path = join(this.channelsDir, channelId, "feed.jsonl");
 
     try {
@@ -426,6 +435,7 @@ export class ChannelStore {
   // --- References ---
 
   async addRef(channelId: string, ref: Omit<ChannelRef, "addedAt">): Promise<Channel | null> {
+    assertSafeSegment(channelId, "channelId");
     const channel = await this.getChannel(channelId);
     if (!channel) return null;
 
@@ -446,6 +456,7 @@ export class ChannelStore {
   }
 
   async removeRef(channelId: string, targetId: string): Promise<Channel | null> {
+    assertSafeSegment(channelId, "channelId");
     const channel = await this.getChannel(channelId);
     if (!channel) return null;
 
@@ -459,6 +470,9 @@ export class ChannelStore {
   // --- Run linking ---
 
   async linkRun(channelId: string, runId: string, workspaceId: string): Promise<void> {
+    assertSafeSegment(channelId, "channelId");
+    assertSafeSegment(runId, "runId");
+    assertSafeSegment(workspaceId, "workspaceId");
     const runsDir = join(this.channelsDir, channelId);
     await mkdir(runsDir, { recursive: true });
 
@@ -480,6 +494,7 @@ export class ChannelStore {
   }
 
   async readRunLinks(channelId: string): Promise<ChannelRunLink[]> {
+    assertSafeSegment(channelId, "channelId");
     try {
       const raw = await readFile(
         join(this.channelsDir, channelId, "runs.json"),
@@ -501,6 +516,7 @@ export class ChannelStore {
   // command when no active watcher is present.
 
   async readTrackedPrs(channelId: string): Promise<TrackedPrRow[]> {
+    assertSafeSegment(channelId, "channelId");
     const path = join(this.channelsDir, channelId, "tracked-prs.json");
     try {
       const raw = await readFile(path, "utf8");
@@ -522,6 +538,7 @@ export class ChannelStore {
     channelId: string,
     rows: TrackedPrRow[]
   ): Promise<void> {
+    assertSafeSegment(channelId, "channelId");
     const channelDir = join(this.channelsDir, channelId);
     await mkdir(channelDir, { recursive: true });
     const path = join(channelDir, "tracked-prs.json");
@@ -546,6 +563,7 @@ export class ChannelStore {
    * don't silently overwrite real data via `upsertChannelTickets`.
    */
   async readChannelTickets(channelId: string): Promise<TicketLedgerEntry[]> {
+    assertSafeSegment(channelId, "channelId");
     const path = join(this.channelsDir, channelId, "tickets.json");
     let content: string;
 
@@ -589,6 +607,7 @@ export class ChannelStore {
     channelId: string,
     tickets: TicketLedgerEntry[]
   ): Promise<void> {
+    assertSafeSegment(channelId, "channelId");
     const channelDir = join(this.channelsDir, channelId);
     await mkdir(channelDir, { recursive: true });
 
@@ -642,6 +661,7 @@ export class ChannelStore {
     channelId: string,
     incoming: TicketLedgerEntry[]
   ): Promise<TicketLedgerEntry[]> {
+    assertSafeSegment(channelId, "channelId");
     const merged = await this.withChannelLock(channelId, async () => {
       const existing = await this.readChannelTickets(channelId);
       const byId = new Map(existing.map((t) => [t.ticketId, t]));
@@ -731,6 +751,7 @@ export class ChannelStore {
     channelId: string,
     input: Omit<Decision, "decisionId" | "channelId" | "createdAt">
   ): Promise<Decision> {
+    assertSafeSegment(channelId, "channelId");
     const decisionsDir = join(this.channelsDir, channelId, "decisions");
     await mkdir(decisionsDir, { recursive: true });
 
@@ -785,6 +806,8 @@ export class ChannelStore {
   }
 
   async getDecision(channelId: string, decisionId: string): Promise<Decision | null> {
+    assertSafeSegment(channelId, "channelId");
+    assertSafeSegment(decisionId, "decisionId");
     try {
       const raw = await readFile(
         join(this.channelsDir, channelId, "decisions", `${decisionId}.json`),
@@ -797,6 +820,7 @@ export class ChannelStore {
   }
 
   async listDecisions(channelId: string): Promise<Decision[]> {
+    assertSafeSegment(channelId, "channelId");
     const decisionsDir = join(this.channelsDir, channelId, "decisions");
     const files = await this.safeReaddir(decisionsDir);
     const decisions: Decision[] = [];
