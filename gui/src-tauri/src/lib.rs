@@ -202,6 +202,66 @@ fn reject_plan(
     cli_json(&args)
 }
 
+/// List pending approvals-queue records for a single session (no args = all
+/// sessions). Reads `~/.relay/approvals/<sessionId>/queue.jsonl` directly
+/// via `harness-data`; no CLI round-trip so the right-pane 5-second tick
+/// stays cheap.
+#[tauri::command]
+fn list_pending_approvals(
+    session_id: Option<String>,
+) -> Result<Vec<data::ApprovalQueueRecord>, String> {
+    if let Some(ref s) = session_id {
+        validate_id_segment(s, "sessionId")?;
+        let mut out = data::load_approval_queue(s);
+        // I9: filter through the typed enum so stringly-typed status
+        // comparisons can't drift out of sync with the TS source of truth.
+        out.retain(|r| r.status_enum() == Some(data::ApprovalStatus::Pending));
+        out.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        return Ok(out);
+    }
+    Ok(data::load_all_pending_approvals())
+}
+
+/// Approve a single AL-8 queue record by id. Shells out to
+/// `rly approve <id> --json` so the canonical queue mutation path lives in
+/// one place (the TS writer). Returns the CLI's JSON envelope verbatim.
+#[tauri::command]
+fn approve_queue_entry(id: String) -> Result<serde_json::Value, String> {
+    validate_id_segment(&id, "id")?;
+    cli_json(&["approve", &id, "--json"])
+}
+
+/// Reject a single AL-8 queue record with optional `--feedback`. Same
+/// shell-out contract as `approve_queue_entry`.
+#[tauri::command]
+fn reject_queue_entry(
+    id: String,
+    feedback: Option<String>,
+) -> Result<serde_json::Value, String> {
+    validate_id_segment(&id, "id")?;
+    let mut args: Vec<&str> = vec!["reject", &id, "--json"];
+    if let Some(ref fb) = feedback {
+        args.push("--feedback");
+        args.push(fb);
+    }
+    cli_json(&args)
+}
+
+/// Approve all pending queue records (optionally scoped to one session).
+/// Convenience for the "Approve all" button in the RightPane; still
+/// dispatches through the CLI so the queue file mutation is authoritative.
+#[tauri::command]
+fn approve_queue_all(session_id: Option<String>) -> Result<serde_json::Value, String> {
+    let mut args: Vec<String> = vec!["approve".into(), "all".into(), "--json".into()];
+    if let Some(ref s) = session_id {
+        validate_id_segment(s, "sessionId")?;
+        args.push("--session".into());
+        args.push(s.clone());
+    }
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    cli_json(&refs)
+}
+
 #[derive(Serialize)]
 struct CliResult {
     success: bool,
@@ -2106,6 +2166,10 @@ pub fn run() {
             list_pending_plans,
             approve_plan,
             reject_plan,
+            list_pending_approvals,
+            approve_queue_entry,
+            reject_queue_entry,
+            approve_queue_all,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

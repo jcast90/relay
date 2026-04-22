@@ -79,6 +79,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_approve_plan_popup(frame, app, size);
     }
 
+    // AL-8 approval-queue confirm popup (N: explicit confirmation).
+    if app.input_mode == InputMode::ApproveQueue {
+        draw_approve_queue_popup(frame, app, size);
+    }
+
     // Pending-plan banner — only show when not already in a modal flow so it
     // doesn't fight with active popups for space. The banner draws over the
     // bottom edge of the center panel.
@@ -89,6 +94,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             | InputMode::SessionSelect
             | InputMode::RewindSelect
             | InputMode::ApprovePlan
+            | InputMode::ApproveQueue
     );
     if !in_modal && !app.pending_plans.is_empty() {
         draw_pending_plan_banner(frame, app, main_area);
@@ -241,6 +247,7 @@ fn draw_center(frame: &mut Frame, app: &mut App, area: Rect) {
         Tab::Board => draw_board(frame, app, &channel_name, area),
         Tab::Decisions => draw_decisions(frame, app, &channel_name, area),
         Tab::Prs => draw_prs(frame, app, &channel_name, area),
+        Tab::Approvals => draw_approvals(frame, app, area),
     }
 }
 
@@ -249,6 +256,16 @@ fn tab_bar_line(app: &App) -> Line<'static> {
     let c_board = if app.active_tab == Tab::Board { Color::Cyan } else { Color::DarkGray };
     let c_dec = if app.active_tab == Tab::Decisions { Color::Cyan } else { Color::DarkGray };
     let c_prs = if app.active_tab == Tab::Prs { Color::Cyan } else { Color::DarkGray };
+    let c_apv = if app.active_tab == Tab::Approvals { Color::Cyan } else { Color::DarkGray };
+    // Badge the Approvals tab with a pending count so the user notices
+    // queue items even when another tab is in focus. Zero-count still
+    // renders, just in muted grey — less surprising than a flickering
+    // label that appears and disappears.
+    let apv_label = if app.pending_approvals.is_empty() {
+        ":Approvals ".to_string()
+    } else {
+        format!(":Approvals({}) ", app.pending_approvals.len())
+    };
     Line::from(vec![
         Span::styled(" 1", Style::default().fg(c_chat)),
         Span::styled(":Chat", Style::default().fg(c_chat)),
@@ -260,7 +277,10 @@ fn tab_bar_line(app: &App) -> Line<'static> {
         Span::styled(":Decisions", Style::default().fg(c_dec)),
         Span::styled(" | ", Style::default().fg(Color::DarkGray)),
         Span::styled("4", Style::default().fg(c_prs)),
-        Span::styled(":PRs ", Style::default().fg(c_prs)),
+        Span::styled(":PRs", Style::default().fg(c_prs)),
+        Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+        Span::styled("5", Style::default().fg(c_apv)),
+        Span::styled(apv_label, Style::default().fg(c_apv)),
     ])
     .right_aligned()
 }
@@ -747,6 +767,73 @@ fn pad_right(s: &str, width: usize) -> String {
         let pad = width - s.chars().count();
         format!("{}{}", s, " ".repeat(pad))
     }
+}
+
+/// AL-8 approvals queue pane. Lists every pending record across every
+/// session (read directly from `~/.relay/approvals/`). Keyboard:
+///   `a` → approve the highlighted record
+///   `d` → reject the highlighted record
+/// Both paths shell out to `rly approve <id>` / `rly reject <id>` so the
+/// queue mutation goes through the same TS writer as the CLI and GUI.
+fn draw_approvals(frame: &mut Frame, app: &App, area: Rect) {
+    let focused = app.focus == FocusPanel::Center && app.active_tab == Tab::Approvals;
+    let rows = &app.pending_approvals;
+
+    let items: Vec<ListItem> = if rows.is_empty() {
+        vec![ListItem::new(Line::from(vec![Span::styled(
+            "  No pending approvals. Tab to another pane or keep working.",
+            Style::default().fg(Color::DarkGray),
+        )]))]
+    } else {
+        let mut out = Vec::with_capacity(rows.len() + 1);
+        out.push(ListItem::new(Line::from(vec![Span::styled(
+            "  KIND                    ID                              SESSION              CREATED",
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )])));
+        for (i, r) in rows.iter().enumerate() {
+            let is_selected = focused && i == app.approvals_scroll;
+            let indicator = if is_selected { "▸ " } else { "  " };
+            let session_short = if r.session_id.len() > 18 {
+                format!("{}…", &r.session_id[..17])
+            } else {
+                r.session_id.clone()
+            };
+            let created_short = if r.created_at.len() > 19 {
+                r.created_at[..19].to_string()
+            } else {
+                r.created_at.clone()
+            };
+            out.push(ListItem::new(Line::from(vec![
+                Span::styled(indicator, Style::default().fg(Color::Cyan)),
+                Span::styled(pad_right(&r.kind, 23), Style::default().fg(Color::White)),
+                Span::raw(" "),
+                Span::styled(pad_right(&r.id, 31), Style::default().fg(Color::Cyan)),
+                Span::raw(" "),
+                Span::styled(pad_right(&session_short, 20), Style::default().fg(Color::DarkGray)),
+                Span::raw(" "),
+                Span::styled(created_short, Style::default().fg(Color::DarkGray)),
+            ])));
+        }
+        out
+    };
+
+    let title = if rows.is_empty() {
+        " Approvals ".to_string()
+    } else {
+        format!(" Approvals ({}) — a:approve  d:reject ", rows.len())
+    };
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(border_style(app, FocusPanel::Center))
+            .title(title)
+            .title_style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
+            .title_bottom(tab_bar_line(app)),
+    );
+    frame.render_widget(list, area);
 }
 
 fn draw_right(frame: &mut Frame, app: &App, area: Rect) {
@@ -1374,6 +1461,58 @@ fn draw_approve_plan_popup(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(paragraph, popup_area);
 }
 
+/// Confirm-approve the AL-7/AL-8 queue record under the Approvals-tab
+/// cursor. Keeps the "irreversible action needs a two-key confirmation"
+/// contract consistent with `draw_approve_plan_popup`.
+fn draw_approve_queue_popup(frame: &mut Frame, app: &App, area: Rect) {
+    let dim = Block::default().style(Style::default().bg(Color::Black));
+    frame.render_widget(dim, area);
+
+    let popup_width = 64.min(area.width.saturating_sub(4));
+    let popup_height = 10u16.min(area.height.saturating_sub(4));
+    let popup_x = (area.width - popup_width) / 2;
+    let popup_y = (area.height - popup_height) / 2;
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+    frame.render_widget(Clear, popup_area);
+
+    let rec = app.pending_approvals.get(app.approvals_scroll);
+    let mut lines: Vec<Line> = Vec::new();
+    if let Some(r) = rec {
+        lines.push(Line::from(Span::styled(
+            format!("  Record: {}", r.id),
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("  Session: {}", r.session_id),
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("  Kind: {}", r.kind),
+            Style::default().fg(Color::Cyan),
+        )));
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled(
+            "  y/enter: approve   r: reject   n/esc: cancel",
+            Style::default().fg(Color::Yellow),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "  No approval record under cursor.",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Green))
+        .border_type(BorderType::Double)
+        .title(" Approve queue record? ")
+        .title_style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+        .style(Style::default().bg(Color::Rgb(10, 25, 15)));
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, popup_area);
+}
+
 /// Thin top banner notifying the user that one or more runs are awaiting a
 /// plan-approval decision. Renders over the very top of the main area so it
 /// doesn't disturb the rest of the layout.
@@ -1743,6 +1882,48 @@ fn detail_content<'a>(app: &'a App) -> (String, Vec<Line<'a>>) {
                     )
                 } else {
                     ("No tracked PR".to_string(), vec![])
+                }
+            }
+            Tab::Approvals => {
+                if let Some(rec) = app.pending_approvals.get(app.approvals_scroll) {
+                    let payload_str =
+                        serde_json::to_string_pretty(&rec.payload).unwrap_or_default();
+                    let mut lines = vec![
+                        Line::from(vec![
+                            Span::styled("ID: ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(&rec.id, Style::default().fg(Color::Cyan)),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("Kind: ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(
+                                &rec.kind,
+                                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                            ),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("Session: ", Style::default().fg(Color::DarkGray)),
+                            Span::raw(&rec.session_id),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
+                            Span::raw(&rec.status),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("Created: ", Style::default().fg(Color::DarkGray)),
+                            Span::raw(&rec.created_at),
+                        ]),
+                        Line::raw(""),
+                        Line::from(Span::styled(
+                            "Payload:",
+                            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                        )),
+                    ];
+                    for line in payload_str.lines() {
+                        lines.push(Line::raw(line.to_string()));
+                    }
+                    (format!("Approval: {}", rec.kind), lines)
+                } else {
+                    ("No pending approval".to_string(), vec![])
                 }
             }
         },
