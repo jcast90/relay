@@ -1,0 +1,235 @@
+name: Release
+
+# Trigger: any pushed tag that looks like v0.1.0, v0.2.0-rc.1, etc.
+#
+# Fan-out:
+#   - release-npm      publishes the `relay` package to npm (and GitHub Packages)
+#   - release-gui      matrix-builds the Tauri GUI on macOS / Linux / Windows and
+#                      uploads the OS-native installer artifacts
+#   - release-github   collects everything and cuts a GitHub Release, using the
+#                      matching CHANGELOG.md section as the release body
+#
+# Admin-only secrets required:
+#   NPM_TOKEN          npm auth token with publish scope for `relay`
+#   (GITHUB_TOKEN is provided automatically by Actions; used for GitHub Packages
+#   mirror + Release creation.)
+#
+# Security notes:
+#   - All run: steps that touch tag names do so via $GITHUB_REF (set by the
+#     runner) and an awk-validated substring — never via `${{ github.* }}`
+#     expression interpolation inside a shell body.
+#   - No pull_request trigger — release workflow only fires on tag push, which
+#     requires push access, so untrusted-PR-input vectors don't apply here.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+concurrency:
+  group: "release-${{ github.ref }}"
+  cancel-in-progress: false
+
+jobs:
+  release-npm:
+    name: release-npm
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js (npm registry)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Publish to npm
+        run: pnpm publish --no-git-checks --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Setup Node.js (GitHub Packages)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@jcast90"
+
+      - name: Publish mirror to GitHub Packages
+        # Best-effort mirror. GitHub Packages requires a scoped name, so we
+        # rewrite package.json on the fly to @jcast90/relay, publish, then
+        # discard. If this step fails we don't want to block the npm release.
+        continue-on-error: true
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.name = '@jcast90/relay';
+            pkg.publishConfig = { registry: 'https://npm.pkg.github.com' };
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          pnpm publish --no-git-checks --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-gui:
+    name: release-gui (${{ matrix.platform.os }})
+    needs: release-npm
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - os: macos-latest
+            rust_target: aarch64-apple-darwin
+            artifact_glob: |
+              gui/src-tauri/target/release/bundle/dmg/*.dmg
+              gui/src-tauri/target/release/bundle/macos/*.app.tar.gz
+          - os: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+            artifact_glob: |
+              gui/src-tauri/target/release/bundle/appimage/*.AppImage
+              gui/src-tauri/target/release/bundle/deb/*.deb
+          - os: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            artifact_glob: |
+              gui/src-tauri/target/release/bundle/msi/*.msi
+              gui/src-tauri/target/release/bundle/nsis/*.exe
+    runs-on: ${{ matrix.platform.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform.rust_target }}
+
+      - name: Cache cargo target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            gui/src-tauri
+
+      - name: Install Linux Tauri system deps
+        if: matrix.platform.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install GUI frontend dependencies
+        working-directory: gui
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri bundle
+        working-directory: gui
+        run: pnpm tauri build
+
+      - name: Upload GUI artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay-gui-${{ matrix.platform.os }}
+          path: ${{ matrix.platform.artifact_glob }}
+          if-no-files-found: warn
+          retention-days: 7
+
+  release-github:
+    name: release-github
+    needs: [release-npm, release-gui]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all GUI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+
+      - name: Flatten artifact tree
+        run: |
+          mkdir -p release-assets
+          find dist-artifacts -type f \
+            \( -name '*.dmg' \
+               -o -name '*.AppImage' \
+               -o -name '*.deb' \
+               -o -name '*.msi' \
+               -o -name '*.exe' \
+               -o -name '*.app.tar.gz' \) \
+            -exec cp -v {} release-assets/ \;
+          ls -la release-assets/
+
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        env:
+          GH_REF: ${{ github.ref }}
+        run: |
+          # GH_REF is runner-provided (refs/tags/vX.Y.Z); git enforces tag-name
+          # character rules, so this is safe to substring-strip.
+          TAG="${GH_REF#refs/tags/v}"
+          NOTES_FILE=$(mktemp)
+          # Pull the section for this version: from "## [$TAG]" to the next "## ["
+          awk -v tag="$TAG" '
+            $0 ~ "^## \\[" tag "\\]" { flag=1; print; next }
+            flag && $0 ~ "^## \\[" { flag=0 }
+            flag { print }
+          ' CHANGELOG.md > "$NOTES_FILE"
+          if [ ! -s "$NOTES_FILE" ]; then
+            echo "Release v$TAG" > "$NOTES_FILE"
+            echo "" >> "$NOTES_FILE"
+            echo "(No CHANGELOG.md entry found for this tag — see commit history.)" >> "$NOTES_FILE"
+          fi
+          echo "notes_file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+          echo "---- release notes ----"
+          cat "$NOTES_FILE"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: ${{ steps.notes.outputs.notes_file }}
+          files: release-assets/*
+          draft: false
+          prerelease: ${{ contains(github.ref, '-rc.') || contains(github.ref, '-beta.') || contains(github.ref, '-alpha.') }}
+          fail_on_unmatched_files: false

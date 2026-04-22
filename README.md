@@ -46,17 +46,39 @@ CLI: **`rly`**.
 
 ## Install
 
-### One command
+### Quick start _(coming soon — blocked on first tagged release)_
+
+Once `v0.1.0` ships to npm, this will be the one-liner:
 
 ```bash
-./install.sh
+npm install -g rly
+rly welcome
 ```
 
-Prereq checks (`node >= 20`, `pnpm`, `git`; plus `cargo` if you add `--with-tui` or `--with-gui`), `pnpm install && pnpm build`, links the `rly` binary on your `$PATH`, scaffolds `~/.relay/config.env.template`. Safe to re-run.
+…or without globally installing:
+
+```bash
+npx rly@latest welcome
+```
+
+### From source _(available today)_
+
+```bash
+git clone https://github.com/jcast90/relay
+cd relay
+./install.sh
+rly welcome
+```
+
+Prereq checks (`node >= 20`, `pnpm`, `git`; plus `cargo` if you add `--with-tui` or `--with-gui`; plus Linux Tauri system libs if you add `--with-gui` on Linux), `pnpm install && pnpm build`, links the `rly` binary on your `$PATH`, scaffolds `~/.relay/config.env.template`. Safe to re-run.
 
 - `--with-tui` also builds the Rust dashboard.
-- `--with-gui` also builds the Tauri desktop app.
+- `--with-gui` also builds the Tauri desktop app. On Linux, the preflight will offer to `apt-get install` the required system libraries if they're missing.
 - `--skip-link` skips the global link (useful in CI).
+
+### GUI app _(coming soon)_
+
+Download the `.dmg` / `.AppImage` / `.deb` / `.msi` from the [latest release](https://github.com/jcast90/relay/releases/latest).
 
 ### Manual
 

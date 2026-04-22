@@ -36,9 +36,13 @@
     "gui:build": "cd gui && pnpm tauri build",
     "prepare": "pnpm build",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "changeset": "changeset",
+    "changeset-version": "changeset version && node scripts/sync-versions.mjs",
+    "changeset-publish": "pnpm build && changeset publish"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.31.0",
     "@types/node": "^22.15.30",
     "@types/pg": "^8.20.0",
     "typescript": "^5.9.3",
