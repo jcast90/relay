@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/jcast90/relay/security/advisories/new
+    about: Report a security issue privately via GitHub security advisories.
+  - name: Questions & discussion
+    url: https://github.com/jcast90/relay/discussions
+    about: Ask questions or discuss ideas (if Discussions are enabled).

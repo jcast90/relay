@@ -47,6 +47,7 @@
     "@changesets/cli": "^2.31.0",
     "@types/node": "^22.15.30",
     "@types/pg": "^8.20.0",
+    "prettier": "^3.8.3",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
   },
