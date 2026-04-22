@@ -27,8 +27,14 @@ export type ChannelRef = {
 
 export type ChannelTier = "feature_large" | "feature" | "bugfix" | "chore" | "question";
 
+// Must stay in sync with the Rust `TicketProvider` enum in
+// `crates/harness-data/src/lib.rs`. `unknown` is the forward-compat catch-all
+// for provider strings this GUI build doesn't recognise yet; treat it as
+// equivalent to `none` at the UI layer.
+export type TicketProvider = "relay" | "linear" | "none" | "unknown";
+
 export type GuiSettings = {
-  ticketProvider: "relay" | "linear" | "none";
+  ticketProvider: TicketProvider;
   linearApiToken: string;
   linearWorkspace: string;
   linearPollSeconds: number;
@@ -49,8 +55,9 @@ export type Channel = {
   primaryWorkspaceId?: string;
   // Classifier-assigned tier. Optional — older channels omit.
   tier?: ChannelTier;
-  // Pinned to the Starred section of the sidebar.
-  starred?: boolean;
+  // Pinned to the Starred section of the sidebar. Always serialized by the
+  // Rust side (no skip_serializing_if) so it's non-optional at the TS layer.
+  starred: boolean;
   // Per-channel opt-in for unattended agent runs (AL-0). When `true`, agent
   // subprocesses dispatched for this channel skip permission prompts.
   // Optional for back-compat; a missing field means "off".

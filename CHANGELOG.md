@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.0
+
+### Minor Changes
+
+- 4351a32: OSS-20: release pipeline. Adds Changesets-driven versioning with a Cargo.toml
+  sync script, `.github/workflows/release.yml` that publishes to npm + cuts
+  per-OS GUI artifacts (`.dmg`, `.AppImage`, `.deb`, `.msi`) + creates a GitHub
+  Release on `v*` tags. `install.sh` gains a Tauri-dep preflight on Linux with
+  an interactive `apt-get install` offer. README has a proper Install section
+  with the `npm install -g @jcast90/relay` / `npx @jcast90/relay welcome`
+  one-liner (package is `@jcast90/relay` because unscoped `relay` and `rly`
+  are taken on npm — see OSS-21).
+- Tidewater GUI rebuild. The Tauri desktop GUI has been rewritten end-to-end against a new design (ink/paper palette, Slack-style chat shell, interactive repo-chip row, 3-step new-channel wizard, global Settings page with pluggable ticket provider, and a right rail with Threads / Decisions / PRs tabs). Existing behaviors preserved: rewind, spawn-to-Terminal, archive/unarchive, pending-plan approval CTA, tracked PRs, mention autocomplete.
+
+  **Backend additions**
+  - `Channel.tier` (`feature_large | feature | bugfix | chore | question`) and `Channel.starred` — both optional with `#[serde(default)]` so older channel files keep deserializing.
+  - `GuiSettings` persisted to `~/.relay/gui-settings.json`. Ticketing provider (`relay | linear | none`) selects whether the BoardView renders Linear-sourced tickets.
+  - New Tauri commands: `set_channel_starred`, `set_channel_tier`, `set_primary_repo`, `get_settings`, `update_settings`.
+
+  **Breaking UI change**
+  - Message bodies no longer render GFM (no tables, no fenced code blocks). `renderWithMentions` is the single render path per the design spec — recognises `@alias`, `**bold**`, and inline `` `code` `` only.
+  - Removed deps: `react-markdown`, `remark-gfm`.
+
 All notable changes to **Relay** (`rly`) are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
