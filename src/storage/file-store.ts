@@ -47,12 +47,15 @@ let tmpCounter = 0;
 /**
  * Reject path segments that could escape `rootDir` via traversal (`..`),
  * collapse to the parent (`.`), pierce a directory boundary (`/`, `\`), or
- * trip the kernel's null-byte guard. Called on every `ns` and `id` at the
- * entry of every public method — a malicious caller controlling either
- * would otherwise be able to read/write arbitrary files under the process's
- * uid.
+ * trip the kernel's null-byte guard. Called on every path-segment input at
+ * the entry of every public method that path-joins caller-controlled data —
+ * a malicious caller controlling the segment would otherwise be able to
+ * read/write arbitrary files under the process's uid.
+ *
+ * `kind` is only used in the error message; callers pass whatever label
+ * identifies the segment in their API (`"ns"`, `"id"`, `"channelId"`, …).
  */
-export function assertSafeSegment(segment: string, kind: "ns" | "id"): void {
+export function assertSafeSegment(segment: string, kind: string): void {
   if (
     segment === "" ||
     segment === "." ||
