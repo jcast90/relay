@@ -231,3 +231,40 @@ export type ApprovalQueueRecord = {
   // gate without an operator in the loop. Only value today is "god-mode".
   autoApprovedBy?: string | null;
 };
+
+// AL-10: summary row returned by `list_autonomous_sessions`. One per
+// session directory under `~/.relay/sessions/` whose metadata.json is
+// parseable. The CenterPane uses these to resolve `channel -> session`.
+export type AutonomousSessionSummary = {
+  sessionId: string;
+  channelId: string;
+  state: string;
+  startedAt: string;
+  trust: string;
+};
+
+// AL-10: deep session state returned by `get_session_state`. Renders the
+// AutonomousSessionHeader; all fields are already pre-computed on the Rust
+// side so the component stays dumb.
+export type AutonomousSessionState = {
+  sessionId: string;
+  channelId: string;
+  // Lifecycle state — matches the `LifecycleState` enum in
+  // `src/lifecycle/types.ts` (planning / dispatching / winding_down /
+  // audit / done / killed).
+  state: string;
+  trust: string;
+  budgetTokens: number;
+  budgetUsed: number;
+  budgetPct: number;
+  maxHours: number;
+  startedAt: string;
+  // ISO timestamp of the most recent lifecycle transition.
+  updatedAt: string;
+  hoursRemaining: number;
+  currentTicketId?: string | null;
+  allowedRepos: string[];
+};
+
+// AL-10 previously defined `SessionApproval` here. Dropped — AL-8 owns the
+// GUI approvals surface via `ApprovalQueueRecord` above.
