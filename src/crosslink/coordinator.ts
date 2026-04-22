@@ -387,13 +387,17 @@ export class Coordinator {
   /**
    * Cycle detection. A new edge `requester → blocker` closes a cycle
    * iff there's already a path `blocker → ... → requester` in the
-   * current graph. We only maintain direct edges (per-ticket), so a
-   * DFS over {@link blockEdges} is sufficient for the MVP.
+   * current graph. We maintain direct edges (per-ticket) and the DFS
+   * below walks them transitively — so A→B→C→A and longer cycles are
+   * caught, not just the pairwise A↔B case. We keep the implementation
+   * intentionally simple (graph is small — bounded by admin count —
+   * and the hot path is `send()`, not an analytics loop).
    *
-   * Not transitively strict by design: the AL-16 MVP protects against
-   * the common pairwise A↔B case that the ticket brief calls out.
-   * Richer graph hygiene (stale-block eviction, ticket-granular
-   * edges) is deferred.
+   * Deferred: stale-block eviction (a `blocked-on-repo` whose dependency
+   * has been abandoned should age out) and ticket-granular reasoning
+   * (today a cycle is rejected even if the conflicting edges refer to
+   * different tickets that won't actually deadlock each other). Both
+   * are safe to bolt on without changing this signature.
    */
   private wouldFormCycle(requester: string, blocker: string): boolean {
     // DFS from `blocker` following `requester`-outbound edges; if we

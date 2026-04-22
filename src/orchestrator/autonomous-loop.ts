@@ -183,6 +183,43 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
     );
   }
 
+  // AL-13/16: single channel store instance shared by the router, the
+  // runner fleet, and the coordinator's decisions audit. Reusing one
+  // instance avoids redundant on-disk state checks and keeps all
+  // writes going through the same in-memory mirror.
+  const channelStore = testOverrides?.channelStore ?? new ChannelStore();
+
+  // AL-16: inter-admin coordination bus. Construct BEFORE the pool so
+  // the pool can thread the reference into each session it spawns —
+  // any in-process MCP handler built on a session's behalf then has
+  // both coordinator and alias available at construction, which is
+  // what `coordination_send` needs to route end-to-end. When the pool
+  // is disabled (AL-13 pending path) the coordinator stays null; no
+  // coordination is possible without admins to address anyway.
+  //
+  // The coordinator wraps a `pool` reference for alias-lookup on send;
+  // we forward-declare a lazily-populated proxy that the pool writes
+  // into after construction, so the ordering (coordinator-before-pool
+  // for wiring, pool-before-use for routing) holds without a circular
+  // constructor call. The proxy is a thin Pick<> view — the coordinator
+  // only calls `getSession` / `listSessions` on it.
+  let poolRef: RepoAdminPool | null = null;
+  const poolView: Pick<RepoAdminPool, "getSession" | "listSessions"> = {
+    getSession(alias: string) {
+      return poolRef?.getSession(alias) ?? null;
+    },
+    listSessions() {
+      return poolRef?.listSessions() ?? [];
+    },
+  };
+  const coordinator = poolEnabled
+    ? new Coordinator({
+        pool: poolView,
+        channelStore,
+        channelId: channel.channelId,
+      })
+    : null;
+
   const pool = poolEnabled
     ? new RepoAdminPool({
         channel,
@@ -191,8 +228,13 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
         lifecycle,
         spawner: testOverrides?.repoAdminSpawner,
         rootDir: testOverrides?.rootDir,
+        // AL-16: hand the shared bus to the pool so every session it
+        // constructs receives the reference and can pass it into its
+        // MCP handler at construction time.
+        coordinator,
       })
     : null;
+  poolRef = pool;
 
   if (pool) {
     try {
@@ -205,25 +247,6 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
       );
     }
   }
-
-  // AL-13/16: single channel store instance shared by the router, the
-  // runner fleet, and the coordinator's decisions audit. Reusing one
-  // instance avoids redundant on-disk state checks and keeps all
-  // writes going through the same in-memory mirror.
-  const channelStore = testOverrides?.channelStore ?? new ChannelStore();
-
-  // AL-16: inter-admin coordination bus. Lifetime matches the pool —
-  // constructed after the pool boots so `getSession` / `listSessions`
-  // resolve, closed in the finally block below. When the pool is
-  // disabled (AL-13 pending path) the coordinator stays null; no
-  // coordination is possible without admins to address anyway.
-  const coordinator = pool
-    ? new Coordinator({
-        pool,
-        channelStore,
-        channelId: channel.channelId,
-      })
-    : null;
 
   // AL-13: drain the channel's ticket board through the router exactly
   // once. AL-14 adds a second pass (gated by RELAY_AL14_WORKER_DRAIN)
@@ -339,6 +362,25 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
     }
   }
 
+  // AL-16: close the coordinator BEFORE stopping the pool. Order
+  // matters — once `pool.stop()` starts, each session unwinds and
+  // `getSession(to)` begins returning null, so a late-arriving
+  // `coordination_send` would resolve with `no-such-admin` (generic,
+  // confusing post-mortem) instead of the cleaner `coordinator-closed`
+  // the close path produces. Closing first guarantees the in-flight
+  // race resolves on the close rail.
+  if (coordinator) {
+    try {
+      await coordinator.close();
+    } catch (err) {
+      console.warn(
+        `[autonomous-loop] coordinator close failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+  }
+
   // Terminal lifecycle transition triggers the pool's auto-stop, but also
   // await it here so teardown happens before the CLI returns.
   if (pool) {
@@ -347,23 +389,6 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
     } catch (err) {
       console.warn(
         `[autonomous-loop] repo-admin pool stop failed: ${
-          err instanceof Error ? err.message : String(err)
-        }`
-      );
-    }
-  }
-
-  // AL-16: drain coordination subscribers and reject any in-flight
-  // sends after pool teardown — the pool-by-alias lookups the
-  // coordinator relies on will start returning null as sessions
-  // unwind, so closing here means a late send resolves with a clean
-  // `coordinator-closed` reason rather than a generic "no-such-admin".
-  if (coordinator) {
-    try {
-      await coordinator.close();
-    } catch (err) {
-      console.warn(
-        `[autonomous-loop] coordinator close failed: ${
           err instanceof Error ? err.message : String(err)
         }`
       );

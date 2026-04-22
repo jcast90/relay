@@ -27,6 +27,7 @@ import {
   isCoordinationTool,
   type CoordinationToolState,
 } from "./coordination-tools.js";
+import type { Coordinator } from "../crosslink/coordinator.js";
 import {
   allowlistForRole,
   denyToolEnvelope,
@@ -56,23 +57,52 @@ export interface McpHandlerContext {
   crosslinkState: CrosslinkToolState;
   channelState: ChannelToolState;
   /**
-   * AL-16 coordination tool state. The MCP server owns an empty
-   * `coordinator: null` by default so the `coordination_send` tool
-   * returns a structured "coordinator-not-configured" error when
-   * invoked outside an autonomous-loop run. The autonomous-loop
-   * driver hands the context a real Coordinator when it spins up.
+   * AL-16 coordination tool state. Populated from
+   * {@link McpHandlerOptions} at construction time. When the caller
+   * wires a Coordinator + alias in, `coordination_send` routes through
+   * the live bus. When either is absent, the tool surfaces a
+   * structured error envelope (never a silent drop).
    */
   coordinationState: CoordinationToolState;
   cleanup: () => void;
 }
 
 /**
+ * Optional wiring for the AL-16 coordination tool surface. When the MCP
+ * server is constructed in-process (e.g. inside the autonomous-loop
+ * driver's test harness, or in a future in-process MCP host for
+ * repo-admin sessions), the caller passes the shared {@link Coordinator}
+ * and the session's own admin alias here so `coordination_send` calls
+ * route to a live bus instead of returning `coordinator-not-configured`.
+ *
+ * When the MCP server runs as a subprocess of the Claude CLI (the
+ * default production path), the coordinator can't cross the process
+ * boundary as a direct reference — the parent relays sends through a
+ * separate IPC channel. This parameter is still populated there via an
+ * in-parent bridge so the tool surface stays unified; subprocess
+ * transports that have no bridge at all leave both fields null and the
+ * tool surfaces a structured `coordinator-not-configured` error.
+ */
+export interface McpHandlerOptions {
+  /** Per-run coordinator wired by the autonomous-loop driver. */
+  coordinator?: Coordinator | null;
+  /** Admin alias the enclosing session represents. */
+  alias?: string | null;
+}
+
+/**
  * Build the JSON-RPC message handler + supporting state for an MCP server
  * instance. Shared between the stdio and HTTP/SSE transports so both paths
  * serve the same tool surface.
+ *
+ * When `options.coordinator` + `options.alias` are both provided, the
+ * resulting handler's `coordination_send` dispatch routes through the
+ * live bus. When either is absent, the tool returns a structured error
+ * envelope identifying the missing piece — never a silent drop.
  */
 export async function buildMcpMessageHandler(
-  workspaceRoot: string
+  workspaceRoot: string,
+  options: McpHandlerOptions = {}
 ): Promise<{ handler: McpMessageHandler; context: McpHandlerContext }> {
   // AL-11 (I1 fix): if RELAY_AGENT_ROLE is set to a value we don't recognise,
   // log a one-shot warning to stderr on startup. The allowlist fall-through
@@ -94,15 +124,17 @@ export async function buildMcpMessageHandler(
     sessionId: null,
     channelStore,
   };
-  // AL-16: the server always constructs an empty coordination state so
-  // the tool surface is stable. A running autonomous-loop session
-  // populates `coordinator` + `alias` when it boots the Coordinator
-  // alongside the RepoAdminPool; outside an autonomous run both fields
-  // stay null and `coordination_send` returns a structured
-  // "coordinator-not-configured" error rather than throwing.
+  // AL-16: the server always constructs a coordination state so the
+  // tool surface is stable. When the caller supplies a Coordinator
+  // + alias (in-process path — autonomous-loop driver or integration
+  // test), `coordination_send` routes through the live bus. Otherwise
+  // both fields stay null and the tool returns a structured
+  // `coordinator-not-configured` / `session-not-repo-admin` error
+  // rather than throwing. Null-coercion below keeps the type contract
+  // explicit — `undefined` and omitted both collapse to null.
   const coordinationState: CoordinationToolState = {
-    alias: null,
-    coordinator: null,
+    alias: options.alias ?? null,
+    coordinator: options.coordinator ?? null,
   };
 
   // Auto-register this session
@@ -156,8 +188,11 @@ export async function buildMcpMessageHandler(
   };
 }
 
-export async function startMcpServer(workspaceRoot: string): Promise<void> {
-  const { handler, context } = await buildMcpMessageHandler(workspaceRoot);
+export async function startMcpServer(
+  workspaceRoot: string,
+  options: McpHandlerOptions = {}
+): Promise<void> {
+  const { handler, context } = await buildMcpMessageHandler(workspaceRoot, options);
 
   process.on("exit", context.cleanup);
   process.on("SIGTERM", () => {

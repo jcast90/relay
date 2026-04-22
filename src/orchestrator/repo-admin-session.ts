@@ -55,6 +55,7 @@ import {
 import { REPO_ADMIN_ROLE } from "../agents/repo-admin.js";
 import { getDisallowedBuiltinsForRole } from "../mcp/role-allowlist.js";
 import { TokenTracker, type ThresholdEvent } from "../budget/token-tracker.js";
+import type { Coordinator } from "../crosslink/coordinator.js";
 import {
   buildCycleDecision,
   type CycleDecisionInput,
@@ -231,6 +232,21 @@ export interface RepoAdminSessionOptions {
    * Defaults to `() => new Date().toISOString()`.
    */
   cycleClock?: () => string;
+  /**
+   * AL-16: shared cross-admin coordination bus for this run. When
+   * supplied, the session carries the reference so an in-process MCP
+   * server constructed on its behalf can route `coordination_send`
+   * through the live bus. The session itself does NOT use the
+   * coordinator directly — it only threads it through to whoever
+   * constructs the MCP handler (the autonomous-loop driver, or a
+   * bridge subprocess in the out-of-process path).
+   *
+   * When omitted, the session runs with no coordinator reference and
+   * any MCP surface built against it surfaces `coordinator-not-
+   * configured` on `coordination_send`. That's the correct dev-mode
+   * behaviour — coordination is an autonomous-loop concern.
+   */
+  coordinator?: Coordinator | null;
 }
 
 /**
@@ -312,6 +328,14 @@ export class RepoAdminSession {
   private readonly emitter = new EventEmitter();
 
   /**
+   * AL-16: shared coordination bus for this run. Set at construction
+   * time by the pool; null when the session is booted outside an
+   * autonomous run. Consumed by any MCP handler constructed on this
+   * session's behalf — see {@link RepoAdminSession.coordinator}.
+   */
+  private readonly _coordinator: Coordinator | null;
+
+  /**
    * Monotonically increasing counter of spawn attempts for THIS session.
    * The pool uses it in conjunction with its own rapid-restart book-
    * keeping to decide when to give up.
@@ -371,6 +395,7 @@ export class RepoAdminSession {
     this.stopGraceMs = options.stopGraceMs ?? STOP_GRACE_MS;
     this.cycleConfig = options.cycle ?? null;
     this.cycleClock = options.cycleClock ?? (() => new Date().toISOString());
+    this._coordinator = options.coordinator ?? null;
 
     // AL-15: the session's own token tracker. A caller that supplies one
     // (tests, or a future aggregator) owns its lifetime; otherwise we
@@ -439,6 +464,19 @@ export class RepoAdminSession {
    */
   get tracker(): TokenTracker {
     return this.tokenTracker;
+  }
+
+  /**
+   * AL-16: the shared coordination bus for this run, or null when the
+   * session is running outside an autonomous-loop. An in-process MCP
+   * handler constructed on this session's behalf passes this +
+   * {@link RepoAdminSession.alias} into `buildMcpMessageHandler` so
+   * `coordination_send` routes to the live bus. Read-only on purpose:
+   * the session never swaps coordinators mid-life; restart / cycle
+   * reuses the same reference.
+   */
+  get coordinator(): Coordinator | null {
+    return this._coordinator;
   }
 
   /**
