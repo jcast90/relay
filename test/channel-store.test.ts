@@ -85,6 +85,137 @@ describe("channel store", () => {
     }
   });
 
+  // --- AL-0: per-channel full-access flag --------------------------------
+
+  describe("setFullAccess", () => {
+    it("flips the fullAccess flag and records an audit decision", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+
+      try {
+        const channel = await store.createChannel({
+          name: "#fa",
+          description: "full-access",
+        });
+        // Default is false (field absent on disk).
+        expect(channel.fullAccess).toBeUndefined();
+
+        const on = await store.setFullAccess(channel.channelId, true);
+        expect(on?.fullAccess).toBe(true);
+
+        const fetched = await store.getChannel(channel.channelId);
+        expect(fetched?.fullAccess).toBe(true);
+
+        const off = await store.setFullAccess(channel.channelId, false);
+        expect(off?.fullAccess).toBe(false);
+
+        // Every call must record a decision — two toggles, two entries.
+        const decisions = await store.listDecisions(channel.channelId);
+        expect(decisions).toHaveLength(2);
+        expect(decisions[0].title).toMatch(/Full-access mode turned/);
+        expect(decisions[0].description).toContain(channel.channelId);
+
+        // Decisions also post a feed entry — verify the audit trail is
+        // visible to callers reading through the feed.
+        const feed = await store.readFeed(channel.channelId);
+        const decisionEntries = feed.filter((e) => e.type === "decision");
+        expect(decisionEntries).toHaveLength(2);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("returns null for an unknown channel without writing a decision", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+
+      try {
+        const result = await store.setFullAccess("does-not-exist", true);
+        expect(result).toBeNull();
+
+        // No channel => no decision side effects.
+        const decisions = await store.listDecisions("does-not-exist");
+        expect(decisions).toEqual([]);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("scopes the flag per-channel even when two channels share a repo", async () => {
+      // Acceptance criterion: toggling channel A does not affect channel B
+      // just because both point at the same repoPath.
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      const sharedRepo = {
+        alias: "repo",
+        workspaceId: "ws-shared",
+        repoPath: "/tmp/shared-repo",
+      };
+
+      try {
+        const a = await store.createChannel({
+          name: "#a",
+          description: "channel A",
+          repoAssignments: [sharedRepo],
+        });
+        const b = await store.createChannel({
+          name: "#b",
+          description: "channel B",
+          repoAssignments: [sharedRepo],
+        });
+
+        await store.setFullAccess(a.channelId, true);
+
+        const aFetched = await store.getChannel(a.channelId);
+        const bFetched = await store.getChannel(b.channelId);
+        expect(aFetched?.fullAccess).toBe(true);
+        // B must stay exactly as created — undefined, not accidentally
+        // flipped by any shared repoPath logic.
+        expect(bFetched?.fullAccess).toBeUndefined();
+
+        // Flipping B should also not regress A.
+        await store.setFullAccess(b.channelId, true);
+        const aAfter = await store.getChannel(a.channelId);
+        const bAfter = await store.getChannel(b.channelId);
+        expect(aAfter?.fullAccess).toBe(true);
+        expect(bAfter?.fullAccess).toBe(true);
+
+        // Each channel's decisions ledger is independent.
+        const aDecisions = await store.listDecisions(a.channelId);
+        const bDecisions = await store.listDecisions(b.channelId);
+        expect(aDecisions).toHaveLength(1);
+        expect(bDecisions).toHaveLength(1);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("records the supplied actor on the decision entry", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+
+      try {
+        const channel = await store.createChannel({
+          name: "#actor",
+          description: "actor test",
+        });
+
+        await store.setFullAccess(channel.channelId, true, {
+          id: "gui",
+          name: "gui",
+          source: "gui",
+        });
+
+        const decisions = await store.listDecisions(channel.channelId);
+        expect(decisions).toHaveLength(1);
+        expect(decisions[0].decidedBy).toBe("gui");
+        expect(decisions[0].decidedByName).toBe("gui");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("manages channel members (join/leave)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
     const store = new ChannelStore(dir);

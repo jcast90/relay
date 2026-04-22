@@ -113,6 +113,14 @@ pub struct Channel {
     /// Absence means no Linear mirror is configured.
     #[serde(default)]
     pub linear_project_id: Option<String>,
+    /// Per-channel opt-in for unattended agent runs (AL-0). When `true`,
+    /// agent subprocesses dispatched on behalf of this channel skip every
+    /// permission prompt (Claude `--dangerously-skip-permissions`, Codex
+    /// `--sandbox workspace-write --ask-for-approval never`). Optional +
+    /// `#[serde(default)]` so older channel files that predate the flag keep
+    /// deserializing as `false`.
+    #[serde(default)]
+    pub full_access: Option<bool>,
     /// ISO 8601 timestamps. Optional for back-compat with channel files
     /// written before these fields were tracked.
     #[serde(default)]
@@ -905,6 +913,37 @@ mod tests {
         }"#;
         let ch: Channel = serde_json::from_str(json).unwrap();
         assert!(ch.linear_project_id.is_none());
+    }
+
+    #[test]
+    fn channel_with_full_access_true() {
+        let json = r#"{
+            "channelId":"c-1",
+            "name":"x",
+            "description":"",
+            "status":"active",
+            "members":[],
+            "pinnedRefs":[],
+            "fullAccess":true
+        }"#;
+        let ch: Channel = serde_json::from_str(json).unwrap();
+        assert_eq!(ch.full_access, Some(true));
+    }
+
+    #[test]
+    fn channel_back_compat_without_full_access() {
+        // Older channel files omit `fullAccess`. Must deserialize as None
+        // so consumers treating None as "off" get the safe default (AL-0).
+        let json = r#"{
+            "channelId":"c-1",
+            "name":"x",
+            "description":"",
+            "status":"active",
+            "members":[],
+            "pinnedRefs":[]
+        }"#;
+        let ch: Channel = serde_json::from_str(json).unwrap();
+        assert!(ch.full_access.is_none());
     }
 
     #[test]

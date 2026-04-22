@@ -127,6 +127,7 @@ export function CenterPane({
   return (
     <div className="panel">
       <PendingPlanCta channel={channel} refreshTick={refreshTick} onChanged={onRefresh} />
+      <ChannelHeader channel={channel} onRefresh={onRefresh} />
       <div className="tabs">
         <div className={`tab ${tab === "chat" ? "active" : ""}`} onClick={() => setTab("chat")}>
           Chat
@@ -164,6 +165,68 @@ export function CenterPane({
           <DecisionsView decisions={decisions} />
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Channel header strip — shows the channel name alongside channel-level
+ * controls. Today that's the AL-0 full-access toggle. The toggle writes to
+ * the CLI via `api.setChannelFullAccess`, which also records a decision
+ * entry, so flipping the switch here surfaces in the Decisions tab on the
+ * next refresh.
+ */
+function ChannelHeader({ channel, onRefresh }: { channel: Channel; onRefresh: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Local mirror of `channel.fullAccess` so the checkbox reflects the new
+  // value immediately after the invoke resolves — the parent refetches via
+  // `onRefresh`, but that round trip is async and the user expects instant
+  // feedback. When `channel` re-renders with updated data, this state is
+  // reseeded by the effect below.
+  const [current, setCurrent] = useState<boolean>(channel.fullAccess === true);
+  useEffect(() => {
+    setCurrent(channel.fullAccess === true);
+  }, [channel.channelId, channel.fullAccess]);
+
+  const toggle = async () => {
+    if (busy) return;
+    const next = !current;
+    // Confirm before flipping — full-access silences every permission prompt
+    // for every future subprocess this channel spawns, which is strictly
+    // more impactful than a normal archive. Matches the conversational tone
+    // of Sidebar's archive confirm() (`Archive #foo?`).
+    const prompt = next
+      ? `Enable full access for #${channel.name}? All subprocesses spawned from this channel will run without permission prompts until this is turned off.`
+      : `Disable full access for #${channel.name}? Permission prompts will return for new subprocesses.`;
+    if (!confirm(prompt)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.setChannelFullAccess(channel.channelId, next);
+      setCurrent(next);
+      // Refresh so the Decisions tab picks up the audit entry the setter
+      // just wrote. Callers already debounce refreshes at the parent so
+      // this is safe to fire synchronously.
+      onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="channel-header">
+      <span className="channel-header-name">{channel.name}</span>
+      <label
+        className="auto-approve"
+        title="Runs dispatched agents with workspace-write sandbox and no approval prompts for this channel only. Scoped per-channel; other channels are unaffected."
+      >
+        <input type="checkbox" checked={current} disabled={busy} onChange={toggle} />
+        Full access
+      </label>
+      {error && <span className="channel-header-error">{error}</span>}
     </div>
   );
 }

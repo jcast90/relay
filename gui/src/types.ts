@@ -37,6 +37,10 @@ export type Channel = {
   // for back-compat with older channel files; when unset, UI falls back to
   // the first entry in `repoAssignments`.
   primaryWorkspaceId?: string;
+  // Per-channel opt-in for unattended agent runs (AL-0). When `true`, agent
+  // subprocesses dispatched for this channel skip permission prompts.
+  // Optional for back-compat; a missing field means "off".
+  fullAccess?: boolean;
   // ISO 8601; optional for back-compat with older channel files.
   createdAt?: string;
   updatedAt?: string;

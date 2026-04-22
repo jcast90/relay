@@ -87,6 +87,36 @@ button.primary:disabled {
 }
 .panel:last-child { border-right: none; border-left: 1px solid var(--border); }
 
+/* Channel header strip in the CenterPane. Sits above the tabs and hosts
+   channel-level affordances (today: AL-0 full-access toggle). */
+.channel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.channel-header-name {
+  font-weight: 600;
+  font-size: 12px;
+}
+/* Error span inside the channel-header strip. Distinct from
+   `.composer-error` (which floats above the message composer via absolute
+   positioning) — here we want a normal-flow chip sitting inline beside the
+   full-access toggle so it doesn't drift behind the tab strip. */
+.channel-header-error {
+  color: var(--error);
+  background: transparent;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40ch;
+}
+
 .panel-header {
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);

@@ -428,7 +428,8 @@ export async function runWelcome(options: WelcomeOptions): Promise<number> {
     p("");
     p(`${c.bold}RELAY_AUTO_APPROVE=1${c.reset}   skip every permission prompt — Claude launches`);
     p(`                       with --dangerously-skip-permissions, Codex with`);
-    p(`                       --full-auto. Required for multi-hour runs.`);
+    p(`                       --sandbox workspace-write --ask-for-approval never.`);
+    p(`                       Required for multi-hour runs.`);
     p("");
     p(`${c.bold}RELAY_USE_DIST=1${c.reset}       run compiled dist (faster startup) instead of`);
     p(`                       live TS source. Default is live source via tsx.`);
