@@ -192,8 +192,9 @@ describe("TicketScheduler verification override surfaces to channel feed", () =>
     // returning (see TicketScheduler.waitForPendingWrites, OSS-11), but the
     // tmp-rename underneath `postEntry` can still take a moment to appear to
     // a fresh `readFeed` on Linux CI. Poll the feed instead of snapshotting
-    // it once — the assertion is still tight (2s budget) but deterministic
-    // across the OSS-21 flake window.
+    // it once. Budget raised to 10s after OSS-21's 2s ceiling still tripped
+    // on loaded GH runners — the outer test timeout is 30s, so this only
+    // costs failure latency, and pass-case latency is unchanged.
     const override = await waitFor(
       async () => {
         const entries = await channelStore.readFeed(channel.channelId);
@@ -201,7 +202,7 @@ describe("TicketScheduler verification override surfaces to channel feed", () =>
           (e) => e.type === "status_update" && e.content.startsWith("Verification override")
         );
       },
-      { timeoutMs: 2000, intervalMs: 20, label: "verification override feed entry" }
+      { timeoutMs: 10_000, intervalMs: 20, label: "verification override feed entry" }
     );
 
     expect(override.fromDisplayName).toBe("Verifier");
