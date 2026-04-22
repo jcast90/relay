@@ -281,11 +281,17 @@ export async function main(): Promise<void> {
   // autonomous session against an existing channel's ticket board. Handled
   // here, at the top of the run handler, so the default ("feature request")
   // code path below never sees a channelId as its first positional.
-  if (command === "run" && args.includes("--autonomous")) {
-    const { handleRunAutonomous } = await import("./cli/run-autonomous.js");
-    const result = await handleRunAutonomous(args);
-    process.exitCode = result.exitCode;
-    return;
+  //
+  // The intercept predicate lives in `run-autonomous.ts` (see
+  // `isAutonomousRun`) so a test-only import can assert the routing
+  // decision without booting the orchestrator.
+  if (command === "run") {
+    const { isAutonomousRun, handleRunAutonomous } = await import("./cli/run-autonomous.js");
+    if (isAutonomousRun(args)) {
+      const result = await handleRunAutonomous(args);
+      process.exitCode = result.exitCode;
+      return;
+    }
   }
 
   const sequential = args.includes("--sequential");

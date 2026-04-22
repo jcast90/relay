@@ -9,7 +9,9 @@ import {
   MAX_HOURS_DEFAULT,
   MAX_HOURS_MAX,
   MAX_HOURS_MIN,
+  dispatchRunCommand,
   handleRunAutonomous,
+  isAutonomousRun,
   parseAutonomousArgs,
   runAutonomousCommand,
 } from "../../src/cli/run-autonomous.js";
@@ -222,6 +224,7 @@ describe("runAutonomousCommand", () => {
         channelId: "ch-nope",
         budgetTokens: 1000,
         maxHours: 8,
+        maxHoursRequested: 8,
         trust: "supervised",
         allowRepos: [],
         json: false,
@@ -269,6 +272,7 @@ describe("runAutonomousCommand", () => {
         channelId: ch.channelId,
         budgetTokens: 1000,
         maxHours: 8,
+        maxHoursRequested: 8,
         trust: "supervised",
         allowRepos: [],
         json: false,
@@ -297,6 +301,7 @@ describe("runAutonomousCommand", () => {
         channelId: ch.channelId,
         budgetTokens: 1000,
         maxHours: 8,
+        maxHoursRequested: 8,
         trust: "supervised",
         allowRepos: [],
         json: false,
@@ -320,6 +325,7 @@ describe("runAutonomousCommand", () => {
         channelId,
         budgetTokens: 1000,
         maxHours: 8,
+        maxHoursRequested: 8,
         trust: "supervised",
         allowRepos: ["bogus"],
         json: false,
@@ -346,6 +352,7 @@ describe("runAutonomousCommand", () => {
         channelId,
         budgetTokens: 5000,
         maxHours: 4,
+        maxHoursRequested: 4,
         trust: "supervised",
         allowRepos: [],
         json: false,
@@ -421,6 +428,7 @@ describe("runAutonomousCommand", () => {
           channelId,
           budgetTokens: 1000,
           maxHours: 2,
+          maxHoursRequested: 2,
           trust: "supervised",
           allowRepos: [],
           json: false,
@@ -462,6 +470,7 @@ describe("runAutonomousCommand", () => {
         channelId,
         budgetTokens: 1000,
         maxHours: 8,
+        maxHoursRequested: 8,
         trust: "supervised",
         allowRepos: ["ui", "ops"],
         json: false,
@@ -488,6 +497,7 @@ describe("runAutonomousCommand", () => {
         channelId,
         budgetTokens: 7777,
         maxHours: 3,
+        maxHoursRequested: 3,
         trust: "supervised",
         allowRepos: ["ui"],
         json: true,
@@ -523,6 +533,7 @@ describe("runAutonomousCommand", () => {
         channelId,
         budgetTokens: 1000,
         maxHours: 8,
+        maxHoursRequested: 8,
         trust: "god",
         allowRepos: [],
         json: false,
@@ -541,6 +552,127 @@ describe("runAutonomousCommand", () => {
     expect(errs.join("\n")).toMatch(new RegExp(result.sessionId!));
   });
 
+  it("--max-hours 0.5 clamps up, warns on stderr, surfaces both values in JSON", async () => {
+    const { store, channelId } = await seedChannel();
+    const driverSpy = vi.fn().mockResolvedValue(undefined);
+    const errs: string[] = [];
+    const outs: string[] = [];
+    const result = await runAutonomousCommand(
+      {
+        channelId,
+        budgetTokens: 1000,
+        maxHours: MAX_HOURS_MIN,
+        maxHoursRequested: 0.5,
+        trust: "supervised",
+        allowRepos: [],
+        json: true,
+      },
+      {
+        rootDir: root,
+        channelStore: store,
+        stdout: (l) => outs.push(l),
+        stderr: (l) => errs.push(l),
+        startSession: driverSpy,
+      }
+    );
+    expect(result.exitCode).toBe(0);
+    const combined = errs.join("\n");
+    expect(combined).toMatch(new RegExp(`warning: --max-hours 0\\.5 clamped to ${MAX_HOURS_MIN}`));
+    expect(combined).toMatch(new RegExp(`valid range ${MAX_HOURS_MIN}.${MAX_HOURS_MAX}`));
+    const parsed = JSON.parse(outs[0]);
+    expect(parsed.maxHours).toBe(MAX_HOURS_MIN);
+    expect(parsed.maxHoursRequested).toBe(0.5);
+
+    const metadataRaw = await readFile(
+      join(root, "sessions", result.sessionId!, "metadata.json"),
+      "utf8"
+    );
+    const metadata = JSON.parse(metadataRaw);
+    expect(metadata.maxHours).toBe(MAX_HOURS_MIN);
+    expect(metadata.maxHoursRequested).toBe(0.5);
+  });
+
+  it("--max-hours 100 clamps down, warns on stderr, surfaces both values in JSON", async () => {
+    const { store, channelId } = await seedChannel();
+    const driverSpy = vi.fn().mockResolvedValue(undefined);
+    const errs: string[] = [];
+    const outs: string[] = [];
+    const result = await runAutonomousCommand(
+      {
+        channelId,
+        budgetTokens: 1000,
+        maxHours: MAX_HOURS_MAX,
+        maxHoursRequested: 100,
+        trust: "supervised",
+        allowRepos: [],
+        json: true,
+      },
+      {
+        rootDir: root,
+        channelStore: store,
+        stdout: (l) => outs.push(l),
+        stderr: (l) => errs.push(l),
+        startSession: driverSpy,
+      }
+    );
+    expect(result.exitCode).toBe(0);
+    const combined = errs.join("\n");
+    expect(combined).toMatch(/warning: --max-hours 100 clamped to 48/);
+    expect(combined).toMatch(/valid range 1/);
+    expect(combined).toMatch(/48/);
+    const parsed = JSON.parse(outs[0]);
+    expect(parsed.maxHours).toBe(MAX_HOURS_MAX);
+    expect(parsed.maxHoursRequested).toBe(100);
+
+    const metadataRaw = await readFile(
+      join(root, "sessions", result.sessionId!, "metadata.json"),
+      "utf8"
+    );
+    const metadata = JSON.parse(metadataRaw);
+    expect(metadata.maxHours).toBe(MAX_HOURS_MAX);
+    expect(metadata.maxHoursRequested).toBe(100);
+  });
+
+  it("--max-hours 8 (in range) emits no clamp warning and sets requested === final", async () => {
+    const { store, channelId } = await seedChannel();
+    const driverSpy = vi.fn().mockResolvedValue(undefined);
+    const errs: string[] = [];
+    const outs: string[] = [];
+    const result = await runAutonomousCommand(
+      {
+        channelId,
+        budgetTokens: 1000,
+        maxHours: 8,
+        maxHoursRequested: 8,
+        trust: "supervised",
+        allowRepos: [],
+        json: true,
+      },
+      {
+        rootDir: root,
+        channelStore: store,
+        stdout: (l) => outs.push(l),
+        stderr: (l) => errs.push(l),
+        startSession: driverSpy,
+      }
+    );
+    expect(result.exitCode).toBe(0);
+    // No clamp warning, even though other stderr lines may appear (e.g.
+    // god-mode warning isn't set here, so stderr should be empty).
+    expect(errs.join("\n")).not.toMatch(/clamped/);
+    const parsed = JSON.parse(outs[0]);
+    expect(parsed.maxHours).toBe(8);
+    expect(parsed.maxHoursRequested).toBe(8);
+
+    const metadataRaw = await readFile(
+      join(root, "sessions", result.sessionId!, "metadata.json"),
+      "utf8"
+    );
+    const metadata = JSON.parse(metadataRaw);
+    expect(metadata.maxHours).toBe(8);
+    expect(metadata.maxHoursRequested).toBe(8);
+  });
+
   it("session dir contains tracker + lifecycle + metadata", async () => {
     const { store, channelId } = await seedChannel();
     const driverSpy = vi.fn().mockResolvedValue(undefined);
@@ -549,6 +681,7 @@ describe("runAutonomousCommand", () => {
         channelId,
         budgetTokens: 500,
         maxHours: 1,
+        maxHoursRequested: 1,
         trust: "supervised",
         allowRepos: [],
         json: false,
@@ -565,6 +698,61 @@ describe("runAutonomousCommand", () => {
     const files = await readdir(join(root, "sessions", result.sessionId!));
     expect(files.sort()).toContain("metadata.json");
     expect(files.sort()).toContain("lifecycle.json");
+  });
+});
+
+describe("dispatchRunCommand (run intercept routing)", () => {
+  // These tests lock the routing contract used by `src/index.ts`: when
+  // `--autonomous` is anywhere in `args`, dispatch MUST go to the
+  // autonomous handler even if a positional (channelId) precedes other
+  // flags. A refactor that moves the intercept below the feature-request
+  // parse would fail these — which is the whole point, per the AL-3
+  // review.
+
+  it("routes `run --autonomous ch-1 --budget-tokens 1000000` to the autonomous handler", async () => {
+    const autonomousSpy = vi.fn().mockResolvedValue({ exitCode: 0, sessionId: "auto-xyz" });
+    const featureSpy = vi.fn().mockResolvedValue({ exitCode: 0 });
+    const args = ["--autonomous", "ch-1", "--budget-tokens", "1000000"];
+    const result = await dispatchRunCommand(args, {
+      autonomous: autonomousSpy,
+      featureRequest: featureSpy,
+    });
+    expect(result.handler).toBe("autonomous");
+    expect(result.exitCode).toBe(0);
+    expect(autonomousSpy).toHaveBeenCalledTimes(1);
+    expect(autonomousSpy).toHaveBeenCalledWith(args);
+    expect(featureSpy).not.toHaveBeenCalled();
+  });
+
+  it('routes `run "Add auth"` (no --autonomous) to the feature-request handler', async () => {
+    const autonomousSpy = vi.fn().mockResolvedValue({ exitCode: 0 });
+    const featureSpy = vi.fn().mockResolvedValue({ exitCode: 0 });
+    const args = ["Add user authentication"];
+    const result = await dispatchRunCommand(args, {
+      autonomous: autonomousSpy,
+      featureRequest: featureSpy,
+    });
+    expect(result.handler).toBe("featureRequest");
+    expect(featureSpy).toHaveBeenCalledTimes(1);
+    expect(autonomousSpy).not.toHaveBeenCalled();
+  });
+
+  it("isAutonomousRun returns true when --autonomous appears anywhere in args", () => {
+    expect(isAutonomousRun(["--autonomous", "ch-1", "--budget-tokens", "1000"])).toBe(true);
+    expect(isAutonomousRun(["ch-1", "--budget-tokens", "1000", "--autonomous"])).toBe(true);
+    expect(isAutonomousRun(["Add auth feature"])).toBe(false);
+    expect(isAutonomousRun([])).toBe(false);
+  });
+
+  it("propagates the autonomous handler's non-zero exit code", async () => {
+    const autonomousSpy = vi.fn().mockResolvedValue({ exitCode: 1 });
+    const featureSpy = vi.fn().mockResolvedValue({ exitCode: 0 });
+    const result = await dispatchRunCommand(
+      ["--autonomous", "ch-1", "--budget-tokens", "1000000"],
+      { autonomous: autonomousSpy, featureRequest: featureSpy }
+    );
+    expect(result.handler).toBe("autonomous");
+    expect(result.exitCode).toBe(1);
   });
 });
 

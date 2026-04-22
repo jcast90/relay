@@ -29,11 +29,20 @@ export type TrustMode = "supervised" | "god";
  * assembles this from `process.argv` via {@link parseAutonomousArgs}, then
  * hands it to {@link runAutonomousCommand} which does the validation that
  * needs a store (channel lookup, ticket-board read, repo-alias membership).
+ *
+ * `maxHoursRequested` preserves the operator's original `--max-hours` input
+ * (or the default, when the flag was absent) so the clamp is auditable
+ * after the fact. `maxHours` is the post-clamp value actually used by the
+ * lifecycle watchdog. When the two differ, {@link runAutonomousCommand}
+ * emits a one-line stderr warning so an operator who typed
+ * `--max-hours 100` expecting "unlimited" gets an immediate signal that
+ * the session will be killed at 48h, not 100h.
  */
 export interface AutonomousFlags {
   channelId: string;
   budgetTokens: number;
   maxHours: number;
+  maxHoursRequested: number;
   trust: TrustMode;
   allowRepos: string[];
   json: boolean;
@@ -52,9 +61,12 @@ export type ParseResult = { ok: true; flags: AutonomousFlags } | { ok: false; er
  *   - Exactly one positional argument (the channelId) is required.
  *   - `--budget-tokens <N>` is required. Must parse as a positive finite integer.
  *   - `--max-hours <N>` optional; defaults to {@link MAX_HOURS_DEFAULT}.
- *     Accepts fractions. Clamped silently to [{@link MAX_HOURS_MIN},
+ *     Accepts fractions. Clamped to [{@link MAX_HOURS_MIN},
  *     {@link MAX_HOURS_MAX}] so an operator typing `--max-hours 0.01` gets
  *     the minimum rather than a watchdog that fires during construction.
+ *     The original (pre-clamp) value is preserved on the returned flags
+ *     as `maxHoursRequested`; {@link runAutonomousCommand} emits a
+ *     stderr warning whenever the two differ so the clamp is visible.
  *   - `--trust <supervised|god>` optional; defaults to `supervised`.
  *   - `--allow-repo <alias>` is repeatable; each occurrence appends. Unknown
  *     aliases are validated later in {@link runAutonomousCommand} once the
@@ -67,6 +79,7 @@ export function parseAutonomousArgs(args: string[]): ParseResult {
   let channelId: string | undefined;
   let budgetTokens: number | undefined;
   let maxHours: number = MAX_HOURS_DEFAULT;
+  let maxHoursRequested: number = MAX_HOURS_DEFAULT;
   let trust: TrustMode = "supervised";
   const allowRepos: string[] = [];
   let json = false;
@@ -113,9 +126,13 @@ export function parseAutonomousArgs(args: string[]): ParseResult {
           error: `--max-hours must be a positive number (got "${raw}")`,
         };
       }
-      // Silent clamp. We explicitly do NOT reject out-of-range values so
-      // `--max-hours 0.01` yields a usable (if short) session rather than a
-      // startup error.
+      // Clamp out-of-range inputs to the legal window. We explicitly do
+      // NOT reject them so `--max-hours 0.01` yields a usable (if short)
+      // session rather than a startup error. The original input is
+      // preserved in `maxHoursRequested` and a visible warning is emitted
+      // at command-run time (see {@link runAutonomousCommand}) so the
+      // clamp isn't silent.
+      maxHoursRequested = parsed;
       maxHours = Math.min(Math.max(parsed, MAX_HOURS_MIN), MAX_HOURS_MAX);
       i += 1;
       continue;
@@ -173,6 +190,7 @@ export function parseAutonomousArgs(args: string[]): ParseResult {
       channelId,
       budgetTokens,
       maxHours,
+      maxHoursRequested,
       trust,
       allowRepos,
       json,
@@ -207,6 +225,12 @@ interface SessionMetadataFile {
   channelId: string;
   budgetTokens: number;
   maxHours: number;
+  /** Operator's original `--max-hours` input (pre-clamp). When the flag
+   * was omitted this equals {@link MAX_HOURS_DEFAULT}. Preserved so an
+   * operator who typed `--max-hours 100` and returned to a 48h-killed
+   * session can audit the delta between what they asked for and what
+   * the guardrail enforced. */
+  maxHoursRequested: number;
   trust: TrustMode;
   allowedRepos: string[];
   startedAt: string;
@@ -299,6 +323,17 @@ export async function runAutonomousCommand(
   const clock = options.clock ?? Date.now;
   const rootDir = options.rootDir ?? getRelayDir();
   const channelsDir = options.channelsDir ?? join(rootDir, "channels");
+
+  // Surface the --max-hours clamp. Fires before any channel/board
+  // validation so operators with a typo in `--max-hours` get the signal
+  // even if the session is about to be rejected for an unrelated
+  // reason. One-liner on stderr, matches the shape documented in USAGE.
+  if (flags.maxHoursRequested !== flags.maxHours) {
+    stderr(
+      `warning: --max-hours ${flags.maxHoursRequested} clamped to ${flags.maxHours} ` +
+        `(valid range ${MAX_HOURS_MIN}\u2013${MAX_HOURS_MAX})`
+    );
+  }
 
   const store = options.channelStore ?? new ChannelStore(channelsDir, getHarnessStore());
 
@@ -464,6 +499,7 @@ async function startSession(opts: StartSessionInternalOptions): Promise<RunAuton
     channelId: flags.channelId,
     budgetTokens: flags.budgetTokens,
     maxHours: flags.maxHours,
+    maxHoursRequested: flags.maxHoursRequested,
     trust: flags.trust,
     allowedRepos: allowedRepos.map((a) => a.alias),
     startedAt: startedAtIso,
@@ -504,6 +540,7 @@ async function startSession(opts: StartSessionInternalOptions): Promise<RunAuton
       channelId: flags.channelId,
       budgetTokens: flags.budgetTokens,
       maxHours: flags.maxHours,
+      maxHoursRequested: flags.maxHoursRequested,
       trust: flags.trust,
       allowedRepos: allowedRepos.map((a) => a.alias),
       startedAt: startedAtIso,
@@ -521,6 +558,7 @@ async function startSession(opts: StartSessionInternalOptions): Promise<RunAuton
         channelId: flags.channelId,
         budgetTokens: flags.budgetTokens,
         maxHours: flags.maxHours,
+        maxHoursRequested: flags.maxHoursRequested,
         trust: flags.trust,
         allowedRepos: allowedRepos.map((a) => a.alias),
         startedAt: startedAtIso,
@@ -600,4 +638,58 @@ export async function handleRunAutonomous(
     return { exitCode: 1 };
   }
   return runAutonomousCommand(parsed.flags, options);
+}
+
+/**
+ * Predicate + branch marker: true when the `rly run` invocation should be
+ * routed to {@link handleRunAutonomous} instead of the feature-request
+ * codepath. Extracted so the intercept rule lives next to the rest of the
+ * autonomous-session logic and can be asserted on in tests without
+ * coupling to `src/index.ts`'s `main()` body.
+ *
+ * Keep this check membership-based (`args.includes`) rather than
+ * positional: `rly run --autonomous ch-1 --budget-tokens 1000` and
+ * `rly run ch-1 --autonomous --budget-tokens 1000` both count.
+ */
+export function isAutonomousRun(args: readonly string[]): boolean {
+  return args.includes("--autonomous");
+}
+
+/**
+ * Injectable handlers for {@link dispatchRunCommand}. `autonomous` runs
+ * the AL-3 codepath; `featureRequest` runs the pre-existing "classify
+ * feature then dispatch" flow that `src/index.ts` owns. Both are
+ * parameterized so the test suite can assert which branch fires for a
+ * given argv without spawning the real loop / orchestrator.
+ */
+export interface RunDispatchHandlers {
+  autonomous: (args: string[]) => Promise<RunAutonomousResult>;
+  featureRequest: (args: string[]) => Promise<{ exitCode: number }>;
+}
+
+/** Shape returned by {@link dispatchRunCommand} — caller sets
+ * `process.exitCode` and records the handler for observability. */
+export interface RunDispatchResult {
+  /** Which branch fired. Exposed for tests + future telemetry. */
+  handler: "autonomous" | "featureRequest";
+  exitCode: number;
+}
+
+/**
+ * Routes a `rly run ...` invocation to either the autonomous entrypoint
+ * or the feature-request flow. This is the sole place the intercept
+ * decision is made; `src/index.ts` calls through here so a refactor that
+ * reorders checks can't silently change routing without failing
+ * {@link isAutonomousRun}'s tests.
+ */
+export async function dispatchRunCommand(
+  args: string[],
+  handlers: RunDispatchHandlers
+): Promise<RunDispatchResult> {
+  if (isAutonomousRun(args)) {
+    const result = await handlers.autonomous(args);
+    return { handler: "autonomous", exitCode: result.exitCode };
+  }
+  const result = await handlers.featureRequest(args);
+  return { handler: "featureRequest", exitCode: result.exitCode };
 }
