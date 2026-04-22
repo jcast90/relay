@@ -71,7 +71,7 @@ describe("sanitizeEnv", () => {
     LC_ALL: "en_US.UTF-8",
     HARNESS_DEBUG: "1",
     RELAY_PORT: "7420",
-    AGENT_HARNESS_HOME: "/tmp/harness",
+    RELAY_HOME: "/tmp/relay",
     // Secrets that must be stripped:
     ANTHROPIC_API_KEY: "sk-ant-secret",
     GITHUB_TOKEN: "ghp_secret",
@@ -97,7 +97,7 @@ describe("sanitizeEnv", () => {
     expect(out.LC_ALL).toBe("en_US.UTF-8");
     expect(out.HARNESS_DEBUG).toBe("1");
     expect(out.RELAY_PORT).toBe("7420");
-    expect(out.AGENT_HARNESS_HOME).toBe("/tmp/harness");
+    expect(out.RELAY_HOME).toBe("/tmp/relay");
 
     // Secrets are stripped.
     expect(out.ANTHROPIC_API_KEY).toBeUndefined();

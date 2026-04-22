@@ -246,9 +246,9 @@ export async function main(): Promise<void> {
       cwd,
       env: {
         ...variantEnv,
-        AGENT_HARNESS_HOME: workspace.paths.rootDir,
-        AGENT_HARNESS_ARTIFACTS_DIR: workspace.paths.artifactsDir,
-        AGENT_HARNESS_RUNS_INDEX: workspace.paths.runsIndexPath,
+        RELAY_HOME: workspace.paths.rootDir,
+        RELAY_ARTIFACTS_DIR: workspace.paths.artifactsDir,
+        RELAY_RUNS_INDEX: workspace.paths.runsIndexPath,
         // Propagate to children (dispatched agents) so they inherit.
         ...(autoApprove ? { RELAY_AUTO_APPROVE: "1" } : {})
       }
@@ -1837,9 +1837,9 @@ async function inspectMcp(input: {
         : ["mcp", "list"],
       cwd: input.cwd,
       env: {
-        AGENT_HARNESS_HOME: input.workspace.paths.rootDir,
-        AGENT_HARNESS_ARTIFACTS_DIR: input.workspace.paths.artifactsDir,
-        AGENT_HARNESS_RUNS_INDEX: input.workspace.paths.runsIndexPath
+        RELAY_HOME: input.workspace.paths.rootDir,
+        RELAY_ARTIFACTS_DIR: input.workspace.paths.artifactsDir,
+        RELAY_RUNS_INDEX: input.workspace.paths.runsIndexPath
       }
     });
 

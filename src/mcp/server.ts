@@ -66,7 +66,7 @@ export async function buildMcpMessageHandler(
   };
 
   // Auto-register this session
-  const agentProvider = (process.env.AGENT_HARNESS_PROVIDER ?? "unknown") as
+  const agentProvider = (process.env.RELAY_PROVIDER ?? "unknown") as
     "claude" | "codex" | "unknown";
   const session = await crosslinkStore.registerSession({
     pid: process.pid,

@@ -14,8 +14,7 @@
     "url": "https://github.com/jcast90/relay/issues"
   },
   "bin": {
-    "rly": "bin/rly.mjs",
-    "agent-harness": "bin/rly.mjs"
+    "rly": "bin/rly.mjs"
   },
   "files": [
     "bin",

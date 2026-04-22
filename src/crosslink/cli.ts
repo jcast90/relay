@@ -58,11 +58,10 @@ async function handleCheck(): Promise<void> {
   const store = new CrosslinkStore(undefined, getHarnessStore());
   const sessions = await store.discoverSessions();
 
-  // Find session for current terminal — match by most recent heartbeat
-  // In hook context, RELAY_SESSION / AGENT_HARNESS_SESSION is not set,
-  // so we pick the most recently active session. The legacy env name is
-  // accepted for back-compat with existing shell configs.
-  const envSessionId = process.env.RELAY_SESSION ?? process.env.AGENT_HARNESS_SESSION;
+  // Find session for current terminal — match by most recent heartbeat.
+  // In hook context, RELAY_SESSION is not set, so we pick the most recently
+  // active session.
+  const envSessionId = process.env.RELAY_SESSION;
   const session = envSessionId
     ? sessions.find((s) => s.sessionId === envSessionId)
     : sessions[0];

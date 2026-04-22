@@ -192,9 +192,7 @@ struct CliResult {
 }
 
 fn cli_run(args: &[&str]) -> CliResult {
-    let bin = std::env::var("RELAY_BIN")
-        .or_else(|_| std::env::var("AGENT_HARNESS_BIN"))
-        .unwrap_or_else(|_| "rly".to_string());
+    let bin = std::env::var("RELAY_BIN").unwrap_or_else(|_| "rly".to_string());
     match Command::new(bin)
         .args(args)
         .stdout(Stdio::piped())

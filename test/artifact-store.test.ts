@@ -9,8 +9,8 @@ import { FileHarnessStore } from "../src/storage/file-store.js";
 
 describe("artifact store", () => {
   it("persists and reads failure classification artifacts", async () => {
-    const artifactRoot = await mkdtemp(join(tmpdir(), "agent-harness-artifacts-"));
-    const storeRoot = await mkdtemp(join(tmpdir(), "agent-harness-artifacts-hs-"));
+    const artifactRoot = await mkdtemp(join(tmpdir(), "relay-artifacts-"));
+    const storeRoot = await mkdtemp(join(tmpdir(), "relay-artifacts-hs-"));
     const store = new LocalArtifactStore(artifactRoot, new FileHarnessStore(storeRoot));
 
     try {

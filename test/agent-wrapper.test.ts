@@ -15,13 +15,13 @@ import { getHarnessWorkspacePaths } from "../src/cli/workspace.js";
 
 describe("agent wrapper", () => {
   it("writes a Claude MCP config that points back to the harness CLI", async () => {
-    const cwd = await mkdtemp(join(tmpdir(), "agent-harness-wrapper-"));
+    const cwd = await mkdtemp(join(tmpdir(), "relay-wrapper-"));
     const paths = getHarnessWorkspacePaths(cwd);
 
     try {
       const configPath = await ensureClaudeMcpConfig({
         cwd,
-        cliEntrypoint: "/tmp/agent-harness/dist/cli.js",
+        cliEntrypoint: "/tmp/relay/dist/cli.js",
         paths
       });
       const config = JSON.parse(await readFile(configPath, "utf8")) as {
@@ -37,15 +37,15 @@ describe("agent wrapper", () => {
       expect(configPath).toContain("claude.mcp.json");
       expect(config.mcpServers.relay.command).toBe(process.execPath);
       expect(config.mcpServers.relay.args).toEqual([
-        "/tmp/agent-harness/dist/cli.js",
+        "/tmp/relay/dist/cli.js",
         "mcp-server",
         "--workspace",
         cwd
       ]);
-      expect(config.mcpServers.relay.env.AGENT_HARNESS_HOME).toBe(
+      expect(config.mcpServers.relay.env.RELAY_HOME).toBe(
         paths.rootDir
       );
-      expect(config.mcpServers.relay.env.AGENT_HARNESS_RUNS_INDEX).toBe(
+      expect(config.mcpServers.relay.env.RELAY_RUNS_INDEX).toBe(
         paths.runsIndexPath
       );
     } finally {
@@ -64,7 +64,7 @@ describe("agent wrapper", () => {
     const codexArgs = buildCodexLaunchArgs({
       userArgs: ["--help"],
       cwd: "/tmp/workspace",
-      cliEntrypoint: "/tmp/agent-harness/dist/cli.js"
+      cliEntrypoint: "/tmp/relay/dist/cli.js"
     });
 
     expect(claudeArgs).toContain("--mcp-config");
@@ -78,7 +78,7 @@ describe("agent wrapper", () => {
       `mcp_servers.relay.command=${JSON.stringify(process.execPath)}`
     );
     expect(codexArgs).toContain(
-      'mcp_servers.relay.args=["/tmp/agent-harness/dist/cli.js","mcp-server","--workspace","/tmp/workspace"]'
+      'mcp_servers.relay.args=["/tmp/relay/dist/cli.js","mcp-server","--workspace","/tmp/workspace"]'
     );
     expect(codexArgs.at(-1)).toBe("--help");
   });

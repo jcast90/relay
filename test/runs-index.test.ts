@@ -9,8 +9,8 @@ import { FileHarnessStore } from "../src/storage/file-store.js";
 
 describe("runs index", () => {
   it("persists recent runs with jump targets", async () => {
-    const artifactRoot = await mkdtemp(join(tmpdir(), "agent-harness-runs-index-"));
-    const storeRoot = await mkdtemp(join(tmpdir(), "agent-harness-runs-index-hs-"));
+    const artifactRoot = await mkdtemp(join(tmpdir(), "relay-runs-index-"));
+    const storeRoot = await mkdtemp(join(tmpdir(), "relay-runs-index-hs-"));
     const store = new LocalArtifactStore(artifactRoot, new FileHarnessStore(storeRoot));
 
     try {
