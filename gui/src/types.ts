@@ -51,6 +51,10 @@ export type Channel = {
   tier?: ChannelTier;
   // Pinned to the Starred section of the sidebar.
   starred?: boolean;
+  // Per-channel opt-in for unattended agent runs (AL-0). When `true`, agent
+  // subprocesses dispatched for this channel skip permission prompts.
+  // Optional for back-compat; a missing field means "off".
+  fullAccess?: boolean;
   // ISO 8601; optional for back-compat with older channel files.
   createdAt?: string;
   updatedAt?: string;

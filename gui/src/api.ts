@@ -62,6 +62,8 @@ export const api = {
     }),
   archiveChannel: (channelId: string) => invoke<unknown>("archive_channel", { channelId }),
   unarchiveChannel: (channelId: string) => invoke<unknown>("unarchive_channel", { channelId }),
+  setChannelFullAccess: (channelId: string, on: boolean) =>
+    invoke<unknown>("set_channel_full_access", { channelId, on }),
   updateChannelRepos: (
     channelId: string,
     repos: { alias: string; workspaceId: string; repoPath: string }[]

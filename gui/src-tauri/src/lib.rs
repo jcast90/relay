@@ -361,6 +361,31 @@ fn unarchive_channel(channel_id: String) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+fn set_channel_full_access(
+    channel_id: String,
+    on: bool,
+) -> Result<serde_json::Value, String> {
+    // Mirrors `archive_channel` / `unarchive_channel`: defer to the CLI so
+    // there's a single code path that writes both the flag AND the decision
+    // entry (the audit trail required by AL-0). Tag the actor as "gui" so
+    // decisions recorded from the desktop app are distinguishable from CLI
+    // invocations in `rly decisions <channelId>`.
+    validate_id_segment(&channel_id, "channelId")?;
+    let state = if on { "on" } else { "off" };
+    cli_json(&[
+        "channel",
+        "set-full-access",
+        &channel_id,
+        state,
+        "--source",
+        "gui",
+        "--actor",
+        "gui",
+        "--json",
+    ])
+}
+
+#[tauri::command]
 fn update_channel_repos(
     channel_id: String,
     repos: Vec<RepoAssignmentInput>,
@@ -1931,6 +1956,7 @@ pub fn run() {
             create_channel,
             archive_channel,
             unarchive_channel,
+            set_channel_full_access,
             update_channel_repos,
             set_channel_starred,
             set_channel_tier,

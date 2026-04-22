@@ -230,6 +230,22 @@ function AboutTab({
 }) {
   const [busy, setBusy] = useState(false);
   const [tier, setTier] = useState<string>(channel.tier ?? "");
+  const [fullAccess, setFullAccess] = useState<boolean>(channel.fullAccess === true);
+
+  const toggleFullAccess = async () => {
+    const next = !fullAccess;
+    const prompt = next
+      ? `Enable full access for #${channel.name}? All subprocesses spawned from this channel will run without permission prompts until this is turned off.`
+      : `Disable full access for #${channel.name}? Permission prompts will return for new subprocesses.`;
+    if (!confirm(prompt)) return;
+    try {
+      await api.setChannelFullAccess(channel.channelId, next);
+      setFullAccess(next);
+      onRefresh();
+    } catch (err) {
+      alert(`Failed to toggle full access: ${err}`);
+    }
+  };
 
   const saveTier = async (next: string) => {
     setTier(next);
@@ -287,6 +303,17 @@ function AboutTab({
           <option value="chore">Chore</option>
           <option value="question">Question</option>
         </select>
+      </div>
+      <div className="drawer-section">
+        <h4>Full access</h4>
+        <p style={{ margin: "0 0 8px", fontSize: "var(--font-size-xs)", color: "var(--color-text-muted)" }}>
+          Runs dispatched agents with workspace-write sandbox and no approval
+          prompts. Scoped per-channel — other channels stay prompted.
+        </p>
+        <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+          <input type="checkbox" checked={fullAccess} onChange={toggleFullAccess} />
+          {fullAccess ? "On" : "Off"}
+        </label>
       </div>
       <div className="drawer-section">
         <h4>Status</h4>
