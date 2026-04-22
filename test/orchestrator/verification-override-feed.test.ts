@@ -100,7 +100,10 @@ describe("TicketScheduler verification override surfaces to channel feed", () =>
   });
 
   afterEach(async () => {
-    await rm(tmp, { recursive: true, force: true });
+    // Same cleanup hardening as orchestrator-v2.test.ts — the scheduler
+    // drains its own tracked writes in executeAll, but a retrying rm is
+    // cheap insurance against kernel-level tmpdir timing on CI (ENOTEMPTY).
+    await rm(tmp, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   });
 
   it("posts a 'verification override' status entry when the agent proposes a non-allowlisted command", async () => {
@@ -170,11 +173,9 @@ describe("TicketScheduler verification override surfaces to channel feed", () =>
 
     await scheduler.executeAll(run);
 
-    // Let the fire-and-forget postEntry settle — postEntry awaits mkdir +
-    // appendFile + touchChannel (channel read+write), more than microtask
-    // pumping reliably drains.
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
+    // `executeAll` drains the scheduler's tracked best-effort writes before
+    // returning (see TicketScheduler.waitForPendingWrites), so the override
+    // feed entry is visible here without a sleep workaround.
     const entries = await channelStore.readFeed(channel.channelId);
     const override = entries.find(
       (e) =>

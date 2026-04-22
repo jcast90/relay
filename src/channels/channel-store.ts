@@ -35,6 +35,15 @@ const channelTicketLocks: Map<string, Promise<void>> = new Map();
 // collide on the tmp file used by writeChannelTickets.
 let channelTicketsTmpCounter = 0;
 
+// Same rationale for the channel manifest (`channels/<id>.json`): two
+// concurrent `touchChannel` calls (e.g. an orchestrator transition and an
+// agent dispatch both firing `postEntry` → `touchChannel` in the same tick)
+// would otherwise both compute `${path}.tmp.${process.pid}`, and the second
+// rename would hit ENOENT because the first rename already consumed the tmp.
+// This surfaces as noisy `channel post failed` stderr even though the post
+// semantically succeeded. A per-call counter eliminates the collision.
+let channelManifestTmpCounter = 0;
+
 /**
  * Ticket-board coordination record stored on the `HarnessStore` at
  * `(channel-tickets, <channelId>)`. The ticket data itself continues to live
@@ -812,7 +821,7 @@ export class ChannelStore {
   private async writeChannel(channel: Channel): Promise<void> {
     await mkdir(this.channelsDir, { recursive: true });
     const path = join(this.channelsDir, `${channel.channelId}.json`);
-    const tmpPath = `${path}.tmp.${process.pid}`;
+    const tmpPath = `${path}.tmp.${process.pid}.${channelManifestTmpCounter++}`;
     await writeFile(tmpPath, JSON.stringify(channel, null, 2));
     await rename(tmpPath, path);
   }
