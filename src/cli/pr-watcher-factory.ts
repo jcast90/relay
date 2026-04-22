@@ -27,6 +27,7 @@ import { promisify } from "node:util";
 import type { ChannelStore } from "../channels/channel-store.js";
 import { createScm, wrapScm, type HarnessProject, type HarnessScm } from "../integrations/scm.js";
 import { PrPoller, type TrackedPr, type TrackedPrSnapshot } from "../integrations/pr-poller.js";
+import { PrReviewer, type ReviewerTrustMode } from "../integrations/pr-reviewer.js";
 import type { TrackedPrRow } from "../domain/pr-row.js";
 import { SchedulerFollowUpDispatcher } from "../integrations/scheduler-follow-up-dispatcher.js";
 import type { PollerFactory, PollerHandle } from "../orchestrator/orchestrator-v2.js";
@@ -62,6 +63,25 @@ export interface CreateFactoryOpts {
    * `child_process.execFile("git", ["-C", repoRoot, ...args])`.
    */
   execGit?: ExecGit;
+  /**
+   * AL-5: trust mode for the PR reviewer wrapper. When present, a
+   * `PrReviewer` is attached to the poller and fires on every
+   * `openedByAutonomous` PR that enters `track()`. Absent → no reviewer
+   * (the pre-AL-5 default). Production callers pass this through from
+   * the autonomous-loop's `--trust` flag; manual `rly run` invocations
+   * leave it unset.
+   */
+  trustMode?: ReviewerTrustMode;
+  /**
+   * AL-5 test seam: builder for the reviewer. Tests inject a spy so the
+   * poller wiring can be verified without shelling out to the subagent.
+   * Ignored when `trustMode` is absent.
+   */
+  reviewerFactory?: (opts: {
+    trustMode: ReviewerTrustMode;
+    channelStore: ChannelStore;
+    poller: PrPoller;
+  }) => PrReviewer;
 }
 
 /**
@@ -279,6 +299,12 @@ export function createPrWatcherFactory(opts: CreateFactoryOpts): PollerFactory {
           // reads GITHUB_TOKEN from env at query time.
           const scm = wrapScm(createScm("github"), project);
           const dispatcher = new SchedulerFollowUpDispatcher({ scheduler, run });
+          // AL-5: reviewer wiring — forward-declared so the poller's
+          // `onTrack` hook below can call through to it. Constructed
+          // AFTER the poller so `setReviewFindings` has a target; the
+          // `trustMode` gate covers the non-autonomous case (manual
+          // `rly run` invocations) where no reviewer should exist.
+          let reviewer: PrReviewer | null = null;
           poller = new PrPoller({
             scm,
             channelStore: opts.channelStore,
@@ -292,7 +318,28 @@ export function createPrWatcherFactory(opts: CreateFactoryOpts): PollerFactory {
               // demand by ChannelStore.writeTrackedPrs.
               void persistSnapshot(opts.channelStore, rows);
             },
+            onTrack: (entry) => {
+              // Delegate to the reviewer when one was wired. The reviewer
+              // filters on `openedByAutonomous` itself so manual
+              // `rly pr-watch` rows never hit the subagent.
+              reviewer?.handleTrack(entry);
+            },
           });
+          if (opts.trustMode) {
+            reviewer =
+              opts.reviewerFactory?.({
+                trustMode: opts.trustMode,
+                channelStore: opts.channelStore,
+                poller,
+              }) ??
+              new PrReviewer({
+                trustMode: opts.trustMode,
+                channelStore: opts.channelStore,
+                onReviewComplete: (ticketId, findings) => {
+                  poller?.setReviewFindings(ticketId, findings);
+                },
+              });
+          }
           poller.start();
 
           // Publish the live view for `pr-watch` / `pr-status`.
@@ -412,6 +459,11 @@ async function scanCompletedTickets(input: {
         channelId,
         pr,
         repo: input.repo,
+        // AL-5: every PR detected via the scheduler's completed-ticket
+        // loop originated from an autonomous worker. The reviewer wrapper
+        // scopes its subagent runs to rows flagged this way; manual
+        // `rly pr-watch` entries leave the flag unset and are ignored.
+        openedByAutonomous: true,
       });
       input.autoTracked.add(entry.ticketId);
     } catch {
@@ -452,6 +504,11 @@ async function persistSnapshot(
       review: row.last?.review ?? null,
       prState: row.last?.prState ?? null,
       updatedAt: now,
+      // AL-5 plumbing: thread the autonomy flag + structured review
+      // findings through the persisted mirror so the TUI / GUI can
+      // render "ready for human ack" badges and BLOCKING / NIT counts.
+      openedByAutonomous: row.openedByAutonomous,
+      ...(row.reviewFindings ? { reviewFindings: row.reviewFindings } : {}),
     });
     grouped.set(row.channelId, list);
   }

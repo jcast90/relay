@@ -250,6 +250,25 @@ pub struct ChannelRunLink {
 // `src/domain/pr-row.ts` — keep these in sync. Optional CI/review/state
 // fields are null when the row has been tracked but not yet polled.
 
+/// Structured findings produced by AL-5's PR reviewer wrapper. Present only
+/// on rows where `openedByAutonomous == true` AND the reviewer has already
+/// run. Mirrors `PrReviewFindingsSchema` in `src/domain/pr-row.ts` — keep
+/// these in sync when the TS schema grows new fields.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PrReviewFindings {
+    pub blocking: u32,
+    pub nits: u32,
+    #[serde(default)]
+    pub files: Vec<String>,
+    pub summary: String,
+    /// One of `ready_for_human_ack`, `inconclusive`, `error`. Kept as a
+    /// plain string so the TUI can surface new variants (added by later
+    /// AL-7 / AL-8 work) without a Rust-side code change.
+    pub status: String,
+    pub reviewed_at: String,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackedPrRow {
@@ -264,6 +283,14 @@ pub struct TrackedPrRow {
     pub review: Option<String>,
     pub pr_state: Option<String>,
     pub updated_at: String,
+    /// AL-5: true when the PR was opened by a worker spawned under an
+    /// autonomous ticket. Defaults to `false` on rows written before AL-5.
+    #[serde(default)]
+    pub opened_by_autonomous: bool,
+    /// AL-5 reviewer output. Absent until the reviewer has run; may stay
+    /// absent indefinitely for `openedByAutonomous == false` rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_findings: Option<PrReviewFindings>,
 }
 
 #[derive(Debug, Deserialize)]
