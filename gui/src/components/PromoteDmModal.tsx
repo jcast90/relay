@@ -40,10 +40,7 @@ export function PromoteDmModal({ channel, onClose, onPromoted }: Props) {
           ws.map((w) => ({
             workspace: w,
             selected: w.workspaceId === seed?.workspaceId,
-            alias:
-              w.workspaceId === seed?.workspaceId
-                ? seed.alias
-                : defaultAlias(w.repoPath),
+            alias: w.workspaceId === seed?.workspaceId ? seed.alias : defaultAlias(w.repoPath),
           }))
         );
       })
@@ -52,15 +49,11 @@ export function PromoteDmModal({ channel, onClose, onPromoted }: Props) {
 
   const toggle = (id: string) => {
     setRows((prev) =>
-      prev.map((r) =>
-        r.workspace.workspaceId === id ? { ...r, selected: !r.selected } : r
-      )
+      prev.map((r) => (r.workspace.workspaceId === id ? { ...r, selected: !r.selected } : r))
     );
     setPrimaryWorkspaceId((current) => {
       const selected = rows
-        .map((r) =>
-          r.workspace.workspaceId === id ? { ...r, selected: !r.selected } : r
-        )
+        .map((r) => (r.workspace.workspaceId === id ? { ...r, selected: !r.selected } : r))
         .filter((r) => r.selected);
       if (selected.length === 0) return null;
       if (current && selected.some((r) => r.workspace.workspaceId === current)) return current;
@@ -117,8 +110,8 @@ export function PromoteDmModal({ channel, onClose, onPromoted }: Props) {
         </div>
         <div className="modal-body">
           <p className="help" style={{ margin: 0, color: "var(--color-text-muted)" }}>
-            The DM's message history is preserved — you'll land in the new channel
-            with the same session open.
+            The DM's message history is preserved — you'll land in the new channel with the same
+            session open.
           </p>
           <label>
             Channel name
@@ -137,8 +130,7 @@ export function PromoteDmModal({ channel, onClose, onPromoted }: Props) {
                 <div className="rail-empty">No workspaces registered.</div>
               ) : (
                 rows.map((r) => {
-                  const isPrimary =
-                    r.selected && primaryWorkspaceId === r.workspace.workspaceId;
+                  const isPrimary = r.selected && primaryWorkspaceId === r.workspace.workspaceId;
                   return (
                     <div key={r.workspace.workspaceId} className="repo-row">
                       <input
@@ -170,9 +162,7 @@ export function PromoteDmModal({ channel, onClose, onPromoted }: Props) {
                             type="radio"
                             name="primary"
                             checked={isPrimary}
-                            onChange={() =>
-                              setPrimaryWorkspaceId(r.workspace.workspaceId)
-                            }
+                            onChange={() => setPrimaryWorkspaceId(r.workspace.workspaceId)}
                           />
                           primary
                         </label>
@@ -220,5 +210,8 @@ function basename(p: string): string {
 }
 
 function defaultAlias(repoPath: string): string {
-  return basename(repoPath).replace(/[^a-z0-9-]/gi, "").toLowerCase().slice(0, 12);
+  return basename(repoPath)
+    .replace(/[^a-z0-9-]/gi, "")
+    .toLowerCase()
+    .slice(0, 12);
 }

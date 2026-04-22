@@ -59,13 +59,7 @@ export function MessageList({
   );
 }
 
-function FeedView({
-  entries,
-  channel,
-}: {
-  entries: ChannelEntry[];
-  channel: MentionContext;
-}) {
+function FeedView({ entries, channel }: { entries: ChannelEntry[]; channel: MentionContext }) {
   if (entries.length === 0) return <div className="chat-empty">No activity yet</div>;
   return (
     <>
@@ -328,11 +322,7 @@ function MsgAvatar({ seed }: { seed: string }) {
   const [appearance] = useAppearance();
   const av = agentAvatar(seed, undefined, appearance.avatarStyle);
   return (
-    <div
-      className="msg-avatar"
-      style={{ background: av.background, color: av.color }}
-      title={seed}
-    >
+    <div className="msg-avatar" style={{ background: av.background, color: av.color }} title={seed}>
       {av.glyph}
     </div>
   );

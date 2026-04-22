@@ -280,20 +280,9 @@ function ActivityBlock({
   );
 }
 
-function NavRow({
-  label,
-  sigil,
-  count,
-}: {
-  label: string;
-  sigil: string;
-  count: number;
-}) {
+function NavRow({ label, sigil, count }: { label: string; sigil: string; count: number }) {
   return (
-    <div
-      className="sidebar-item"
-      style={{ cursor: "default", opacity: count > 0 ? 1 : 0.6 }}
-    >
+    <div className="sidebar-item" style={{ cursor: "default", opacity: count > 0 ? 1 : 0.6 }}>
       <span className="ch-sigil">{sigil}</span>
       <span className="ch-name">{label}</span>
       {count > 0 && <span className="ch-badge">{count}</span>}

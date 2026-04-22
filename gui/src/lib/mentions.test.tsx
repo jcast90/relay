@@ -28,18 +28,14 @@ describe("renderWithMentions", () => {
     const nodes = renderWithMentions("ping @ui now", channel);
     // tokens: "ping ", "@ui", " now"
     const chip = asElement(nodes[1]);
-    expect((chip.props as { className: string }).className).toBe(
-      "mention mention-repo-primary"
-    );
+    expect((chip.props as { className: string }).className).toBe("mention mention-repo-primary");
     expect((chip.props as { children: string }).children).toBe("@ui");
   });
 
   it("classifies attached (non-primary) repo aliases with the attached class", () => {
     const nodes = renderWithMentions("@be fyi", channel);
     const chip = asElement(nodes[0]);
-    expect((chip.props as { className: string }).className).toBe(
-      "mention mention-repo-attached"
-    );
+    expect((chip.props as { className: string }).className).toBe("mention mention-repo-attached");
   });
 
   it("classifies unknown aliases as human mentions", () => {
@@ -59,9 +55,7 @@ describe("renderWithMentions", () => {
     // the handle on match. A channel with "ui" should still chip "@UI".
     const nodes = renderWithMentions("@UI here", channel);
     const chip = asElement(nodes[0]);
-    expect((chip.props as { className: string }).className).toBe(
-      "mention mention-repo-primary"
-    );
+    expect((chip.props as { className: string }).className).toBe("mention mention-repo-primary");
   });
 
   it("renders **bold** as <strong>", () => {

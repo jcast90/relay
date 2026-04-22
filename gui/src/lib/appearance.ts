@@ -23,9 +23,7 @@ function read(): Appearance {
     return {
       avatarStyle: parsed.avatarStyle === "initial" ? "initial" : "glyph",
       density:
-        parsed.density === "compact" || parsed.density === "spacious"
-          ? parsed.density
-          : "medium",
+        parsed.density === "compact" || parsed.density === "spacious" ? parsed.density : "medium",
     };
   } catch {
     return DEFAULT;

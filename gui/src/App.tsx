@@ -98,9 +98,7 @@ export function App() {
   const selected = channels.find((c) => c.channelId === selectedId) ?? null;
 
   return (
-    <div
-      className={`app density-${appearance.density} ${rightRailOpen ? "" : "rail-collapsed"}`}
-    >
+    <div className={`app density-${appearance.density} ${rightRailOpen ? "" : "rail-collapsed"}`}>
       <WorkspaceRail onOpenSettings={() => setSettingsOpen(true)} />
       {settingsOpen && settings ? (
         <div style={{ gridColumn: "2 / -1", display: "flex", minHeight: 0 }}>

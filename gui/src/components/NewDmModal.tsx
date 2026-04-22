@@ -18,7 +18,10 @@ export function NewDmModal({ open, onClose, onCreated }: Props) {
     if (!open) return;
     setFilter("");
     setError(null);
-    api.listWorkspaces().then(setWorkspaces).catch(() => setWorkspaces([]));
+    api
+      .listWorkspaces()
+      .then(setWorkspaces)
+      .catch(() => setWorkspaces([]));
   }, [open]);
 
   if (!open) return null;
@@ -53,8 +56,8 @@ export function NewDmModal({ open, onClose, onCreated }: Props) {
         </div>
         <div className="modal-body">
           <p className="help" style={{ margin: 0, color: "var(--color-text-muted)" }}>
-            Pick a workspace to DM its default agent. DMs are kickoff surfaces —
-            promote to a full channel when work gets real.
+            Pick a workspace to DM its default agent. DMs are kickoff surfaces — promote to a full
+            channel when work gets real.
           </p>
           <input
             className="repo-filter"
