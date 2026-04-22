@@ -319,6 +319,25 @@ button.primary { background: var(--accent-dim); border-color: var(--accent); }
   color: var(--text);
 }
 
+/* Linear mirror tickets: a magenta-ish border + "Linear · ENG-42" chip so
+   read-only mirror rows are distinguishable from Relay-scheduled tickets. */
+.ticket.ticket-linear {
+  border-left: 3px solid #c678dd;
+}
+
+.ticket-linear-chip {
+  display: inline-block;
+  margin-bottom: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  border-radius: 10px;
+  background: rgba(198, 120, 221, 0.15);
+  color: #c678dd;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
 /* PRIMARY tag — rendered next to the selected primary row in the new-channel
    modal and in the right pane's repo list. Mauve keeps it distinct from the
    alias chip (sapphire) and from the accent-blue used for active channels. */
