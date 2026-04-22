@@ -22,6 +22,13 @@ import {
   type CrosslinkToolState,
 } from "../crosslink/tools.js";
 import {
+  callCoordinationTool,
+  getCoordinationToolDefinitions,
+  isCoordinationTool,
+  type CoordinationToolState,
+} from "./coordination-tools.js";
+import type { Coordinator } from "../crosslink/coordinator.js";
+import {
   allowlistForRole,
   denyToolEnvelope,
   isToolAllowedForRole,
@@ -49,16 +56,53 @@ export interface McpHandlerContext {
   artifactStore: LocalArtifactStore;
   crosslinkState: CrosslinkToolState;
   channelState: ChannelToolState;
+  /**
+   * AL-16 coordination tool state. Populated from
+   * {@link McpHandlerOptions} at construction time. When the caller
+   * wires a Coordinator + alias in, `coordination_send` routes through
+   * the live bus. When either is absent, the tool surfaces a
+   * structured error envelope (never a silent drop).
+   */
+  coordinationState: CoordinationToolState;
   cleanup: () => void;
+}
+
+/**
+ * Optional wiring for the AL-16 coordination tool surface. When the MCP
+ * server is constructed in-process (e.g. inside the autonomous-loop
+ * driver's test harness, or in a future in-process MCP host for
+ * repo-admin sessions), the caller passes the shared {@link Coordinator}
+ * and the session's own admin alias here so `coordination_send` calls
+ * route to a live bus instead of returning `coordinator-not-configured`.
+ *
+ * When the MCP server runs as a subprocess of the Claude CLI (the
+ * default production path), the coordinator can't cross the process
+ * boundary as a direct reference — the parent relays sends through a
+ * separate IPC channel. This parameter is still populated there via an
+ * in-parent bridge so the tool surface stays unified; subprocess
+ * transports that have no bridge at all leave both fields null and the
+ * tool surfaces a structured `coordinator-not-configured` error.
+ */
+export interface McpHandlerOptions {
+  /** Per-run coordinator wired by the autonomous-loop driver. */
+  coordinator?: Coordinator | null;
+  /** Admin alias the enclosing session represents. */
+  alias?: string | null;
 }
 
 /**
  * Build the JSON-RPC message handler + supporting state for an MCP server
  * instance. Shared between the stdio and HTTP/SSE transports so both paths
  * serve the same tool surface.
+ *
+ * When `options.coordinator` + `options.alias` are both provided, the
+ * resulting handler's `coordination_send` dispatch routes through the
+ * live bus. When either is absent, the tool returns a structured error
+ * envelope identifying the missing piece — never a silent drop.
  */
 export async function buildMcpMessageHandler(
-  workspaceRoot: string
+  workspaceRoot: string,
+  options: McpHandlerOptions = {}
 ): Promise<{ handler: McpMessageHandler; context: McpHandlerContext }> {
   // AL-11 (I1 fix): if RELAY_AGENT_ROLE is set to a value we don't recognise,
   // log a one-shot warning to stderr on startup. The allowlist fall-through
@@ -79,6 +123,18 @@ export async function buildMcpMessageHandler(
   const channelState: ChannelToolState = {
     sessionId: null,
     channelStore,
+  };
+  // AL-16: the server always constructs a coordination state so the
+  // tool surface is stable. When the caller supplies a Coordinator
+  // + alias (in-process path — autonomous-loop driver or integration
+  // test), `coordination_send` routes through the live bus. Otherwise
+  // both fields stay null and the tool returns a structured
+  // `coordinator-not-configured` / `session-not-repo-admin` error
+  // rather than throwing. Null-coercion below keeps the type contract
+  // explicit — `undefined` and omitted both collapse to null.
+  const coordinationState: CoordinationToolState = {
+    alias: options.alias ?? null,
+    coordinator: options.coordinator ?? null,
   };
 
   // Auto-register this session
@@ -110,16 +166,33 @@ export async function buildMcpMessageHandler(
   };
 
   const handler: McpMessageHandler = (message) =>
-    handleMessage(message, workspaceRoot, artifactStore, crosslinkState, channelState);
+    handleMessage(
+      message,
+      workspaceRoot,
+      artifactStore,
+      crosslinkState,
+      channelState,
+      coordinationState
+    );
 
   return {
     handler,
-    context: { workspaceRoot, artifactStore, crosslinkState, channelState, cleanup },
+    context: {
+      workspaceRoot,
+      artifactStore,
+      crosslinkState,
+      channelState,
+      coordinationState,
+      cleanup,
+    },
   };
 }
 
-export async function startMcpServer(workspaceRoot: string): Promise<void> {
-  const { handler, context } = await buildMcpMessageHandler(workspaceRoot);
+export async function startMcpServer(
+  workspaceRoot: string,
+  options: McpHandlerOptions = {}
+): Promise<void> {
+  const { handler, context } = await buildMcpMessageHandler(workspaceRoot, options);
 
   process.on("exit", context.cleanup);
   process.on("SIGTERM", () => {
@@ -140,7 +213,8 @@ async function handleMessage(
   workspaceRoot: string,
   artifactStore: LocalArtifactStore,
   crosslinkState: CrosslinkToolState,
-  channelState: ChannelToolState
+  channelState: ChannelToolState,
+  coordinationState: CoordinationToolState
 ): Promise<JsonRpcMessage | null> {
   if (!message.method) {
     return null;
@@ -177,6 +251,11 @@ async function handleMessage(
           inputSchema: unknown;
         }>),
         ...(getChannelToolDefinitions() as Array<{
+          name: string;
+          description: string;
+          inputSchema: unknown;
+        }>),
+        ...(getCoordinationToolDefinitions() as Array<{
           name: string;
           description: string;
           inputSchema: unknown;
@@ -395,7 +474,9 @@ async function handleMessage(
           ? await callCrosslinkTool(toolName, toolArgs, crosslinkState)
           : isChannelTool(toolName)
             ? await callChannelTool(toolName, toolArgs, channelState)
-            : await callTool(toolName, toolArgs, workspaceRoot, artifactStore);
+            : isCoordinationTool(toolName)
+              ? await callCoordinationTool(toolName, toolArgs, coordinationState)
+              : await callTool(toolName, toolArgs, workspaceRoot, artifactStore);
 
         return {
           jsonrpc: "2.0",

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   REPO_ADMIN_ALLOWED_TOOLS,
+  REPO_ADMIN_COORDINATION_POLICY_MARKER,
   REPO_ADMIN_MEMORY_POLICY_MARKER,
   REPO_ADMIN_ROLE,
   REPO_ADMIN_SPECIALTY,
@@ -53,6 +54,7 @@ describe("repo-admin role — allowlist exactness", () => {
         "channel_get", // read decisions + feed + run links in one call
         "channel_post", // append-only feed updates (propose a spawn, announce a decision)
         "channel_task_board", // read the ticket board
+        "coordination_send", // AL-16: typed inter-repo coordination messages
         "harness_get_run_detail", // read-only run state
         "harness_list_runs", // read-only run index
         "harness_running_tasks", // cross-workspace running-task view
@@ -155,6 +157,19 @@ describe("repo-admin role — system prompt", () => {
     expect(prompt).toContain("cache only the active working set");
     expect(prompt).toMatch(/re-read the board/i);
     expect(prompt).toMatch(/Don't rely on chat history/i);
+  });
+
+  it("encodes the AL-16 typed-coordination policy by substring match", () => {
+    // Pin the exact marker the role module exports so a future copy edit
+    // can't silently drop the typed-coordination guidance — without this
+    // assertion, an agent would quietly fall back to free-text handoffs
+    // on the channel feed. Mirrors the memory-policy marker test above.
+    expect(prompt).toContain(REPO_ADMIN_COORDINATION_POLICY_MARKER);
+    // Plus the three typed shapes the prompt names so a partial drop
+    // (marker present but shape guidance gone) also trips.
+    expect(prompt).toContain("blocked-on-repo");
+    expect(prompt).toContain("repo-ready");
+    expect(prompt).toContain("merge-order-proposal");
   });
 
   it("tells repo-admin to propose work instead of reaching for denied tools", () => {

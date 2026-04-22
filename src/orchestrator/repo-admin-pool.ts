@@ -54,6 +54,7 @@ import { join } from "node:path";
 
 import type { Channel, RepoAssignment } from "../domain/channel.js";
 import type { SessionLifecycle, LifecycleState } from "../lifecycle/session-lifecycle.js";
+import type { Coordinator } from "../crosslink/coordinator.js";
 import { getRelayDir } from "../cli/paths.js";
 
 import {
@@ -203,6 +204,16 @@ export interface RepoAdminPoolOptions {
    * ignores SIGTERM).
    */
   sessionStopGraceMs?: number;
+  /**
+   * AL-16: shared coordination bus for this run. Threaded into every
+   * {@link RepoAdminSession} the pool constructs so an in-process MCP
+   * handler built on the session's behalf can route `coordination_send`
+   * through the live bus. Null / omitted in dev-mode runs where no
+   * autonomous-loop driver is coordinating cross-repo work; in that
+   * case each session's MCP surface reports `coordinator-not-configured`
+   * on send (structured error, never a silent drop).
+   */
+  coordinator?: Coordinator | null;
 }
 
 interface InternalSessionRecord {
@@ -233,6 +244,7 @@ export class RepoAdminPool {
   private readonly clearTimer: (handle: NodeJS.Timeout | number) => void;
   private readonly clock: () => number;
   private readonly sessionStopGraceMs?: number;
+  private readonly coordinator: Coordinator | null;
 
   private readonly sessions = new Map<string, InternalSessionRecord>();
   private readonly emitter = new EventEmitter();
@@ -256,6 +268,7 @@ export class RepoAdminPool {
     this.clearTimer = options.clearTimer ?? ((handle) => clearTimeout(handle as NodeJS.Timeout));
     this.clock = options.clock ?? Date.now;
     this.sessionStopGraceMs = options.sessionStopGraceMs;
+    this.coordinator = options.coordinator ?? null;
   }
 
   /**
@@ -416,6 +429,11 @@ export class RepoAdminPool {
       spawner: this.spawner,
       buildSessionId: this.buildSessionId,
       stopGraceMs: this.sessionStopGraceMs,
+      // AL-16: forward the shared bus so the session carries the
+      // reference through its lifecycle. An MCP handler built on the
+      // session's behalf (in-process path) uses it + session.alias to
+      // populate coordination state at construction.
+      coordinator: this.coordinator,
     };
     const session = new RepoAdminSession(sessionOpts);
 
