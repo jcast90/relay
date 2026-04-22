@@ -60,14 +60,29 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Tauri system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libglib2.0-dev \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libx11-dev
+
       - name: Cache cargo target
         uses: Swatinem/rust-cache@v2
 
       - name: Cargo check
         run: cargo check --workspace --locked
 
-      - name: Cargo test (harness-data)
-        run: cargo test -p harness-data
+      - name: Cargo test (workspace)
+        run: cargo test --workspace
 
   format-check:
     name: format-check
