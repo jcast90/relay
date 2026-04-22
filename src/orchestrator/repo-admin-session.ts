@@ -600,6 +600,13 @@ export class RepoAdminSession {
       return;
     }
 
+    // Subscribe to the exit event BEFORE sending SIGTERM. A spawner (or
+    // an already-dead child) that fires `onExit` synchronously from
+    // inside `kill()` would emit before any post-kill subscription could
+    // hear it, leaving `awaitStopped()` waiting on a never-emitted
+    // event. Ordering the subscribe first closes that race.
+    const stopped = this.awaitStopped();
+
     try {
       this.child.kill("SIGTERM");
     } catch {
@@ -623,7 +630,7 @@ export class RepoAdminSession {
     const t = this.killTimer as { unref?: () => void };
     if (t && typeof t.unref === "function") t.unref();
 
-    await this.awaitStopped();
+    await stopped;
   }
 
   /**
@@ -786,7 +793,27 @@ export class RepoAdminSession {
     //    matches the spawned child's id exactly.
     await this.start();
 
-    // 4) Bookkeeping + observer event.
+    // 4) Reset the tracker. The cycle is a process boundary: the new
+    //    child has no context window residue from the old one, so its
+    //    token budget starts fresh. Without this, `firedThresholds` still
+    //    contains 60 from the triggering crossing and `_used` keeps
+    //    accumulating pre-cycle counts — only ONE auto-cycle could ever
+    //    fire per session lifetime. `reset()` rotates the JSONL on disk
+    //    so the pre-cycle data is preserved for audit.
+    try {
+      await this.tokenTracker.reset();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // A reset failure is loud but not cycle-fatal. The session is
+      // already mid-cycle; aborting here would leave the new child up
+      // with a stale tracker — which is no worse than the pre-fix
+      // behavior. Surface it and move on.
+      console.warn(
+        `RepoAdminSession(${this.alias}): cycle tracker reset failed (${reason}): ${msg}`
+      );
+    }
+
+    // 5) Bookkeeping + observer event.
     this._cycleCount += 1;
     this.emit({
       kind: "cycled",
@@ -835,6 +862,20 @@ export class RepoAdminSession {
     // this without a separate code branch in `handleExit`.
     this.stopRequested = true;
 
+    // Subscribe to the exit event BEFORE sending SIGTERM. Some spawners
+    // (and some crashed children) surface `onExit` synchronously from
+    // within `kill()`, which would emit before any listener wired up
+    // AFTER `kill()` could hear it — and this promise would never
+    // resolve. Ordering the subscribe first closes that race.
+    const exited = new Promise<void>((resolve) => {
+      const off = this.onEvent((evt) => {
+        if (evt.kind === "exited-expected" && evt.reason === cycleReasonTag) {
+          off();
+          resolve();
+        }
+      });
+    });
+
     try {
       this.child.kill("SIGTERM");
     } catch {
@@ -858,14 +899,7 @@ export class RepoAdminSession {
     // `awaitStopped`, we don't transition to `stopped` — the session
     // reverts to an internal "between cycles" state which `start()`
     // promotes back to `booting`/`ready` on respawn.
-    await new Promise<void>((resolve) => {
-      const off = this.onEvent((evt) => {
-        if (evt.kind === "exited-expected" && evt.reason === cycleReasonTag) {
-          off();
-          resolve();
-        }
-      });
-    });
+    await exited;
 
     // Reset the flags so the subsequent `start()` + eventual `stop()`
     // aren't confused by the cycle's bookkeeping.

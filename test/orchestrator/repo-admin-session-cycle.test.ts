@@ -26,6 +26,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SpawnedProcess } from "../../src/agents/command-invoker.js";
 import { TokenTracker } from "../../src/budget/token-tracker.js";
 import type { Channel, RepoAssignment } from "../../src/domain/channel.js";
+import type { TicketLedgerEntry } from "../../src/domain/ticket.js";
 import { SessionLifecycle } from "../../src/lifecycle/session-lifecycle.js";
 import {
   RAPID_RESTART_CEILING,
@@ -42,6 +43,34 @@ import {
   type SessionDecisionWriter,
 } from "../../src/orchestrator/repo-admin-session.js";
 import type { CycleDecisionInput } from "../../src/orchestrator/session-summary.js";
+
+/**
+ * Build a minimal `TicketLedgerEntry`. AL-13's `dispatchTicket` is the
+ * public path to seed the pending-dispatch queue; the rebase onto main
+ * deleted the old `_pushPendingDispatchForTest` test-seam in favor of
+ * this real API.
+ */
+function buildLedgerEntry(ticketId: string, alias = "frontend"): TicketLedgerEntry {
+  return {
+    ticketId,
+    title: `ticket ${ticketId}`,
+    specialty: "general",
+    status: "ready",
+    dependsOn: [],
+    assignedAgentId: null,
+    assignedAgentName: null,
+    crosslinkSessionId: null,
+    verification: "pending",
+    lastClassification: null,
+    chosenNextAction: null,
+    attempt: 0,
+    startedAt: null,
+    completedAt: null,
+    updatedAt: new Date().toISOString(),
+    runId: null,
+    assignedAlias: alias,
+  };
+}
 
 // --- Fakes ---------------------------------------------------------------
 
@@ -103,6 +132,31 @@ class FakeSpawner implements RepoAdminProcessSpawner {
   }
   children(alias: string): FakeChild[] {
     return this.byAlias.get(alias) ?? [];
+  }
+}
+
+/**
+ * Spawner whose children call `onExit` synchronously from within
+ * `kill()`. Models an edge case (spawner double-signals, pre-exited
+ * child) that used to hang `stopChildForCycle` / `stop()` when their
+ * exit-waiters subscribed to the event AFTER calling kill().
+ */
+class SyncKillSpawner implements RepoAdminProcessSpawner {
+  spawn(_args: RepoAdminSpawnArgs): SpawnedProcess {
+    const exitListeners: ExitListener[] = [];
+    return {
+      pid: 49_000,
+      onStdout() {},
+      onStderr() {},
+      onExit(l: ExitListener) {
+        exitListeners.push(l);
+      },
+      onError() {},
+      kill() {
+        for (const l of exitListeners) l(0, "SIGTERM");
+        return true;
+      },
+    };
   }
 }
 
@@ -229,10 +283,14 @@ describe("RepoAdminSession — AL-15 cycle", () => {
     await session.start();
     const originalSessionId = session.sessionId;
 
-    // Seed the queue so we can assert cross-cycle preservation.
-    session._pushPendingDispatchForTest("ticket-1");
-    session._pushPendingDispatchForTest("ticket-2");
-    session._pushPendingDispatchForTest("ticket-3");
+    // Seed the queue so we can assert cross-cycle preservation. Uses
+    // AL-13's real `dispatchTicket` API (the pre-rebase test seam
+    // `_pushPendingDispatchForTest` was redundant once dispatchTicket
+    // gained a real implementation).
+    const seeded = ["ticket-1", "ticket-2", "ticket-3"].map((id) => buildLedgerEntry(id));
+    for (const entry of seeded) {
+      await session.dispatchTicket(entry);
+    }
 
     const cycleP = session.cycle("manual");
     // The first child must receive SIGTERM. Resolve its exit so the
@@ -249,7 +307,11 @@ describe("RepoAdminSession — AL-15 cycle", () => {
     expect(session.cycleCount).toBe(1);
 
     // Queue survived the cycle.
-    expect(session.getPendingDispatches()).toEqual(["ticket-1", "ticket-2", "ticket-3"]);
+    expect(session.pendingTickets().map((t) => t.ticketId)).toEqual([
+      "ticket-1",
+      "ticket-2",
+      "ticket-3",
+    ]);
 
     // Decision was written.
     expect(writer.calls).toHaveLength(1);
@@ -283,7 +345,7 @@ describe("RepoAdminSession — AL-15 cycle", () => {
       cycleClock: () => "2026-04-21T12:00:00.000Z",
     });
     await session.start();
-    session._pushPendingDispatchForTest({ ticketId: "AL-99" });
+    await session.dispatchTicket(buildLedgerEntry("AL-99"));
 
     const cycleP = session.cycle("manual");
     await flushMicrotasks();
@@ -351,6 +413,100 @@ describe("RepoAdminSession — AL-15 cycle", () => {
     await stopP;
 
     await expect(session.cycle("manual")).rejects.toThrow(/cannot cycle\(\) after stop/);
+  });
+
+  it("tracker resets on cycle so a second 60% crossing fires cycle #2", async () => {
+    // Regression for the AL-15 blocker: before the fix, `performCycle`
+    // respawned the child but left `firedThresholds` + `_used` on the
+    // tracker unchanged, so the 60% tier could never re-fire. Only ONE
+    // auto-cycle would ever happen per session lifetime. The reset()
+    // added to TokenTracker + called from performCycle restores the
+    // invariant that each new child starts the budget from zero.
+    const tracker = new TokenTracker("admin-two-cycles", 1000, { rootDir: trackerRoot });
+    const { session, spawner, writer } = buildSession({ tracker });
+
+    await session.start();
+    const sessionId0 = session.sessionId;
+
+    // First 60% crossing → cycle #1.
+    tracker.record(600, 0);
+    await tracker.flush();
+    await flushMicrotasks();
+    expect(spawner.children("frontend")[0].killCalls).toContain("SIGTERM");
+    spawner.children("frontend")[0].emitExit(0, "SIGTERM");
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(session.cycleCount).toBe(1);
+    const sessionId1 = session.sessionId;
+    expect(sessionId1).not.toBe(sessionId0);
+    // The tracker was reset as part of performCycle — the next record()
+    // observes a zero baseline and will cross 60% again.
+    expect(tracker.used).toBe(0);
+
+    // Second 60% crossing → cycle #2. This is the load-bearing assertion:
+    // without tracker.reset(), firedThresholds.has(60) would still be
+    // true and this record() would never fire a threshold event.
+    tracker.record(600, 0);
+    await tracker.flush();
+    await flushMicrotasks();
+    expect(spawner.children("frontend")[1].killCalls).toContain("SIGTERM");
+    spawner.children("frontend")[1].emitExit(0, "SIGTERM");
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(session.cycleCount).toBe(2);
+    const sessionId2 = session.sessionId;
+    expect(sessionId2).not.toBe(sessionId1);
+
+    // Both cycles wrote distinct decision entries with the expected
+    // previousSessionId / nextSessionId chain.
+    expect(writer.calls).toHaveLength(2);
+    expect(writer.calls[0].input.metadata.previousSessionId).toBe(sessionId0);
+    expect(writer.calls[0].input.metadata.nextSessionId).toBe(sessionId1);
+    expect(writer.calls[0].input.metadata.cycleReason).toBe("budget-60pct");
+    expect(writer.calls[1].input.metadata.previousSessionId).toBe(sessionId1);
+    expect(writer.calls[1].input.metadata.nextSessionId).toBe(sessionId2);
+    expect(writer.calls[1].input.metadata.cycleReason).toBe("budget-60pct");
+
+    const stopP = session.stop("test-cleanup");
+    spawner.children("frontend").at(-1)!.emitExit(0, "SIGTERM");
+    await stopP;
+    await tracker.close();
+  });
+
+  it("stopChildForCycle tolerates a spawner that fires onExit synchronously from kill()", async () => {
+    // Regression for the exit-wait race in `stopChildForCycle`: the
+    // `exited-expected` listener must be subscribed BEFORE kill() so a
+    // spawner (or a zombie child) that calls onExit synchronously from
+    // inside kill() still unblocks the cycle. Before the fix, this test
+    // would hang on a never-resolving promise and time out.
+    const writer = new FakeDecisionWriter();
+    const tracker = new TokenTracker("admin-sync-kill", 1000, { rootDir: trackerRoot });
+    const spawner = new SyncKillSpawner();
+    const session = new RepoAdminSession({
+      assignment: BASE_ASSIGNMENT,
+      fullAccess: false,
+      logDir: join(root, "repo-admins", BASE_ASSIGNMENT.alias),
+      spawner,
+      buildSessionId: () => `admin-sync-${++sessionIdCounter}`,
+      stopGraceMs: 5,
+      tokenTracker: tracker,
+      cycle: { channelId: "channel-sync", decisions: writer },
+    });
+    await session.start();
+
+    // The SyncKillSpawner's child fires onExit from within kill(). The
+    // cycle should complete without the `await exited` hanging.
+    await session.cycle("manual");
+
+    expect(session.cycleCount).toBe(1);
+    expect(session.state).toBe("ready");
+
+    // Cleanup. stop() uses the same subscribe-before-kill pattern, so it
+    // also tolerates the synchronous-exit spawner.
+    await session.stop("test-cleanup");
+    await tracker.close();
   });
 
   it("cycle writes a decision even when the decisions store throws — tear-down still runs", async () => {

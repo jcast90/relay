@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { getRelayDir } from "../cli/paths.js";
@@ -56,7 +56,7 @@ interface BudgetLine {
  * chain so concurrent `record()` calls never interleave partial lines.
  *
  * Event bus: internal `EventEmitter`. Subscribers attach via
- * `onThreshold()`. Only the four canonical thresholds (50/85/95/100) fire,
+ * `onThreshold()`. Only the canonical thresholds (50/60/85/95/100) fire,
  * and each fires at most once per tracker lifetime regardless of how many
  * API calls cross it.
  */
@@ -252,6 +252,54 @@ export class TokenTracker {
    * `record()` calls.
    */
   async flush(): Promise<void> {
+    await this.writeChain;
+  }
+
+  /**
+   * Clear the tracker's token state and rotate its JSONL file. Used to
+   * mark a process boundary (e.g. AL-15's repo-admin memory-shed cycle)
+   * where the tracker outlives the child but should not carry the pre-
+   * boundary accumulated usage into the new lifetime.
+   *
+   * Concretely, reset:
+   *   1. Awaits any in-flight writes (replay + pending `record()` drains).
+   *   2. Renames `<sessionId>/budget.jsonl` to
+   *      `<sessionId>/budget.jsonl.pre-cycle-<unix-ts>` so the pre-reset
+   *      data is preserved on disk for audit/forensics. A missing file is
+   *      a no-op — a reset before any `record()` still succeeds.
+   *   3. Zeros `_used` and clears `firedThresholds` so the next `record()`
+   *      can re-fire every threshold (50, 60, 85, 95, 100).
+   *   4. Re-serializes the post-reset state onto the write chain so
+   *      concurrent callers observe the cleared state in call order.
+   *
+   * This is specifically NOT the same as constructing a new tracker: the
+   * event subscribers stay attached, the sessionId + ceiling stay the
+   * same, and the filePath stays the same (the next `record()` will
+   * recreate `budget.jsonl` as a fresh file).
+   *
+   * Rejects if the tracker is closed.
+   */
+  async reset(): Promise<void> {
+    if (this.closed) {
+      throw new Error("TokenTracker: cannot reset after close()");
+    }
+    this.writeChain = this.writeChain.then(async () => {
+      // Rotate the existing JSONL out of the way. Missing file is fine —
+      // a tracker that never wrote has nothing to archive. Any other
+      // error is surfaced via the `error` event like append failures.
+      const rotated = `${this.filePath}.pre-cycle-${Date.now()}`;
+      try {
+        await rename(this.filePath, rotated);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          if (this.emitter.listenerCount("error") > 0) {
+            this.emitter.emit("error", err);
+          }
+        }
+      }
+      this._used = 0;
+      this.firedThresholds.clear();
+    });
     await this.writeChain;
   }
 

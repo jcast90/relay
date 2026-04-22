@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -360,6 +360,55 @@ describe("TokenTracker", () => {
       tracker.record(10, 10);
       await tracker.close();
       await expect(tracker.close()).resolves.toBeUndefined();
+    });
+  });
+
+  describe("reset()", () => {
+    it("zeros _used, clears firedThresholds, and rotates the JSONL file", async () => {
+      const tracker = new TokenTracker("s-reset", 1000, { rootDir: root });
+      const events: ThresholdEvent[] = [];
+      tracker.onThreshold((evt) => events.push(evt));
+
+      // Cross 60% pre-reset.
+      tracker.record(600, 0);
+      await tracker.flush();
+      expect(events.map((e) => e.threshold)).toEqual([50, 60]);
+      expect(tracker.used).toBe(600);
+
+      await tracker.reset();
+      expect(tracker.used).toBe(0);
+      expect(tracker.pct).toBe(0);
+
+      // The pre-cycle file was rotated out of the way; the directory
+      // contains a `budget.jsonl.pre-cycle-<ts>` sibling.
+      const sessionDir = join(root, "sessions", "s-reset");
+      const entries = await readdir(sessionDir);
+      const rotated = entries.filter((e) => e.startsWith("budget.jsonl.pre-cycle-"));
+      expect(rotated).toHaveLength(1);
+      expect(entries.includes("budget.jsonl")).toBe(false);
+
+      // Post-reset, the 60% tier re-fires on the next crossing.
+      tracker.record(600, 0);
+      await tracker.flush();
+      // The new events should include a second 50 + 60 crossing.
+      const postReset = events.slice(2);
+      expect(postReset.map((e) => e.threshold)).toEqual([50, 60]);
+
+      await tracker.close();
+    });
+
+    it("tolerates reset() before any record() (no file on disk yet)", async () => {
+      const tracker = new TokenTracker("s-reset-empty", 1000, { rootDir: root });
+      await expect(tracker.reset()).resolves.toBeUndefined();
+      expect(tracker.used).toBe(0);
+      await tracker.close();
+    });
+
+    it("reset() after close() throws", async () => {
+      const tracker = new TokenTracker("s-reset-closed", 1000, { rootDir: root });
+      tracker.record(100, 0);
+      await tracker.close();
+      await expect(tracker.reset()).rejects.toThrow(/after close/);
     });
   });
 });

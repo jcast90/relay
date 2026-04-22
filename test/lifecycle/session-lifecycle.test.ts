@@ -237,7 +237,7 @@ describe("SessionLifecycle", () => {
       await tracker.close();
     });
 
-    it("50% and 100% thresholds are ignored", async () => {
+    it("50%, 60%, and 100% thresholds are ignored", async () => {
       const tracker = new TokenTracker("s-budget-ignore", 1000, { rootDir: root });
       const lifecycle = new SessionLifecycle("s-budget-ignore", {
         rootDir: root,
@@ -245,6 +245,15 @@ describe("SessionLifecycle", () => {
       });
       await lifecycle.transition("dispatching");
       tracker.record(500, 0); // crosses only 50
+      await tracker.flush();
+      await lifecycle.flush();
+      expect(lifecycle.state).toBe("dispatching");
+
+      // Pin down the 60% tier: AL-15 added it for repo-admin memory-shed
+      // cycling; the session-lifecycle scheduler must ignore it the same
+      // way it ignores 50 and 100. A future refactor that accidentally
+      // wires 60 into `handleThreshold` will flip `lifecycle.state` here.
+      tracker.record(100, 0); // crosses 60
       await tracker.flush();
       await lifecycle.flush();
       expect(lifecycle.state).toBe("dispatching");
