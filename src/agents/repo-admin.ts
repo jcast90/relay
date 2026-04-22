@@ -120,6 +120,13 @@ export function buildRepoAdminSystemPrompt(input: RepoAdminRoleInput): string {
     "    single ticket.",
     "Justify the choice in one sentence so the decision is auditable on",
     "the channel feed.",
+    "",
+    "## Recording decisions",
+    "When you commit to a course of action (spawn a worker, sequence a",
+    "merge, defer a ticket), post the decision to the channel feed via",
+    "`channel_post` — a single append-only entry with the rationale. That",
+    "entry is what future repo-admin sessions re-read via `channel_get` to",
+    "reconstruct state; if it isn't on the feed, it didn't happen.",
   ].join("\n");
 }
 

@@ -12,6 +12,7 @@ import {
   type WorkRequest,
 } from "../domain/agent.js";
 import { parsePhasePlan, type PhasePlan } from "../domain/phase-plan.js";
+import { getDisallowedBuiltinsForRole, type AgentRoleName } from "../mcp/role-allowlist.js";
 import type { CommandInvoker } from "./command-invoker.js";
 
 interface CliAgentOptions {
@@ -40,6 +41,25 @@ interface CliAgentOptions {
    * as before" — no change for existing callers.
    */
   fullAccess?: boolean;
+  /**
+   * AL-11: per-role restriction tag. When set, the adapter:
+   *  - sets `RELAY_AGENT_ROLE=<role>` in the subprocess env so the MCP
+   *    server's per-role allowlist (`src/mcp/role-allowlist.ts`) is active
+   *    for the dispatched session.
+   *  - passes `--disallowed-tools <names,…>` to the Claude CLI for any
+   *    built-in tools denied by {@link getDisallowedBuiltinsForRole} — the
+   *    MCP allowlist cannot gate Edit/Write/Bash because those don't
+   *    round-trip through MCP.
+   *
+   * `undefined` preserves pre-AL-11 behaviour (unrestricted session).
+   *
+   * Independent of {@link fullAccess}: a repo-admin channel can legitimately
+   * have full-access on (skip permission prompts) AND a restricted role
+   * (deny Edit/Write/Bash) simultaneously — the flags don't fight because
+   * `--disallowed-tools` is enforced by the Claude CLI even when
+   * `--dangerously-skip-permissions` is set.
+   */
+  role?: AgentRoleName;
 }
 
 interface ParsedProviderResult {
@@ -112,6 +132,24 @@ const CODEX_PASS_ENV: readonly string[] = [
   "CODEX_HOME",
 ];
 
+/**
+ * AL-11: append `--disallowed-tools Edit,Write,NotebookEdit,Bash` (and any
+ * other built-ins the role denies) to the Claude CLI args, IN-PLACE. No-op
+ * when the role has no built-in lockdown — keeps the flag absent for
+ * unrestricted sessions so pre-AL-11 behaviour is bit-for-bit identical.
+ *
+ * Exported so unit tests can assert on the exact args layout without
+ * reaching into the CLI agent class internals. Kept at module scope rather
+ * than as a method so it's callable from both the buffered and streaming
+ * Claude code paths without duplication.
+ */
+export function appendDisallowedBuiltinArgs(args: string[], role: AgentRoleName | undefined): void {
+  if (!role) return;
+  const disallowed = getDisallowedBuiltinsForRole(role);
+  if (disallowed.length === 0) return;
+  args.push("--disallowed-tools", disallowed.join(","));
+}
+
 abstract class CliAgentBase implements Agent {
   readonly id: string;
   readonly name: string;
@@ -130,6 +168,7 @@ abstract class CliAgentBase implements Agent {
    * constructed args without mutating `process.env`.
    */
   protected readonly fullAccess: boolean;
+  protected readonly role?: AgentRoleName;
 
   constructor(options: CliAgentOptions) {
     this.id = options.id;
@@ -141,6 +180,19 @@ abstract class CliAgentBase implements Agent {
     this.invoker = options.invoker;
     this.onStreamLine = options.onStreamLine;
     this.fullAccess = options.fullAccess === true;
+    this.role = options.role;
+  }
+
+  /**
+   * AL-11: env overlay applied when spawning the CLI. Sets
+   * `RELAY_AGENT_ROLE=<role>` so the MCP server in the dispatched session
+   * activates per-role enforcement. Returns `undefined` when the agent is
+   * unrestricted so the invoker's default env is untouched (parity with
+   * pre-AL-11 behaviour).
+   */
+  protected roleEnvOverlay(): Record<string, string> | undefined {
+    if (!this.role) return undefined;
+    return { RELAY_AGENT_ROLE: this.role };
   }
 
   async run(request: WorkRequest) {
@@ -210,6 +262,20 @@ export class CodexCliAgent extends CliAgentBase {
 
       args.push(prompt);
 
+      // AL-11: Codex CLI has no equivalent of `--disallowed-tools` today, so
+      // for restricted roles we can only propagate `RELAY_AGENT_ROLE` into
+      // the subprocess env (gating MCP-routed tools). Codex built-in tool
+      // lockdown is pending a provider-side flag — this is documented in
+      // agent_docs/repo-admin.md so callers don't mistake Codex repo-admin
+      // sessions for fully enforced ones.
+      if (this.role && getDisallowedBuiltinsForRole(this.role).length > 0) {
+        process.stderr.write(
+          `[relay] role=${this.role} built-in tool enforcement is deferred ` +
+            `for Codex (no --disallowed-tools equivalent yet); MCP-routed ` +
+            `tools are still gated.\n`
+        );
+      }
+
       const result = await this.invoker.exec({
         command: "codex",
         args,
@@ -219,6 +285,7 @@ export class CodexCliAgent extends CliAgentBase {
         // invoker strips secrets by default (OSS-03); opt these back in so
         // users who rely on env-based auth aren't silently broken.
         passEnv: [...CODEX_PASS_ENV],
+        env: this.roleEnvOverlay(),
       });
 
       if (result.exitCode !== 0) {
@@ -279,6 +346,12 @@ export class ClaudeCliAgent extends CliAgentBase {
       args.push("--model", this.model);
     }
 
+    // AL-11: when a restricted role is assigned to this agent, tell the
+    // Claude CLI to REFUSE to call the listed built-in tools. This is the
+    // only way to gate Edit/Write/Bash — they don't pass through MCP so the
+    // `role-allowlist` JSON-RPC check is cosmetic for them.
+    appendDisallowedBuiltinArgs(args, this.role);
+
     args.push(prompt);
 
     const result = await this.invoker.exec({
@@ -290,6 +363,7 @@ export class ClaudeCliAgent extends CliAgentBase {
       // The invoker strips secrets by default (OSS-03); opt these back in so
       // users who rely on env-based auth aren't silently broken.
       passEnv: [...CLAUDE_PASS_ENV],
+      env: this.roleEnvOverlay(),
     });
 
     if (result.exitCode !== 0) {
@@ -324,6 +398,8 @@ export class ClaudeCliAgent extends CliAgentBase {
     if (autoApprove) args.push("--dangerously-skip-permissions");
     else args.push("--permission-mode", "default");
     if (this.model) args.push("--model", this.model);
+    // AL-11: same `--disallowed-tools` lockdown as the buffered path.
+    appendDisallowedBuiltinArgs(args, this.role);
     args.push(prompt);
 
     const spawnFn = this.invoker.spawn!;
@@ -332,6 +408,8 @@ export class ClaudeCliAgent extends CliAgentBase {
       args,
       cwd: this.cwd,
       timeoutMs: 300_000,
+      passEnv: [...CLAUDE_PASS_ENV],
+      env: this.roleEnvOverlay(),
     });
 
     let stdoutBuf = "";

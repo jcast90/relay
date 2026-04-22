@@ -46,7 +46,8 @@ Data-driven in `src/mcp/role-allowlist.ts`. Repo-admin can call:
 
 - `channel_task_board` — read the ticket board
 - `channel_get` — read decisions + feed + run links in one call
-- `channel_post` — append-only status updates on the channel feed
+- `channel_post` — append-only status updates on the channel feed (writes a
+  new entry; cannot edit or retract prior entries)
 - `harness_running_tasks` — cross-workspace running-task view
 - `harness_list_runs` / `harness_get_run_detail` — read-only run state
 - `spawn_worker` — **declared, stubbed** until AL-14 fills in the handler
@@ -56,7 +57,42 @@ Denied by design: file edits (`Edit`, `Write`, `NotebookEdit`), test runners
 tool that mutates state outside `spawn_worker` (e.g. `harness_dispatch`,
 `harness_approve_plan`, `project_create`).
 
+### Deferred: read-only git log + PR-state MCP tools
+
+Repo-admin needs git-log and PR-state visibility to sequence merges, but
+Bash is denied (above) and no first-class MCP tool exposes them yet. Access
+is deferred to a follow-up ticket (tentatively AL-XX) which will add a
+read-only `git_log` MCP tool and a PR-state query. Until then, repo-admin
+reads the channel feed's `tracked_prs` entries for PR state and proposes a
+worker when a git-log walk is actually required.
+
 ## Enforcement
+
+Enforcement runs on **two layers** because Claude Code's built-in tools
+(`Edit`, `Write`, `Bash`, `NotebookEdit`) run in-process in the `claude`
+CLI and never round-trip through MCP. An MCP-only allowlist would be
+cosmetic for exactly the attack surface this role is meant to lock down.
+
+**Layer 1 — Claude CLI `--disallowed-tools` (built-ins).**
+
+When a repo-admin session is spawned, `src/agents/cli-agents.ts` passes
+`--disallowed-tools Edit,Write,NotebookEdit,Bash` to the `claude` binary,
+and sets `RELAY_AGENT_ROLE=repo-admin` in the subprocess env. The CLI
+itself refuses to call any listed built-in — this is the only enforcement
+that actually gates `Edit`/`Write`/`Bash`, because those calls never reach
+the MCP boundary. The deny list is data-driven:
+`getDisallowedBuiltinsForRole(role)` in `src/mcp/role-allowlist.ts`, so
+future roles add their own lockdown by appending a map entry rather than
+editing adapter code.
+
+> **Codex:** Codex CLI has no `--disallowed-tools` equivalent today.
+> Codex repo-admin sessions still set `RELAY_AGENT_ROLE` (gating
+> MCP-routed tools) but **built-in tool lockdown is deferred pending a
+> provider-side flag**. The CliAgent prints a one-line stderr warning in
+> this case so it's visible in logs. Don't treat a Codex repo-admin
+> session as fully enforced until that flag exists.
+
+**Layer 2 — MCP server allowlist (JSON-RPC tools).**
 
 Role is read from the `RELAY_AGENT_ROLE` env var at the MCP server layer.
 Two consult points inside `src/mcp/server.ts`:
@@ -71,9 +107,30 @@ Two consult points inside `src/mcp/server.ts`:
   gets "propose a worker spawn instead") and adjusts.
 
 Unknown roles (i.e. any `RELAY_AGENT_ROLE` value that isn't mapped in
-`ROLE_ALLOWLISTS`) fall through to the unrestricted path. That's deliberate
-for the AL-12..AL-16 rollout — a new role opts into enforcement by adding
-an entry to the map, not by editing switch statements.
+`ROLE_ALLOWLISTS`) fall through to the unrestricted path — the opt-in model
+that lets AL-12..AL-16 add roles without editing switch statements. On MCP
+server startup, an unknown role triggers a **one-shot stderr warning**
+(`[relay] unknown RELAY_AGENT_ROLE=<value>, running unrestricted — check
+spelling`). Fail-open-with-loud-warn is the documented choice; fail-closed
+would block the rollout (any new role would break all sessions until a map
+entry landed). The warning ensures a typo never ships quietly as cosmetic
+enforcement.
+
+## Spawner wiring
+
+`createLiveAgents({ ..., role: "repo-admin" })` in `src/agents/factory.ts`
+threads the role through to every CLI agent it constructs. Each agent then:
+
+1. Sets `RELAY_AGENT_ROLE=<role>` in the spawned CLI subprocess env via
+   `CommandInvocation.env`, which flows through the default
+   `RELAY_*`-prefix env sanitizer in `src/agents/command-invoker.ts`.
+2. Appends `--disallowed-tools <…>` to the Claude CLI args (Claude only;
+   Codex sessions only get the env var plus the deferred-enforcement
+   warning).
+
+No current spawner sets `role: "repo-admin"` yet — AL-12 is where a concrete
+per-repo repo-admin session lifecycle lands. AL-11 ships the wiring, the
+policy definition, and the tests so AL-12 has something concrete to extend.
 
 ## Files of record
 

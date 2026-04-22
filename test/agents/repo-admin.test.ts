@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   REPO_ADMIN_ALLOWED_TOOLS,
@@ -10,10 +10,14 @@ import {
   spawnWorkerStub,
 } from "../../src/agents/repo-admin.js";
 import {
+  __resetUnknownRoleWarningsForTests,
   allowlistForRole,
   denyToolEnvelope,
+  getDisallowedBuiltinsForRole,
+  isKnownRole,
   isToolAllowedForRole,
   resolveCurrentRole,
+  warnIfUnknownRole,
 } from "../../src/mcp/role-allowlist.js";
 
 /**
@@ -177,6 +181,88 @@ describe("repo-admin role — system prompt", () => {
       channelId: "channel-abc-123",
     });
     expect(withChannel).toContain("channel-abc-123");
+  });
+});
+
+describe("repo-admin role — built-in tool lockdown (AL-11 B1)", () => {
+  it("getDisallowedBuiltinsForRole returns the documented deny list for repo-admin", () => {
+    // These are the exact four built-ins the Claude CLI must refuse for a
+    // repo-admin session. Order matters for the CLI flag's display, so we
+    // pin the array shape directly.
+    expect(getDisallowedBuiltinsForRole("repo-admin")).toEqual([
+      "Edit",
+      "Write",
+      "NotebookEdit",
+      "Bash",
+    ]);
+  });
+
+  it("returns an empty list for null / unknown roles", () => {
+    expect(getDisallowedBuiltinsForRole(null)).toEqual([]);
+    expect(getDisallowedBuiltinsForRole("eng-manager")).toEqual([]);
+  });
+});
+
+describe("role-allowlist — unknown-role hygiene (AL-11 I1)", () => {
+  beforeEach(() => {
+    __resetUnknownRoleWarningsForTests();
+  });
+
+  it("isKnownRole recognises repo-admin and rejects typos / unset roles", () => {
+    expect(isKnownRole("repo-admin")).toBe(true);
+    expect(isKnownRole("repoadmin")).toBe(false);
+    expect(isKnownRole("REPO-ADMIN")).toBe(false);
+    expect(isKnownRole(null)).toBe(false);
+  });
+
+  it("warns on stderr for unknown roles so typos don't ship as cosmetic enforcement", () => {
+    const calls: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    // Monkey-patch stderr.write for this test only; restore in finally.
+    (process.stderr as unknown as { write: typeof process.stderr.write }).write = ((
+      chunk: string | Uint8Array
+    ) => {
+      calls.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+      return true;
+    }) as typeof process.stderr.write;
+
+    try {
+      warnIfUnknownRole("repoadmin");
+      warnIfUnknownRole("repoadmin"); // second call should be a no-op (memoised)
+      warnIfUnknownRole("REPO-ADMIN"); // distinct typo still warns once
+    } finally {
+      (process.stderr as unknown as { write: typeof process.stderr.write }).write = original;
+    }
+
+    // Exactly two writes — one per distinct typo, not one per call.
+    expect(calls).toHaveLength(2);
+    for (const line of calls) {
+      expect(line).toContain("[relay]");
+      expect(line).toContain("unknown RELAY_AGENT_ROLE=");
+      expect(line).toContain("check spelling");
+    }
+    expect(calls[0]).toContain("repoadmin");
+    expect(calls[1]).toContain("REPO-ADMIN");
+  });
+
+  it("does NOT warn for known roles or null", () => {
+    const calls: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    (process.stderr as unknown as { write: typeof process.stderr.write }).write = ((
+      chunk: string | Uint8Array
+    ) => {
+      calls.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+      return true;
+    }) as typeof process.stderr.write;
+
+    try {
+      warnIfUnknownRole(null);
+      warnIfUnknownRole("repo-admin");
+    } finally {
+      (process.stderr as unknown as { write: typeof process.stderr.write }).write = original;
+    }
+
+    expect(calls).toHaveLength(0);
   });
 });
 

@@ -1,6 +1,7 @@
 import type { Agent, AgentProvider, AgentRole } from "../domain/agent.js";
 import type { AgentSpecialty } from "../domain/specialty.js";
 import { setAgentName } from "../domain/agent-names.js";
+import type { AgentRoleName } from "../mcp/role-allowlist.js";
 
 import { ClaudeCliAgent, CodexCliAgent } from "./cli-agents.js";
 import { NodeCommandInvoker, type CommandInvoker } from "./command-invoker.js";
@@ -69,6 +70,26 @@ interface AgentFactoryOptions {
    * forward it here.
    */
   fullAccess?: boolean;
+  /**
+   * AL-11: apply a restricted role to EVERY agent produced by this factory.
+   * Today the only configured role is `repo-admin`; additional roles opt in
+   * via `src/mcp/role-allowlist.ts`. Passing this causes each CLI agent to:
+   *   - set `RELAY_AGENT_ROLE=<role>` in the spawned provider subprocess
+   *     (activates the MCP server's per-role allowlist for that session), and
+   *   - receive `--disallowed-tools <names,…>` on the Claude CLI args for
+   *     the built-ins denied to this role (Edit/Write/NotebookEdit/Bash for
+   *     repo-admin). MCP-layer enforcement alone is cosmetic for those
+   *     built-ins — they never round-trip through MCP.
+   *
+   * `undefined` (the default) preserves pre-AL-11 behaviour: no role, no
+   * restriction, full tool surface. AL-12 is where a concrete spawner picks
+   * which agent specs get `role: "repo-admin"`; AL-11 ships the wiring and
+   * the tests so the surface is real rather than dead code.
+   *
+   * Independent of {@link fullAccess}: a repo-admin channel may legitimately
+   * have full-access on and the restricted role on at the same time.
+   */
+  role?: AgentRoleName;
 }
 
 export function createLiveAgents(options: AgentFactoryOptions): Agent[] {
@@ -97,6 +118,7 @@ export function createLiveAgents(options: AgentFactoryOptions): Agent[] {
       invoker,
       onStreamLine,
       fullAccess: options.fullAccess,
+      role: options.role,
     });
   });
 }

@@ -26,6 +26,7 @@ import {
   denyToolEnvelope,
   isToolAllowedForRole,
   resolveCurrentRole,
+  warnIfUnknownRole,
 } from "./role-allowlist.js";
 import { REPO_ADMIN_TOOL_STUBS, spawnWorkerStub } from "../agents/repo-admin.js";
 
@@ -59,6 +60,14 @@ export interface McpHandlerContext {
 export async function buildMcpMessageHandler(
   workspaceRoot: string
 ): Promise<{ handler: McpMessageHandler; context: McpHandlerContext }> {
+  // AL-11 (I1 fix): if RELAY_AGENT_ROLE is set to a value we don't recognise,
+  // log a one-shot warning to stderr on startup. The allowlist fall-through
+  // on unknown roles is still the documented behaviour (new roles opt IN by
+  // adding a map entry), but an unrecognised value running with no
+  // enforcement needs to be visible in logs — a silent typo shipping as
+  // cosmetic security is the opposite of what this layer is for.
+  warnIfUnknownRole(resolveCurrentRole());
+
   const paths = getHarnessWorkspacePaths(workspaceRoot);
   const artifactStore = new LocalArtifactStore(paths.artifactsDir, getHarnessStore());
   const crosslinkStore = new CrosslinkStore(undefined, getHarnessStore());
