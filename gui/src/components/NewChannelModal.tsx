@@ -186,7 +186,9 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           New channel
-          <button className="close-btn" onClick={onClose}>×</button>
+          <button className="close-btn" onClick={onClose}>
+            ×
+          </button>
         </div>
         <div className="modal-body">
           {step === 1 && (
@@ -202,9 +204,7 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
                   placeholder="oauth-api-users"
                 />
                 {name && slug !== name && (
-                  <small style={{ color: "var(--color-text-dim)" }}>
-                    will be #{slug}
-                  </small>
+                  <small style={{ color: "var(--color-text-dim)" }}>will be #{slug}</small>
                 )}
               </label>
               <label>
@@ -222,8 +222,8 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
             <div className="wizard-step">
               <h3>Repos</h3>
               <p className="help">
-                Attach workspaces to this channel. Each becomes a pingable <code>@alias</code>.
-                One repo must be primary — its agent receives the kickoff message.
+                Attach workspaces to this channel. Each becomes a pingable <code>@alias</code>. One
+                repo must be primary — its agent receives the kickoff message.
               </p>
               <div className="repo-list-step">
                 <input
@@ -275,7 +275,10 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
                             <span className="repo-primary-radio placeholder" />
                           )}
                           {row.selected && !isPrimary ? (
-                            <label className="repo-spawn-toggle" title="Open an external Terminal agent">
+                            <label
+                              className="repo-spawn-toggle"
+                              title="Open an external Terminal agent"
+                            >
                               <input
                                 type="checkbox"
                                 checked={row.spawn}
@@ -299,9 +302,9 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
             <div className="wizard-step">
               <h3>Kick-off</h3>
               <p className="help">
-                This first message goes straight to the primary agent (@{
-                  selectedRows.find((r) => r.workspace.workspaceId === primaryWorkspaceId)?.alias
-                }). The classifier assigns a tier and plans tickets.
+                This first message goes straight to the primary agent (@
+                {selectedRows.find((r) => r.workspace.workspaceId === primaryWorkspaceId)?.alias}).
+                The classifier assigns a tier and plans tickets.
               </p>
               <label>
                 First message (optional)
@@ -366,5 +369,8 @@ function basename(p: string): string {
 }
 
 function defaultAlias(repoPath: string): string {
-  return basename(repoPath).replace(/[^a-z0-9-]/gi, "").toLowerCase().slice(0, 12);
+  return basename(repoPath)
+    .replace(/[^a-z0-9-]/gi, "")
+    .toLowerCase()
+    .slice(0, 12);
 }

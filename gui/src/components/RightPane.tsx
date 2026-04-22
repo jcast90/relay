@@ -20,13 +20,7 @@ type Props = {
   onRefresh: () => void;
 };
 
-export function RightPane({
-  channel,
-  sessionId,
-  onSelectSession,
-  refreshTick,
-  onRefresh,
-}: Props) {
+export function RightPane({ channel, sessionId, onSelectSession, refreshTick, onRefresh }: Props) {
   const [tab, setTab] = useState<Tab>("threads");
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [prs, setPrs] = useState<TrackedPrRow[]>([]);
@@ -70,7 +64,11 @@ export function RightPane({
     <div className="right-rail">
       <div className="rail-tabs">
         {(["threads", "decisions", "prs"] as Tab[]).map((t) => (
-          <div key={t} className={`rail-tab ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>
+          <div
+            key={t}
+            className={`rail-tab ${tab === t ? "active" : ""}`}
+            onClick={() => setTab(t)}
+          >
             {t === "threads" ? "Threads" : t === "decisions" ? "Decisions" : "PRs"}
           </div>
         ))}
@@ -175,7 +173,10 @@ function PrsTab({
                   className={`pr-dot pr-state-${r.prState ?? "unknown"}`}
                   title={`state: ${r.prState ?? "-"}`}
                 />
-                <span className={`pr-dot pr-ci-${r.ci ?? "unknown"}`} title={`ci: ${r.ci ?? "-"}`} />
+                <span
+                  className={`pr-dot pr-ci-${r.ci ?? "unknown"}`}
+                  title={`ci: ${r.ci ?? "-"}`}
+                />
                 <span
                   className={`pr-dot pr-review-${r.review ?? "unknown"}`}
                   title={`review: ${r.review ?? "-"}`}
@@ -268,7 +269,13 @@ function PendingPlanCta({
           }}
         >
           <div style={{ fontWeight: 600, marginBottom: 4 }}>Plan awaiting approval</div>
-          <div style={{ fontSize: "var(--font-size-xs)", color: "var(--color-text-muted)", marginBottom: 8 }}>
+          <div
+            style={{
+              fontSize: "var(--font-size-xs)",
+              color: "var(--color-text-muted)",
+              marginBottom: 8,
+            }}
+          >
             {p.featureRequest.slice(0, 80)}
           </div>
           <div style={{ display: "flex", gap: 6 }}>

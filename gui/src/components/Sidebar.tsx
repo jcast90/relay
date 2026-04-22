@@ -75,9 +75,7 @@ export function Sidebar({
           </header>
           {starredOpen && (
             <div>
-              {starred.length === 0 && (
-                <div className="sidebar-empty">No starred channels</div>
-              )}
+              {starred.length === 0 && <div className="sidebar-empty">No starred channels</div>}
               {starred.map((c) => (
                 <ChannelRow
                   key={c.channelId}
@@ -114,9 +112,7 @@ export function Sidebar({
           </header>
           {channelsOpen && (
             <div>
-              {active.length === 0 && (
-                <div className="sidebar-empty">No active channels</div>
-              )}
+              {active.length === 0 && <div className="sidebar-empty">No active channels</div>}
               {active.map((c) => (
                 <ChannelRow
                   key={c.channelId}

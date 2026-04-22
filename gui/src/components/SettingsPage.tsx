@@ -54,9 +54,7 @@ export function SettingsPage({ settings, onSaved, onClose }: Props) {
         {section === "ticketing" && (
           <TicketingSection draft={draft} onChange={save} saving={saving} error={error} />
         )}
-        {section === "general" && (
-          <GeneralSection />
-        )}
+        {section === "general" && <GeneralSection />}
       </div>
     </div>
   );
@@ -86,8 +84,7 @@ function TicketingSection({
     {
       value: "linear",
       title: "Linear",
-      desc:
-        "Mirror issues from a Linear project onto the channel board. Polled on an interval.",
+      desc: "Mirror issues from a Linear project onto the channel board. Polled on an interval.",
     },
     {
       value: "none",
@@ -106,10 +103,7 @@ function TicketingSection({
         </p>
         <div className="settings-radio-group">
           {providers.map((p) => (
-            <label
-              key={p.value}
-              className={draft.ticketProvider === p.value ? "selected" : ""}
-            >
+            <label key={p.value} className={draft.ticketProvider === p.value ? "selected" : ""}>
               <input
                 type="radio"
                 name="ticket-provider"
@@ -131,17 +125,15 @@ function TicketingSection({
         <div className="settings-section">
           <h3>Linear</h3>
           <p className="help">
-            Relay polls Linear every{" "}
-            <strong>{draft.linearPollSeconds}s</strong> and mirrors issues tagged to the channel.
+            Relay polls Linear every <strong>{draft.linearPollSeconds}s</strong> and mirrors issues
+            tagged to the channel.
           </p>
           <label>
             API token
             <input
               type="password"
               value={draft.linearApiToken}
-              onChange={(e) =>
-                onChange({ ...draft, linearApiToken: e.target.value })
-              }
+              onChange={(e) => onChange({ ...draft, linearApiToken: e.target.value })}
               placeholder="lin_api_…"
             />
           </label>
@@ -149,9 +141,7 @@ function TicketingSection({
             Workspace slug
             <input
               value={draft.linearWorkspace}
-              onChange={(e) =>
-                onChange({ ...draft, linearWorkspace: e.target.value })
-              }
+              onChange={(e) => onChange({ ...draft, linearWorkspace: e.target.value })}
               placeholder="acme-inc"
             />
           </label>
