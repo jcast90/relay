@@ -14,12 +14,20 @@
  */
 import type { CiSummary, EnrichedPR, HarnessPR, HarnessScm, ReviewDecision } from "./scm.js";
 import type { ChannelStore } from "../channels/channel-store.js";
+import type { PrReviewFindings } from "../domain/pr-row.js";
 
 export interface TrackedPr {
   ticketId: string;
   channelId: string;
   pr: HarnessPR;
   repo: { owner: string; name: string };
+  /**
+   * AL-5 marker: `true` when the PR was opened by a worker spawned under an
+   * autonomous ticket. The PR reviewer wrapper uses this flag to scope its
+   * subagent runs — manual `rly pr-watch` rows stay untouched. Defaults to
+   * `false` when the field is omitted.
+   */
+  openedByAutonomous?: boolean;
 }
 
 export type FollowUpKind = "fix-ci" | "address-reviews";
@@ -42,6 +50,11 @@ export interface FollowUpDispatcher {
  * Snapshot of a single tracked entry — exactly what `listTracked()` returns.
  * Declared at module scope so callers outside this file (pr-watcher-factory)
  * can type their `onSnapshot` mirror sinks.
+ *
+ * `openedByAutonomous` and `reviewFindings` (AL-5) are surfaced through the
+ * snapshot so the on-disk mirror (`tracked-prs.json`) carries them for the
+ * TUI / GUI. Both fall back to their schema-default on rows that predate
+ * AL-5.
  */
 export type TrackedPrSnapshot = {
   ticketId: string;
@@ -49,6 +62,8 @@ export type TrackedPrSnapshot = {
   pr: TrackedPr["pr"];
   repo: TrackedPr["repo"];
   last: EnrichedPR | null;
+  openedByAutonomous: boolean;
+  reviewFindings: PrReviewFindings | null;
 };
 
 export interface PrPollerOptions {
@@ -64,11 +79,25 @@ export interface PrPollerOptions {
    * are swallowed on failure so polling stays crash-free.
    */
   onSnapshot?: (rows: TrackedPrSnapshot[]) => void;
+  /**
+   * AL-5: fired synchronously from `track()` when a new PR is registered.
+   * Subscribers (the `PrReviewer` wrapper) decide whether to act based on
+   * `entry.openedByAutonomous`. Errors thrown by the listener are caught
+   * and logged — a misbehaving reviewer must not poison tracking.
+   */
+  onTrack?: (entry: TrackedPr) => void;
 }
 
 interface TrackedState {
   entry: TrackedPr;
   last: EnrichedPR | null;
+  /**
+   * AL-5 review metadata — `null` until the reviewer wrapper stashes
+   * findings via {@link PrPoller.setReviewFindings}. Retained in memory so
+   * the snapshot writer persists it to `tracked-prs.json` without an
+   * external state store.
+   */
+  reviewFindings: PrReviewFindings | null;
 }
 
 const DEFAULT_INTERVAL_MS = 30_000;
@@ -80,6 +109,7 @@ export class PrPoller {
   private readonly intervalMs: number;
   private readonly tracked = new Map<string, TrackedState>();
   private readonly onSnapshot?: (rows: TrackedPrSnapshot[]) => void;
+  private readonly onTrackListener?: (entry: TrackedPr) => void;
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
@@ -90,15 +120,42 @@ export class PrPoller {
     this.scheduler = options.scheduler;
     this.intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
     this.onSnapshot = options.onSnapshot;
+    this.onTrackListener = options.onTrack;
   }
 
   track(entry: TrackedPr): void {
-    this.tracked.set(entry.ticketId, { entry, last: null });
+    this.tracked.set(entry.ticketId, { entry, last: null, reviewFindings: null });
+    // Fire the onTrack listener BEFORE the snapshot so a reviewer stashing
+    // initial "review in progress" findings synchronously shows up in the
+    // very first persisted snapshot. Errors are swallowed so a misbehaving
+    // reviewer doesn't poison tracking.
+    if (this.onTrackListener) {
+      try {
+        this.onTrackListener(entry);
+      } catch (err) {
+        console.warn("[pr-poller] onTrack listener threw; ignoring", err);
+      }
+    }
     this.fireSnapshot();
   }
 
   untrack(ticketId: string): void {
     this.tracked.delete(ticketId);
+    this.fireSnapshot();
+  }
+
+  /**
+   * AL-5: stash structured review findings produced by the
+   * `pr-review-toolkit:code-reviewer` subagent on the tracked row. No-ops
+   * silently if the ticket is no longer tracked (the PR could have merged
+   * between review kickoff and result delivery — the reviewer is long
+   * enough that this is a real race, not a theoretical one). Fires a
+   * snapshot so readers pick up the new findings on the next tick boundary.
+   */
+  setReviewFindings(ticketId: string, findings: PrReviewFindings): void {
+    const state = this.tracked.get(ticketId);
+    if (!state) return;
+    state.reviewFindings = findings;
     this.fireSnapshot();
   }
 
@@ -115,6 +172,8 @@ export class PrPoller {
       pr: state.entry.pr,
       repo: state.entry.repo,
       last: state.last,
+      openedByAutonomous: state.entry.openedByAutonomous === true,
+      reviewFindings: state.reviewFindings,
     }));
   }
 
