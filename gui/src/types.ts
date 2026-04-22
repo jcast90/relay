@@ -62,6 +62,10 @@ export type Channel = {
   // subprocesses dispatched for this channel skip permission prompts.
   // Optional for back-compat; a missing field means "off".
   fullAccess?: boolean;
+  // "channel" (default) or "dm". DMs are kickoff surfaces — same storage
+  // + streaming path as a channel, but the sidebar segregates them and the
+  // UI hides tabs + shows a Promote-to-channel affordance.
+  kind?: "channel" | "dm";
   // ISO 8601; optional for back-compat with older channel files.
   createdAt?: string;
   updatedAt?: string;

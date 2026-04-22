@@ -3,6 +3,7 @@ import { api } from "../api";
 import type { Channel, ChannelEntry, PersistedChatMessage } from "../types";
 import { renderWithMentions } from "../lib/mentions";
 import { toUiChannel } from "../lib/channel";
+import { agentAvatar } from "../lib/agents";
 import type { ActiveStream } from "./Composer";
 
 const ACTIVITY_TOP_N = 3;
@@ -69,9 +70,7 @@ function FeedView({
     <>
       {entries.map((e) => (
         <div key={e.entryId} className={`message role-${e.type}`}>
-          <div className="msg-avatar">
-            {(e.fromDisplayName ?? e.type).slice(0, 1).toUpperCase()}
-          </div>
+          <MsgAvatar seed={e.fromAgentId ?? e.fromDisplayName ?? e.type} />
           <div>
             <div className="msg-head">
               <span className="msg-author">{e.fromDisplayName ?? e.type}</span>
@@ -112,11 +111,7 @@ function SessionMessages({
         const canRewind = m.role === "user" && !!rewindKey && !streaming;
         return (
           <div key={i} className={`message role-${m.role}`}>
-            <div className="msg-avatar">
-              {m.agentAlias
-                ? m.agentAlias.slice(0, 1).toUpperCase()
-                : m.role.slice(0, 1).toUpperCase()}
-            </div>
+            <MsgAvatar seed={m.agentAlias ?? m.role} />
             <div>
               <div className="msg-head">
                 <span className="msg-author">{m.agentAlias ? `@${m.agentAlias}` : m.role}</span>
@@ -326,4 +321,17 @@ function formatTime(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+function MsgAvatar({ seed }: { seed: string }) {
+  const av = agentAvatar(seed);
+  return (
+    <div
+      className="msg-avatar"
+      style={{ background: av.background, color: av.color }}
+      title={seed}
+    >
+      {av.glyph}
+    </div>
+  );
 }

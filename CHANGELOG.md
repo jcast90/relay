@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.3.0
+
+### Minor Changes
+
+- Tidewater v2 — feature-complete pass. DMs land as a first-class surface, attach-on-command inlines repo attachment from the composer, and agent avatars gain deterministic glyphs + color hashes. Inter + JetBrains Mono now ship as bundled .woff2 files for offline deployments.
+
+  **DMs (§4.6, §5.2, §8.1, §8.2)**
+  - New `✉ Direct messages` sidebar section with a per-DM list and `+` button
+  - `NewDmModal` — pick a workspace, mint a DM-kind channel
+  - `DmView` — hides tabs, shows a yellow "kickoff surface" banner, Promote-to-channel CTA
+  - `/new` slash command in the DM composer → opens PromoteDmModal
+  - `PromoteDmModal` — rename + attach additional repos + flip kind to "channel", preserving all existing DM history
+  - Backend: `Channel.kind: Option<String>` ("channel" | "dm", back-compat default)
+  - New Tauri commands: `create_dm`, `promote_dm`
+  - DMs reuse the full channel infrastructure (sessions, rewind, streams, mentions) so the only delta is sidebar segregation + chrome
+
+  **Attach-on-command (§8.4)**
+  - Composer's `MentionPopover` now surfaces an "Attach @foo" row when the typed alias matches a registered workspace that's not attached to the current channel. One click attaches via `updateChannelRepos` and inserts the mention.
+
+  **Agent glyphs + color hash**
+  - `agentAvatar(agentId, displayName)` derives a deterministic glyph (◆ ▲ ● ■ ◈ ▼ ◉ ◇ ★ ☗ ✦ ✧ ♆ ♄ ♃ ♇) and HSL background per agent. Renders in the channel header agent stack and per-message avatars.
+
+  **Bundled fonts**
+  - `gui/public/fonts/Inter.woff2` (variable) and `JetBrainsMono.woff2` ship with the bundle. `@font-face` prefers them over OS fallbacks.
+
+  **Sidebar shell**
+  - Activity / Threads / Running nav rows scaffolded at the top of the sidebar with Activity wired to a real count (channels updated < 1h ago). Threads/Running remain visual-only for this release — cross-channel state aggregation is a follow-up.
+
+  **Deferred**
+  - Tier auto-classification — field + manual selector ship, classifier integration is a separate backend change
+  - `renderWithMentions` JSX unit test — needs React-at-root or a gui-local vitest config
+  - Visual tweaks panel (§8.3) — handoff notes it as non-essential
+  - `UiChannel` dual-repr — pragmatic keep
+
 ## 0.2.0
 
 ### Minor Changes

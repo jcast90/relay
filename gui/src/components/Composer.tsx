@@ -1,6 +1,6 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, type ChatEvent } from "../api";
-import type { Channel, ChatSession } from "../types";
+import type { Channel, ChatSession, WorkspaceEntry } from "../types";
 
 type ActivityEntry = { text: string; ts: number };
 
@@ -21,6 +21,9 @@ type Props = {
   streaming: boolean;
   onStartStream: StreamDispatch;
   onSessionCreated: (sessionId: string) => void;
+  // DM-only: invoked when the user types `/new` at the start of the
+  // composer and hits Enter. If omitted, `/new` is sent as a normal message.
+  onSlashNew?: () => void;
 };
 
 export function Composer({
@@ -30,6 +33,7 @@ export function Composer({
   streaming,
   onStartStream,
   onSessionCreated,
+  onSlashNew,
 }: Props) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -39,6 +43,15 @@ export function Composer({
   const [mention, setMention] = useState<{ start: number; query: string; index: number } | null>(
     null
   );
+  const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>([]);
+  const [attaching, setAttaching] = useState<string | null>(null);
+
+  // Load the global workspace pool once — used by the attach-on-command
+  // row in the mention popover. Silently empty on failure; worst case we
+  // just don't offer the "Attach @foo?" affordance.
+  useEffect(() => {
+    api.listWorkspaces().then(setWorkspaces).catch(() => setWorkspaces([]));
+  }, []);
 
   const aliases = channel.repoAssignments.map((r) => r.alias);
   const primaryId = channel.primaryWorkspaceId ?? channel.repoAssignments[0]?.workspaceId;
@@ -55,6 +68,55 @@ export function Composer({
   const filteredAliases = mention
     ? aliases.filter((a) => a.toLowerCase().startsWith(mention.query.toLowerCase()))
     : [];
+
+  // Attach-on-command: when the user types `@foo` and `foo` is a
+  // registered workspace that's NOT currently attached to this channel,
+  // surface an inline "Attach @foo" action so they don't have to open the
+  // settings drawer. Empty query → no suggestion.
+  const attachedWorkspaceIds = new Set(
+    channel.repoAssignments.map((r) => r.workspaceId)
+  );
+  const attachCandidate = mention && mention.query
+    ? workspaces.find((w) => {
+        if (attachedWorkspaceIds.has(w.workspaceId)) return false;
+        const alias = basename(w.repoPath)
+          .replace(/[^a-z0-9-]/gi, "")
+          .toLowerCase()
+          .slice(0, 12);
+        return alias.startsWith(mention.query.toLowerCase());
+      })
+    : undefined;
+  const attachAlias = attachCandidate
+    ? basename(attachCandidate.repoPath)
+        .replace(/[^a-z0-9-]/gi, "")
+        .toLowerCase()
+        .slice(0, 12)
+    : "";
+
+  const attachNow = async () => {
+    if (!attachCandidate) return;
+    setAttaching(attachCandidate.workspaceId);
+    try {
+      const next = [
+        ...channel.repoAssignments.map((r) => ({
+          alias: r.alias,
+          workspaceId: r.workspaceId,
+          repoPath: r.repoPath,
+        })),
+        {
+          alias: attachAlias,
+          workspaceId: attachCandidate.workspaceId,
+          repoPath: attachCandidate.repoPath,
+        },
+      ];
+      await api.updateChannelRepos(channel.channelId, next);
+      applyMention(attachAlias);
+    } catch (err) {
+      alert(`Attach failed: ${err}`);
+    } finally {
+      setAttaching(null);
+    }
+  };
 
   const applyMention = (alias: string) => {
     if (!mention) return;
@@ -93,6 +155,13 @@ export function Composer({
   const send = async () => {
     const raw = text.trim();
     if (!raw) return;
+    // `/new` at the start of a DM composer promotes the DM to a channel
+    // instead of sending. Short-circuits before any backend call.
+    if (onSlashNew && raw === "/new") {
+      setText("");
+      onSlashNew();
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -183,7 +252,8 @@ export function Composer({
   };
 
   const disabled = busy || streaming;
-  const showMentions = !!mention && filteredAliases.length > 0;
+  const showMentions =
+    !!mention && (filteredAliases.length > 0 || !!attachCandidate);
 
   return (
     <div className="composer">
@@ -202,6 +272,13 @@ export function Composer({
             aliases={filteredAliases}
             index={mention!.index}
             onPick={applyMention}
+            attachCandidate={
+              attachCandidate
+                ? { alias: attachAlias, path: attachCandidate.repoPath }
+                : undefined
+            }
+            attaching={attaching === attachCandidate?.workspaceId}
+            onAttach={attachNow}
           />
         )}
         <textarea
@@ -239,11 +316,17 @@ function MentionPopover({
   aliases,
   index,
   onPick,
+  attachCandidate,
+  attaching,
+  onAttach,
 }: {
   channel: Channel;
   aliases: string[];
   index: number;
   onPick: (alias: string) => void;
+  attachCandidate?: { alias: string; path: string };
+  attaching: boolean;
+  onAttach: () => void;
 }) {
   return (
     <div className="mention-popover" role="listbox">
@@ -266,8 +349,34 @@ function MentionPopover({
           </button>
         );
       })}
+      {attachCandidate && (
+        <button
+          type="button"
+          className="mention-option"
+          style={{
+            borderTop: aliases.length > 0 ? "1px solid var(--color-paper-line)" : undefined,
+            marginTop: aliases.length > 0 ? 4 : 0,
+            paddingTop: aliases.length > 0 ? 8 : undefined,
+          }}
+          disabled={attaching}
+          onMouseDown={(e) => {
+            e.preventDefault();
+            onAttach();
+          }}
+          title="Attach this workspace to the channel"
+        >
+          <span className="mention-alias">+ @{attachCandidate.alias}</span>
+          <span className="mention-path">
+            {attaching ? "attaching…" : `attach ${attachCandidate.path}`}
+          </span>
+        </button>
+      )}
     </div>
   );
+}
+
+function basename(p: string): string {
+  return p.split("/").filter(Boolean).pop() ?? p;
 }
 
 function parseAliasPrefix(

@@ -124,20 +124,22 @@
   50%      { opacity: 1;    transform: scale(1.08); }
 }
 
-/* Local-only font fallback: the design bundles Inter + JetBrains Mono,
-   but we defer the .woff2 download (see gui/public/fonts/README.md).
-   Falls back to OS-installed Inter/JetBrains Mono, then generic stacks. */
+/* Bundled Inter (variable) + JetBrains Mono served from Tauri's public/
+   dir so the app is fully offline-capable. OS-installed fallbacks stay in
+   the src list so a stripped bundle still renders in a reasonable font. */
 @font-face {
   font-family: "Inter";
-  src: local("Inter"), local("Inter-Regular");
-  font-weight: 400 700;
+  src: url("/fonts/Inter.woff2") format("woff2"),
+       local("Inter"), local("Inter-Regular");
+  font-weight: 100 900;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
   font-family: "JetBrains Mono";
-  src: local("JetBrains Mono"), local("JetBrainsMono-Regular");
-  font-weight: 400 600;
+  src: url("/fonts/JetBrainsMono.woff2") format("woff2"),
+       local("JetBrains Mono"), local("JetBrainsMono-Regular");
+  font-weight: 400 700;
   font-style: normal;
   font-display: swap;
 }

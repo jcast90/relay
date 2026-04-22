@@ -15,6 +15,7 @@ import { ChannelSettingsDrawer } from "./ChannelSettingsDrawer";
 import { Composer, reduceStream, type ActiveStream } from "./Composer";
 import { DecisionsView } from "./DecisionsView";
 import { MessageList } from "./MessageList";
+import { PromoteDmModal } from "./PromoteDmModal";
 
 type Props = {
   channel: Channel | null;
@@ -47,6 +48,7 @@ export function CenterPane({
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [stream, setStream] = useState<ActiveStream | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [promoteOpen, setPromoteOpen] = useState(false);
 
   useEffect(() => {
     if (!channel) return;
@@ -130,18 +132,32 @@ export function CenterPane({
     );
   }
 
+  const isDm = channel.kind === "dm";
+
   return (
     <div className="center-pane">
       <ChannelHeader
         channel={channel}
-        tab={tab}
+        tab={isDm ? "chat" : tab}
         onTabChange={setTab}
         rightRailOpen={rightRailOpen}
         onToggleRail={onToggleRail}
         onOpenSettings={() => setSettingsOpen(true)}
         onRefresh={onRefresh}
+        hideTabs={isDm}
       />
-      {tab === "chat" && (
+      {isDm && (
+        <DmBanner
+          channel={channel}
+          onPromoted={(newChannelId) => {
+            onRefresh();
+            // Promote keeps the same channelId (we just flip kind); no
+            // redirect needed, but the sidebar will move it to Channels.
+            void newChannelId;
+          }}
+        />
+      )}
+      {(isDm || tab === "chat") && (
         <>
           <MessageList
             channel={channel}
@@ -165,12 +181,15 @@ export function CenterPane({
             streaming={!!stream}
             onStartStream={setStream}
             onSessionCreated={onSessionCreated}
+            onSlashNew={isDm ? () => setPromoteOpen(true) : undefined}
           />
         </>
       )}
-      {tab === "board" && <BoardView tickets={tickets} settings={settings} />}
-      {tab === "decisions" && <DecisionsView decisions={decisions} channel={channel} />}
-      {settingsOpen && (
+      {!isDm && tab === "board" && <BoardView tickets={tickets} settings={settings} />}
+      {!isDm && tab === "decisions" && (
+        <DecisionsView decisions={decisions} channel={channel} />
+      )}
+      {settingsOpen && !isDm && (
         <ChannelSettingsDrawer
           channel={channel}
           onClose={() => setSettingsOpen(false)}
@@ -178,6 +197,68 @@ export function CenterPane({
           onArchived={() => onChannelRemoved(channel.channelId)}
         />
       )}
+      {promoteOpen && isDm && (
+        <PromoteDmModal
+          channel={channel}
+          onClose={() => setPromoteOpen(false)}
+          onPromoted={() => {
+            setPromoteOpen(false);
+            onRefresh();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function DmBanner({
+  channel,
+  onPromoted,
+}: {
+  channel: import("../types").Channel;
+  onPromoted: (channelId: string) => void;
+}) {
+  const [promoteOpen, setPromoteOpen] = useState(false);
+  return (
+    <>
+      <div
+        style={{
+          padding: "var(--space-4) var(--space-8)",
+          background: "rgba(232, 154, 43, 0.12)",
+          borderBottom: "1px solid var(--color-paper-line)",
+          fontSize: "var(--font-size-base)",
+          color: "var(--color-text-muted)",
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--space-5)",
+        }}
+      >
+        <span style={{ flex: 1 }}>
+          <strong style={{ color: "var(--color-text-primary)" }}>Kickoff surface.</strong>{" "}
+          You're 1:1 with this agent. Promote to a full channel when the work is real — try{" "}
+          <code
+            style={{
+              padding: "1px 6px",
+              background: "var(--color-paper-alt)",
+              borderRadius: 3,
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            /new
+          </code>{" "}
+          in the composer.
+        </span>
+        <button className="primary" onClick={() => setPromoteOpen(true)}>
+          Promote to channel →
+        </button>
+      </div>
+      {promoteOpen && (
+        <PromoteDmModal
+          channel={channel}
+          onClose={() => setPromoteOpen(false)}
+          onPromoted={onPromoted}
+        />
+      )}
+    </>
   );
 }

@@ -1,9 +1,8 @@
 # Fonts
 
-Tidewater uses Inter (UI) and JetBrains Mono (code). The CSS in
-`src/styles/tokens.css` currently falls back to OS-installed copies via
-`src: local(...)`. To ship fully offline, drop the variable .woff2 files
-here and extend the `@font-face` src lists to reference them first:
+Bundled variable fonts for Tidewater:
 
-- `Inter.woff2` — https://rsms.me/inter/inter.html (variable)
-- `JetBrainsMono.woff2` — https://www.jetbrains.com/lp/mono/ (variable)
+- `Inter.woff2` — Inter variable (Regular → Black). Source: https://rsms.me/inter/
+- `JetBrainsMono.woff2` — JetBrains Mono Regular. Source: https://www.jetbrains.com/lp/mono/
+
+Loaded via `@font-face` in `src/styles/tokens.css`. OS-installed copies remain in the fallback chain so a stripped bundle still renders.

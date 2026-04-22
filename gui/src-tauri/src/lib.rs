@@ -348,6 +348,83 @@ fn create_channel(
     cli_json(&args)
 }
 
+/// Mint a DM channel directly from Rust (no CLI round-trip). A DM is a
+/// regular Channel under the hood with `kind = "dm"` so it reuses
+/// sessions / rewind / streams, but the sidebar + center pane render it
+/// as a kickoff surface.
+#[tauri::command]
+fn create_dm(
+    workspace_id: String,
+    workspace_path: String,
+    alias: String,
+) -> Result<serde_json::Value, String> {
+    validate_id_segment(&workspace_id, "workspaceId")?;
+    validate_id_segment(&alias, "alias")?;
+
+    let now = chrono::Utc::now();
+    // `dm-` prefix makes DMs self-identifying in logs/filesystem even
+    // without loading the JSON. Timestamp + rand-ish ms suffix is good
+    // enough for local single-user state.
+    let channel_id = format!("dm-{}", now.timestamp_millis());
+    let channel = data::Channel {
+        channel_id: channel_id.clone(),
+        name: format!("@{}", alias),
+        description: String::new(),
+        status: "active".to_string(),
+        members: vec![],
+        pinned_refs: vec![],
+        repo_assignments: vec![data::RepoAssignment {
+            alias: alias.clone(),
+            workspace_id: workspace_id.clone(),
+            repo_path: workspace_path,
+        }],
+        primary_workspace_id: Some(workspace_id),
+        linear_project_id: None,
+        tier: None,
+        starred: false,
+        full_access: None,
+        kind: Some("dm".to_string()),
+        created_at: Some(now.to_rfc3339()),
+        updated_at: Some(now.to_rfc3339()),
+    };
+    data::save_channel(&channel)?;
+    Ok(serde_json::json!({ "channelId": channel_id }))
+}
+
+/// Promote a DM to a full channel. Flips `kind` → "channel", renames,
+/// and extends `repo_assignments` + primary via a fresh save.
+#[tauri::command]
+fn promote_dm(
+    channel_id: String,
+    name: String,
+    description: String,
+    repos: Vec<RepoAssignmentInput>,
+    #[allow(non_snake_case)] primaryWorkspaceId: Option<String>,
+) -> Result<(), String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    for repo in &repos {
+        validate_id_segment(&repo.alias, "repo.alias")?;
+        validate_id_segment(&repo.workspace_id, "repo.workspaceId")?;
+    }
+    let mut ch = data::load_channel(&channel_id)
+        .ok_or_else(|| format!("channel {} not found", channel_id))?;
+    ch.kind = Some("channel".to_string());
+    ch.name = name;
+    ch.description = description;
+    ch.repo_assignments = repos
+        .into_iter()
+        .map(|r| data::RepoAssignment {
+            alias: r.alias,
+            workspace_id: r.workspace_id,
+            repo_path: r.repo_path,
+        })
+        .collect();
+    if let Some(id) = primaryWorkspaceId {
+        ch.primary_workspace_id = Some(id);
+    }
+    data::save_channel(&ch)
+}
+
 #[tauri::command]
 fn archive_channel(channel_id: String) -> Result<serde_json::Value, String> {
     validate_id_segment(&channel_id, "channelId")?;
@@ -1956,6 +2033,8 @@ pub fn run() {
             create_channel,
             archive_channel,
             unarchive_channel,
+            create_dm,
+            promote_dm,
             set_channel_full_access,
             update_channel_repos,
             set_channel_starred,

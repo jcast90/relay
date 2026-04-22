@@ -136,6 +136,12 @@ pub struct Channel {
     /// files that predate the flag keep deserializing as `false`.
     #[serde(default)]
     pub full_access: Option<bool>,
+    /// "channel" (default) or "dm". DMs are kickoff surfaces: same channel
+    /// storage underneath (reuses sessions / rewind / streams) but the
+    /// sidebar segregates them and the UI hides tabs + shows a "promote
+    /// to channel" banner. Optional + `#[serde(default)]` for back-compat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
     /// ISO 8601 timestamps. Optional for back-compat with channel files
     /// written before these fields were tracked.
     #[serde(default)]

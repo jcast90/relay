@@ -8,6 +8,7 @@ type Props = {
   includeArchived: boolean;
   onSelect: (id: string) => void;
   onNewChannel: () => void;
+  onNewDm: () => void;
   onToggleIncludeArchived: (next: boolean) => void;
   onRefresh: () => void;
 };
@@ -31,15 +32,19 @@ export function Sidebar({
   includeArchived,
   onSelect,
   onNewChannel,
+  onNewDm,
   onToggleIncludeArchived,
   onRefresh,
 }: Props) {
   const [starredOpen, setStarredOpen] = useState(true);
   const [channelsOpen, setChannelsOpen] = useState(true);
+  const [dmsOpen, setDmsOpen] = useState(true);
 
   const sorted = useMemo(() => sortByActivity(channels), [channels]);
-  const starred = sorted.filter((c) => c.starred && c.status === "active");
-  const active = sorted.filter((c) => !c.starred && c.status === "active");
+  const isDm = (c: Channel) => c.kind === "dm";
+  const starred = sorted.filter((c) => c.starred && c.status === "active" && !isDm(c));
+  const active = sorted.filter((c) => !c.starred && c.status === "active" && !isDm(c));
+  const dms = sorted.filter((c) => c.status === "active" && isDm(c));
   const archived = sorted.filter((c) => c.status === "archived");
 
   const toggleStar = async (c: Channel) => {
@@ -127,6 +132,44 @@ export function Sidebar({
         </section>
 
         <section className="sidebar-section">
+          <header
+            className="sidebar-section-head"
+            onClick={() => setDmsOpen((v) => !v)}
+            role="button"
+          >
+            <span>✉ Direct messages</span>
+            <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+              <span className="count">{dms.length}</span>
+              <button
+                className="add-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onNewDm();
+                }}
+                title="Start a DM"
+              >
+                +
+              </button>
+            </span>
+          </header>
+          {dmsOpen && (
+            <div>
+              {dms.length === 0 && <div className="sidebar-empty">No DMs</div>}
+              {dms.map((c) => (
+                <div
+                  key={c.channelId}
+                  className={`sidebar-item ${c.channelId === selectedId ? "active" : ""}`}
+                  onClick={() => onSelect(c.channelId)}
+                >
+                  <span className="ch-sigil">✉</span>
+                  <span className="ch-name">{c.name}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="sidebar-section">
           <label
             style={{
               display: "flex",
@@ -201,23 +244,44 @@ function ChannelRow({
 }
 
 function ActivityBlock({ channels }: { channels: Channel[] }) {
-  const recent = channels.slice(0, 3);
-  if (recent.length === 0) return null;
+  // "Activity" = channels updated in the last hour. "Threads" and
+  // "Running" rows are scaffolded with 0 counts — the data paths are
+  // per-channel inside CenterPane today, so a cross-channel count would
+  // need App-level state. Keeping the rows visible matches the spec and
+  // keeps the scaffold in place for a follow-up pass.
+  const recentThreshold = Date.now() - 60 * 60 * 1000;
+  const activeCount = channels.filter((c) => {
+    const raw = c.updatedAt ?? c.createdAt;
+    if (!raw) return false;
+    const ts = Date.parse(raw);
+    return Number.isFinite(ts) && ts >= recentThreshold;
+  }).length;
   return (
     <section className="sidebar-section">
-      <header className="sidebar-section-head">
-        <span>◔ Activity</span>
-      </header>
-      {recent.map((c) => (
-        <div
-          key={c.channelId}
-          className="sidebar-item"
-          style={{ cursor: "default", opacity: 0.85 }}
-        >
-          <span className="ch-sigil">#</span>
-          <span className="ch-name">{c.name}</span>
-        </div>
-      ))}
+      <NavRow label="Activity" sigil="◔" count={activeCount} />
+      <NavRow label="Threads" sigil="☰" count={0} />
+      <NavRow label="Running" sigil="▶" count={0} />
     </section>
+  );
+}
+
+function NavRow({
+  label,
+  sigil,
+  count,
+}: {
+  label: string;
+  sigil: string;
+  count: number;
+}) {
+  return (
+    <div
+      className="sidebar-item"
+      style={{ cursor: "default", opacity: count > 0 ? 1 : 0.6 }}
+    >
+      <span className="ch-sigil">{sigil}</span>
+      <span className="ch-name">{label}</span>
+      {count > 0 && <span className="ch-badge">{count}</span>}
+    </div>
   );
 }
