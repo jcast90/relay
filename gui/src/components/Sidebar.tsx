@@ -275,7 +275,7 @@ function ActivityBlock({
     <section className="sidebar-section">
       <NavRow label="Activity" sigil="◔" count={activeCount} />
       <NavRow label="Threads" sigil="☰" count={threadCount} />
-      <NavRow label="Running" sigil="▶" count={runningStreams} />
+      <RunningRow active={runningStreams > 0} />
     </section>
   );
 }
@@ -286,6 +286,31 @@ function NavRow({ label, sigil, count }: { label: string; sigil: string; count: 
       <span className="ch-sigil">{sigil}</span>
       <span className="ch-name">{label}</span>
       {count > 0 && <span className="ch-badge">{count}</span>}
+    </div>
+  );
+}
+
+// Running is a presence signal, not a counter — the shell only ever has
+// one center pane, so "N streams" would cap at 1 and read as noise. Pulse
+// dot when a stream is live; dim when idle.
+function RunningRow({ active }: { active: boolean }) {
+  return (
+    <div className="sidebar-item" style={{ cursor: "default", opacity: active ? 1 : 0.6 }}>
+      <span className="ch-sigil">▶</span>
+      <span className="ch-name">Running</span>
+      {active && (
+        <span
+          aria-label="agent streaming"
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            background: "var(--color-accent-amber)",
+            animation: "var(--anim-pulse)",
+            display: "inline-block",
+          }}
+        />
+      )}
     </div>
   );
 }

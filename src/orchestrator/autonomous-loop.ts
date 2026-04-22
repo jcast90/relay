@@ -59,9 +59,13 @@ export interface StartAutonomousSessionOptions {
   /** Lifecycle state machine. Caller has already transitioned it into
    * `dispatching`; AL-4's driver owns subsequent transitions. */
   lifecycle: SessionLifecycle;
-  /** Trust mode as selected on the CLI. The stub records it but never acts
-   * on it. AL-5 / AL-7 gate the real behaviour difference between
-   * `supervised` and `god`. */
+  /** Trust mode as selected on the CLI. AL-7 supplies the trust-mode gate
+   * (`src/approvals/trust-gate.ts`) that every ack-requiring call site (PR
+   * auto-merge from AL-5, audit-proposed ticket from AL-6) threads this
+   * value into. Under `supervised`, ack-requiring actions are written to
+   * `~/.relay/approvals/<sessionId>/queue.jsonl`; under `god` with
+   * `RELAY_AL7_GOD_AUTOMERGE=1`, they execute directly. See
+   * {@link "../approvals/trust-gate".decide}. */
   trust: "supervised" | "god";
   /** Repo assignments the session is allowed to dispatch work into. Either
    * the subset selected by `--allow-repo` or — when the flag is absent —
@@ -299,6 +303,47 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
     }
   }
 
+  // AL-7 integration anchor. When AL-5 (PR reviewer) and AL-6 (audit agent)
+  // land their driver hooks, each of their ack-requiring outputs must be
+  // threaded through `decide({trust: opts.trust, ...})` from
+  // `src/approvals/trust-gate.ts`. Under `supervised` the decision writes
+  // a pending record to `~/.relay/approvals/<sessionId>/queue.jsonl`;
+  // under `god` with `RELAY_AL7_GOD_AUTOMERGE=1` it writes an auto-approved
+  // record (tagged `autoApprovedBy: "god-mode"`) AND returns
+  // `{kind: "execute", auditRecordId, record}` so the caller performs the
+  // merge / ticket write directly while the audit trail is already on
+  // disk. AL-7 itself only produces + consumes the queue file; AL-8 owns
+  // the approve / reject CLI surface.
+  //
+  // Concrete instantiation hint for AL-5 / AL-6 implementers — construct
+  // the queue once at the start of the driver loop and thread the same
+  // instance into every `decide()` call:
+  //
+  //   import { ApprovalsQueue, decide } from "../approvals/index.js";
+  //   import { getRelayDir } from "../cli/paths.js";
+  //
+  //   const approvalsQueue = opts.approvalsQueue
+  //     ?? new ApprovalsQueue({ rootDir: getRelayDir() });
+  //
+  //   // at PR-review-complete:
+  //   const outcome = await decide({
+  //     sessionId,
+  //     trust: opts.trust,
+  //     queue: approvalsQueue,
+  //     action: { kind: "merge-pr", payload: { prUrl, reviewSummary } },
+  //   });
+  //   if (outcome.kind === "execute") { /* perform the merge */ }
+  //
+  // The `opts.approvalsQueue` fallback exists so the AL-4 driver test can
+  // inject a tmp-dir-backed queue without touching `~/.relay/`.
+  //
+  // TODO(AL-5): at PR-review-complete, call `decide({..., action: {kind:
+  //   "merge-pr", payload: {prUrl, reviewSummary}}})` and branch on the
+  //   return. Do NOT auto-merge under supervised.
+  // TODO(AL-6): at audit-proposal time, call `decide({..., action: {kind:
+  //   "create-ticket", payload: {title, body, channelId}}})` and branch.
+  //   Do NOT auto-write the ticket under supervised.
+  //
   // AL-13: drain the channel's ticket board through the router exactly
   // once. AL-14 adds a second pass (gated by RELAY_AL14_WORKER_DRAIN)
   // that drains each admin's queue via TicketRunner — spawn a worker
