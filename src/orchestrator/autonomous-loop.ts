@@ -2,6 +2,7 @@ import type { SessionLifecycle } from "../lifecycle/session-lifecycle.js";
 import type { TokenTracker } from "../budget/token-tracker.js";
 import type { Channel, RepoAssignment } from "../domain/channel.js";
 import { ChannelStore } from "../channels/channel-store.js";
+import { Coordinator } from "../crosslink/coordinator.js";
 import { RepoAdminPool, isRepoAdminPoolEnabled } from "./repo-admin-pool.js";
 import type { RepoAdminProcessSpawner } from "./repo-admin-session.js";
 import { TicketRouter } from "./ticket-router.js";
@@ -205,6 +206,25 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
     }
   }
 
+  // AL-13/16: single channel store instance shared by the router, the
+  // runner fleet, and the coordinator's decisions audit. Reusing one
+  // instance avoids redundant on-disk state checks and keeps all
+  // writes going through the same in-memory mirror.
+  const channelStore = testOverrides?.channelStore ?? new ChannelStore();
+
+  // AL-16: inter-admin coordination bus. Lifetime matches the pool —
+  // constructed after the pool boots so `getSession` / `listSessions`
+  // resolve, closed in the finally block below. When the pool is
+  // disabled (AL-13 pending path) the coordinator stays null; no
+  // coordination is possible without admins to address anyway.
+  const coordinator = pool
+    ? new Coordinator({
+        pool,
+        channelStore,
+        channelId: channel.channelId,
+      })
+    : null;
+
   // AL-13: drain the channel's ticket board through the router exactly
   // once. AL-14 adds a second pass (gated by RELAY_AL14_WORKER_DRAIN)
   // that drains each admin's queue via TicketRunner — spawn a worker
@@ -216,7 +236,6 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
     terminalReason = drainEnabled ? "al-16-pending" : "al-14-pending";
     const runners: TicketRunner[] = [];
     try {
-      const channelStore = testOverrides?.channelStore ?? new ChannelStore();
       const router = new TicketRouter({ pool, channel, channelStore });
       const boardTickets = await channelStore.readChannelTickets(channel.channelId);
       for (const ticket of boardTickets) {
@@ -328,6 +347,23 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
     } catch (err) {
       console.warn(
         `[autonomous-loop] repo-admin pool stop failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+  }
+
+  // AL-16: drain coordination subscribers and reject any in-flight
+  // sends after pool teardown — the pool-by-alias lookups the
+  // coordinator relies on will start returning null as sessions
+  // unwind, so closing here means a late send resolves with a clean
+  // `coordinator-closed` reason rather than a generic "no-such-admin".
+  if (coordinator) {
+    try {
+      await coordinator.close();
+    } catch (err) {
+      console.warn(
+        `[autonomous-loop] coordinator close failed: ${
           err instanceof Error ? err.message : String(err)
         }`
       );

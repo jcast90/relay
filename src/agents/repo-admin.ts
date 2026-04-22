@@ -17,7 +17,12 @@
  *   - routing (deciding which repo-admin gets a ticket) -> AL-13
  *   - worker spawning (the `spawn_worker` MCP tool body)-> AL-14
  *   - memory-shed (bounded working set across sessions) -> AL-15
- *   - inter-admin coordination                          -> AL-16
+ *
+ * AL-16 extends the role surface with typed inter-repo coordination:
+ *   - adds `coordination_send` to the allowlist
+ *   - documents in the system prompt WHEN to use each typed shape
+ *     (`blocked-on-repo`, `repo-ready`, `merge-order-proposal`) and
+ *     forbids free-texting the same information into the channel feed.
  *
  * Source of truth for repo-admin state is the channel board + decisions +
  * git log. Repo-admin is a caching / coordination layer on top of those,
@@ -47,6 +52,15 @@ export const REPO_ADMIN_ROLE = "repo-admin";
  */
 export const REPO_ADMIN_MEMORY_POLICY_MARKER =
   "source of truth is the board and the decisions file";
+
+/**
+ * AL-16: marker substring that must appear in the system prompt so the
+ * typed-coordination guidance is present and assertable. Tests pin on
+ * this string so a well-meaning copy edit that drops the protocol
+ * documentation fails CI rather than silently sending repo-admins back
+ * to free-text handoffs.
+ */
+export const REPO_ADMIN_COORDINATION_POLICY_MARKER = "use the typed `coordination_send` tool";
 
 export interface RepoAdminRoleInput {
   /** Absolute path to the repo the admin is foremanning. */
@@ -127,6 +141,40 @@ export function buildRepoAdminSystemPrompt(input: RepoAdminRoleInput): string {
     "`channel_post` — a single append-only entry with the rationale. That",
     "entry is what future repo-admin sessions re-read via `channel_get` to",
     "reconstruct state; if it isn't on the feed, it didn't happen.",
+    "",
+    "## Cross-repo coordination (AL-16)",
+    "When your work depends on — or unblocks — another repo-admin, " +
+      `${REPO_ADMIN_COORDINATION_POLICY_MARKER}, not the channel feed. ` +
+      "The tool takes a `to` alias and a typed payload; the MCP layer " +
+      "validates the shape and the coordinator routes it to the target " +
+      "admin and audits the decision. Three shapes, three use cases:",
+    "",
+    "  - `blocked-on-repo` — send when one of YOUR tickets cannot make",
+    "    forward progress until ANOTHER admin's ticket completes. Include",
+    "    `requester` (your alias), `blocker` (target alias), `ticketId`",
+    "    (the one being held up), `dependsOnTicketId` (the ticket you're",
+    "    waiting on), a short `reason`, and `requestedAt` (ISO timestamp).",
+    "    The coordinator rejects a send that would form a cycle with an",
+    "    existing block, so if you receive `{ok: false, reason: ",
+    '    "would-form-cycle"}` ask the worker to revise rather than retry.',
+    "",
+    "  - `repo-ready` — send when a PR you own has opened OR merged and",
+    "    another repo-admin may be waiting on it. Include `alias` (yours),",
+    "    `ticketId`, `prUrl`, `mergedAt` (optional — present once merged),",
+    "    and `announcedAt`. This is how blockers resolve.",
+    "",
+    "  - `merge-order-proposal` — send when you have cross-repo visibility",
+    "    and want to put a proposed merge sequence on the record. Include",
+    "    `proposer` (yours), `sequence` (ordered `{alias, ticketId,",
+    "    prUrl}` triples), `rationale`, and `proposedAt`. This is",
+    "    advisory: the scheduler reads it; it does NOT enforce.",
+    "",
+    "Do NOT free-text these handoffs into the channel feed. The",
+    "coordinator validates the shape, records each send as a typed",
+    "decision on the board (type `coordination_message`), and lets",
+    "peers consume them programmatically. A bad payload returns",
+    '`{ok: false, reason: "malformed", ...}` — fix the shape, don\'t',
+    "retry with prose.",
   ].join("\n");
 }
 
@@ -137,6 +185,12 @@ export function buildRepoAdminSystemPrompt(input: RepoAdminRoleInput): string {
  */
 export { REPO_ADMIN_ALLOWED_TOOLS, REPO_ADMIN_TOOL_STUBS, denyToolEnvelope, isToolAllowedForRole };
 export type { ToolDenialEnvelope };
+
+/**
+ * Expose the AL-16 coordination-policy marker for tests + future
+ * consumers that need to assert the prompt still references the typed
+ * handoff surface.
+ */
 
 /**
  * Handler for the stubbed `spawn_worker` tool (AL-14 replaces this).

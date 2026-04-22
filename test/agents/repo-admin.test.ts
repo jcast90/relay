@@ -53,6 +53,7 @@ describe("repo-admin role — allowlist exactness", () => {
         "channel_get", // read decisions + feed + run links in one call
         "channel_post", // append-only feed updates (propose a spawn, announce a decision)
         "channel_task_board", // read the ticket board
+        "coordination_send", // AL-16: typed inter-repo coordination messages
         "harness_get_run_detail", // read-only run state
         "harness_list_runs", // read-only run index
         "harness_running_tasks", // cross-workspace running-task view

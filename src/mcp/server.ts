@@ -22,6 +22,12 @@ import {
   type CrosslinkToolState,
 } from "../crosslink/tools.js";
 import {
+  callCoordinationTool,
+  getCoordinationToolDefinitions,
+  isCoordinationTool,
+  type CoordinationToolState,
+} from "./coordination-tools.js";
+import {
   allowlistForRole,
   denyToolEnvelope,
   isToolAllowedForRole,
@@ -49,6 +55,14 @@ export interface McpHandlerContext {
   artifactStore: LocalArtifactStore;
   crosslinkState: CrosslinkToolState;
   channelState: ChannelToolState;
+  /**
+   * AL-16 coordination tool state. The MCP server owns an empty
+   * `coordinator: null` by default so the `coordination_send` tool
+   * returns a structured "coordinator-not-configured" error when
+   * invoked outside an autonomous-loop run. The autonomous-loop
+   * driver hands the context a real Coordinator when it spins up.
+   */
+  coordinationState: CoordinationToolState;
   cleanup: () => void;
 }
 
@@ -80,6 +94,16 @@ export async function buildMcpMessageHandler(
     sessionId: null,
     channelStore,
   };
+  // AL-16: the server always constructs an empty coordination state so
+  // the tool surface is stable. A running autonomous-loop session
+  // populates `coordinator` + `alias` when it boots the Coordinator
+  // alongside the RepoAdminPool; outside an autonomous run both fields
+  // stay null and `coordination_send` returns a structured
+  // "coordinator-not-configured" error rather than throwing.
+  const coordinationState: CoordinationToolState = {
+    alias: null,
+    coordinator: null,
+  };
 
   // Auto-register this session
   const agentProvider = (process.env.RELAY_PROVIDER ?? "unknown") as "claude" | "codex" | "unknown";
@@ -110,11 +134,25 @@ export async function buildMcpMessageHandler(
   };
 
   const handler: McpMessageHandler = (message) =>
-    handleMessage(message, workspaceRoot, artifactStore, crosslinkState, channelState);
+    handleMessage(
+      message,
+      workspaceRoot,
+      artifactStore,
+      crosslinkState,
+      channelState,
+      coordinationState
+    );
 
   return {
     handler,
-    context: { workspaceRoot, artifactStore, crosslinkState, channelState, cleanup },
+    context: {
+      workspaceRoot,
+      artifactStore,
+      crosslinkState,
+      channelState,
+      coordinationState,
+      cleanup,
+    },
   };
 }
 
@@ -140,7 +178,8 @@ async function handleMessage(
   workspaceRoot: string,
   artifactStore: LocalArtifactStore,
   crosslinkState: CrosslinkToolState,
-  channelState: ChannelToolState
+  channelState: ChannelToolState,
+  coordinationState: CoordinationToolState
 ): Promise<JsonRpcMessage | null> {
   if (!message.method) {
     return null;
@@ -177,6 +216,11 @@ async function handleMessage(
           inputSchema: unknown;
         }>),
         ...(getChannelToolDefinitions() as Array<{
+          name: string;
+          description: string;
+          inputSchema: unknown;
+        }>),
+        ...(getCoordinationToolDefinitions() as Array<{
           name: string;
           description: string;
           inputSchema: unknown;
@@ -395,7 +439,9 @@ async function handleMessage(
           ? await callCrosslinkTool(toolName, toolArgs, crosslinkState)
           : isChannelTool(toolName)
             ? await callChannelTool(toolName, toolArgs, channelState)
-            : await callTool(toolName, toolArgs, workspaceRoot, artifactStore);
+            : isCoordinationTool(toolName)
+              ? await callCoordinationTool(toolName, toolArgs, coordinationState)
+              : await callTool(toolName, toolArgs, workspaceRoot, artifactStore);
 
         return {
           jsonrpc: "2.0",

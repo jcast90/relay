@@ -118,6 +118,11 @@ export const REPO_ADMIN_ALLOWED_TOOLS: ReadonlySet<string> = new Set<string>([
   "harness_get_run_detail",
   // Spawn ephemeral workers — declared here; implementation lands in AL-14.
   "spawn_worker",
+  // AL-16: typed cross-repo coordination. Repo-admin is the only role
+  // permitted to send coordination messages — workers are intentionally
+  // barred so cross-repo handoffs stay at the foreman tier where the
+  // ticket board + decisions audit live.
+  "coordination_send",
 ]);
 
 /**
