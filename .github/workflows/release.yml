@@ -87,7 +87,9 @@ jobs:
         if: vars.NPM_PUBLISH_ENABLED == 'true'
         uses: pnpm/action-setup@v4
         with:
-          version: 10
+          # Pinned to a recent v10.x — OIDC + --provenance support was
+          # stabilised in the 10.17+ line. Bump deliberately, not floatily.
+          version: 10.17.0
 
       - name: Setup Node.js (npm registry)
         if: vars.NPM_PUBLISH_ENABLED == 'true'
@@ -171,7 +173,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: 10.17.0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -239,12 +241,16 @@ jobs:
 
       - name: Download all GUI artifacts
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           path: dist-artifacts
 
       - name: Flatten artifact tree
         run: |
-          mkdir -p release-assets
+          # `dist-artifacts` only exists if at least one release-gui matrix
+          # shard uploaded something. A failed-build matrix or a CLI-only
+          # release will leave it absent — create it so `find` doesn't die.
+          mkdir -p release-assets dist-artifacts
           find dist-artifacts -type f \
             \( -name '*.dmg' \
                -o -name '*.AppImage' \
@@ -252,7 +258,10 @@ jobs:
                -o -name '*.msi' \
                -o -name '*.exe' \
                -o -name '*.app.tar.gz' \) \
-            -exec cp -v {} release-assets/ \;
+            -exec cp -v {} release-assets/ \; || true
+          if [ -z "$(ls -A release-assets 2>/dev/null)" ]; then
+            echo "::warning::No GUI installer artifacts were produced for this tag."
+          fi
           ls -la release-assets/
 
       - name: Extract release notes from CHANGELOG.md

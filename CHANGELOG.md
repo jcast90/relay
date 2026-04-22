@@ -13,6 +13,10 @@ Workspace versions are kept in lockstep across the npm package
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.1.0] - 2026-04-22
+
 First public OSS release. Everything below was done under the `OSS-01..23` hardening +
 launch-prep push; there was no prior tagged release, so this is the initial one.
 

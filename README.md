@@ -10,6 +10,13 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/jcast90/relay/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI" src="https://github.com/jcast90/relay/actions/workflows/ci.yml/badge.svg?branch=main"/></a>
+  <a href="https://github.com/jcast90/relay/actions/workflows/release.yml"><img alt="Release" src="https://github.com/jcast90/relay/actions/workflows/release.yml/badge.svg"/></a>
+  <a href="https://github.com/jcast90/relay/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/jcast90/relay?include_prereleases&sort=semver&display_name=tag"/></a>
+  <a href="https://www.npmjs.com/package/@jcast90/relay"><img alt="npm" src="https://img.shields.io/npm/v/@jcast90/relay?label=npm&color=cb3837"/></a>
+</p>
+
+<p align="center">
   <a href="#install"><img alt="install" src="https://img.shields.io/badge/install-one_command-89b4fa?style=flat-square"/></a>
   <a href="#license"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-a6e3a1?style=flat-square"/></a>
   <a href="#dashboards"><img alt="dashboards" src="https://img.shields.io/badge/dashboards-CLI_%2B_TUI_%2B_GUI-cba6f7?style=flat-square"/></a>
