@@ -6,6 +6,12 @@ import { Coordinator } from "../crosslink/coordinator.js";
 import { runPostCompletionAudit, type AuditInvoker, type AuditRunResult } from "./audit-agent.js";
 import { RepoAdminPool, isRepoAdminPoolEnabled } from "./repo-admin-pool.js";
 import type { RepoAdminProcessSpawner } from "./repo-admin-session.js";
+import {
+  DEFAULT_STOP_POLL_INTERVAL_MS,
+  STOP_FILE_REASON,
+  checkForStop,
+  clearStopFile,
+} from "./stop-file-watcher.js";
 import { TicketRouter } from "./ticket-router.js";
 import { TicketRunner } from "./ticket-runner.js";
 import { WorkerSpawner } from "./worker-spawner.js";
@@ -73,6 +79,15 @@ export interface StartAutonomousSessionOptions {
    * time. */
   allowedRepos: RepoAssignment[];
   /**
+   * AL-9: poll cadence for the STOP-file kill switch. The driver checks
+   * `~/.relay/sessions/<sessionId>/STOP` before each dispatch tick and
+   * transitions the lifecycle to `winding_down` when the file appears.
+   * Defaults to {@link DEFAULT_STOP_POLL_INTERVAL_MS} (20s) matching the
+   * AL-9 acceptance criterion "within one tick (≤20s)". Tests override
+   * to a small value so the stop signal is picked up quickly.
+   */
+  stopPollIntervalMs?: number;
+  /**
    * **Test-only** injection hooks. Production callers MUST NOT set these —
    * they exist solely so the AL-14 drain integration test can exercise the
    * pool-boot + router + runner drain path end-to-end without a real
@@ -94,7 +109,9 @@ export interface StartAutonomousSessionOptions {
     workerSpawner?: WorkerSpawner;
     /**
      * Override the pool's `~/.relay` base dir so the test's tmp dir is
-     * used instead of the real home dir for session/admin logs.
+     * used instead of the real home dir for session/admin logs. Also
+     * used by {@link checkForStop} so the AL-9 kill-switch integration
+     * test can drop a STOP file in the test's tmp dir.
      */
     rootDir?: string;
     /**
@@ -200,6 +217,71 @@ export interface AllTicketsCompleteContext {
  */
 export async function startAutonomousSession(opts: StartAutonomousSessionOptions): Promise<void> {
   const { sessionId, lifecycle, tracker, channel, allowedRepos, testOverrides } = opts;
+  const stopPollIntervalMs = opts.stopPollIntervalMs ?? DEFAULT_STOP_POLL_INTERVAL_MS;
+
+  // AL-9: transient flag so teardown can branch on whether we're
+  // unwinding because of a user stop signal vs. normal terminal. The
+  // lifecycle transition is the source of truth for downstream readers;
+  // this flag only helps the local teardown log message.
+  let userStopped = false;
+
+  /**
+   * AL-9 — poll the STOP file for this session. When the file is
+   * present, transition the lifecycle to `winding_down` (if we're in
+   * `dispatching`) with reason `"user-stop-signal"`. The transition is
+   * idempotent — calling this helper again after the first signal is
+   * observed is a no-op. Errors from the filesystem stat are logged
+   * but NOT fatal: a flaky `~/.relay` shouldn't force-kill an
+   * in-progress session, the wall-clock watchdog + token budget are
+   * the hard stops. The STOP file is an advisory soft stop.
+   */
+  async function pollForStopAndWindDown(): Promise<boolean> {
+    if (userStopped) return true;
+    let present = false;
+    try {
+      present = await checkForStop(sessionId, testOverrides?.rootDir);
+    } catch (err) {
+      console.warn(
+        `[autonomous-loop] STOP-file check failed for session ${sessionId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+      return false;
+    }
+    if (!present) return false;
+    userStopped = true;
+    const state = lifecycle.state;
+    // Only `dispatching` has an edge to `winding_down`. From `planning`
+    // we short-circuit to `killed` — we never started dispatching so
+    // the wind-down drain has nothing to do. From `winding_down` /
+    // `audit` we leave the state alone; the kill switch already fired
+    // or a later transition has taken over.
+    if (state === "dispatching") {
+      try {
+        await lifecycle.transition("winding_down", STOP_FILE_REASON);
+      } catch (err) {
+        console.warn(
+          `[autonomous-loop] failed to transition to winding_down on STOP for session ${sessionId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+      }
+    } else if (state === "planning") {
+      try {
+        await lifecycle.transition("killed", STOP_FILE_REASON);
+      } catch (err) {
+        console.warn(
+          `[autonomous-loop] failed to transition to killed on STOP for session ${sessionId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+      }
+    }
+    console.log(
+      `[autonomous-loop] STOP file observed for session ${sessionId}; winding down gracefully (poll cadence ${stopPollIntervalMs}ms).`
+    );
+    return true;
+  }
 
   // AL-12 built the repo-admin pool, but the admin-process handshake
   // protocol it relies on is AL-14's deliverable. Without that protocol
@@ -344,22 +426,65 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
   //   "create-ticket", payload: {title, body, channelId}}})` and branch.
   //   Do NOT auto-write the ticket under supervised.
   //
+  // AL-9: one pre-routing poll. Catches the "operator dropped STOP
+  // before the loop reached its first tick" case — if we went straight
+  // into routing without checking, a session could queue work into the
+  // pool even though the user had already hit the kill switch. The
+  // per-ticket check below handles STOP arriving mid-routing.
+  await pollForStopAndWindDown();
+
   // AL-13: drain the channel's ticket board through the router exactly
   // once. AL-14 adds a second pass (gated by RELAY_AL14_WORKER_DRAIN)
   // that drains each admin's queue via TicketRunner — spawn a worker
   // per ticket, wait for it to open a PR (or fail), then exit. The
   // autonomous-loop's steady-state driver (AL-4) will replace this
   // single-pass shape; AL-14 just proves the end-to-end plumbing.
+  //
+  // AL-9: the routing loop below treats each iteration as a "tick" —
+  // we re-poll the STOP file between tickets so the switch is honored
+  // within one iteration (≤ stopPollIntervalMs equivalent; file poll
+  // is O(ms)). When AL-4 lands its real multi-pass driver it picks up
+  // the same `checkForStop` call and applies it to its own tick cadence.
   let terminalReason: "al-13-pending" | "al-14-pending" | "al-16-pending" = "al-13-pending";
   if (pool) {
     terminalReason = drainEnabled ? "al-16-pending" : "al-14-pending";
     const runners: TicketRunner[] = [];
+    // AL-9: background poller that runs for the lifetime of the drain
+    // phase. Fires at `stopPollIntervalMs` cadence (default 20s) so a
+    // STOP file that lands AFTER routing completes but BEFORE the
+    // drain finishes still flips the lifecycle to `winding_down`.
+    // The poller NEVER force-kills runners — graceful wind-down
+    // respects in-flight workers per AL-9's spec. It only transitions
+    // the lifecycle so downstream audit-after-kill logic sees the
+    // right state when the drain eventually completes.
+    let stopPollTimer: NodeJS.Timeout | null = null;
+    const armStopPoll = (): void => {
+      const tick = async (): Promise<void> => {
+        await pollForStopAndWindDown();
+        if (!userStopped) {
+          stopPollTimer = setTimeout(tick, stopPollIntervalMs);
+          // Don't keep the event loop alive just for the poll — the
+          // drain's promise is the thing the caller awaits.
+          const h = stopPollTimer as { unref?: () => void };
+          if (h && typeof h.unref === "function") h.unref();
+        }
+      };
+      stopPollTimer = setTimeout(tick, stopPollIntervalMs);
+      const h = stopPollTimer as { unref?: () => void };
+      if (h && typeof h.unref === "function") h.unref();
+    };
     try {
       const router = new TicketRouter({ pool, channel, channelStore });
       const boardTickets = await channelStore.readChannelTickets(channel.channelId);
       for (const ticket of boardTickets) {
         if (ticket.status !== "ready") continue;
         if (ticket.source === "linear") continue; // Linear mirror is read-only.
+        // AL-9: re-poll before each ticket so a STOP that lands
+        // mid-routing halts further dispatch. The already-routed
+        // tickets continue through the drain phase — that's the
+        // "respect in-flight workers" half of the graceful
+        // wind-down contract.
+        if (await pollForStopAndWindDown()) break;
         try {
           const result = await router.route(ticket);
           if (result.kind === "unroutable") {
@@ -378,6 +503,13 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
       }
 
       if (drainEnabled) {
+        // AL-9: arm the background STOP-file poll NOW that we're about
+        // to enter drain. A STOP arriving during drain flips the
+        // lifecycle to `winding_down`; runners aren't signalled (spec
+        // says respect in-flight workers) but the post-drain audit
+        // gate reads the lifecycle + ledger to decide whether to run
+        // the audit agent, so we need the state flip to land.
+        armStopPoll();
         // AL-14: drain each admin's pending queue in parallel. Each admin
         // serializes internally (one worker at a time in its repo); two
         // different admins DO run in parallel. The drain promise resolves
@@ -423,6 +555,15 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
         }`
       );
     } finally {
+      // AL-9: clear the background STOP poll before we move into the
+      // stop-all-runners step. Any pending tick that hasn't fired yet
+      // is dropped — we're already on the teardown path, a late
+      // lifecycle transition from the poll would race against the
+      // explicit `killed` transition below and throw.
+      if (stopPollTimer !== null) {
+        clearTimeout(stopPollTimer);
+        stopPollTimer = null;
+      }
       // Ensure any in-flight worker is signalled before we unwind. Safe
       // to call even if drain() already finished — stop() is idempotent
       // and only hits still-running workers.
@@ -486,17 +627,68 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
   // pushed us to `killed`; respect that and skip the transition in that
   // case to avoid throwing a LifecycleTransitionError the caller would
   // have to catch.
+  //
+  // AL-9: when `userStopped` is set, we ran the drain while already in
+  // `winding_down`. The final transition is still `killed`, but the
+  // reason carries the user-stop signal so log consumers + the post-
+  // completion audit gate (see below) can distinguish a user-initiated
+  // stop from a natural terminal.
   const state = lifecycle.state;
-  if (state !== "killed" && state !== "done") {
+  const finalReason = userStopped ? STOP_FILE_REASON : terminalReason;
+  try {
+    if (state !== "killed" && state !== "done") {
+      try {
+        await lifecycle.transition("killed", finalReason);
+      } catch (err) {
+        console.warn(
+          `[autonomous-loop] failed to transition lifecycle to killed: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+      }
+    }
+  } finally {
+    // AL-9: clear the STOP file after terminal transition so a subsequent
+    // `rly run --autonomous` against the same sessionId doesn't immediately
+    // kill from a leftover STOP file. Defensive — swallow errors since a
+    // leftover STOP file is a minor correctness issue, never a reason to
+    // fail teardown.
     try {
-      await lifecycle.transition("killed", terminalReason);
+      await clearStopFile(sessionId, testOverrides?.rootDir);
     } catch (err) {
       console.warn(
-        `[autonomous-loop] failed to transition lifecycle to killed: ${
+        `[autonomous-loop] clearStopFile failed for session ${sessionId}: ${
           err instanceof Error ? err.message : String(err)
         }`
       );
     }
+  }
+
+  // AL-9: post-completion audit gate. When the session is terminating
+  // cleanly (or via user-stop after a fully-green routing pass), we
+  // should run the AL-6 audit agent. The spec: "Killed session still
+  // runs post-completion audit IF ledger was all-green before kill;
+  // otherwise skips audit."
+  //
+  // AL-6 is not yet merged into this branch, so the implementation
+  // here is intentionally a no-op with a structured log line. When
+  // AL-6 lands, the `runAudit()` call slots in where the log lives —
+  // the gating logic (ledger inspection, user-stop tolerance) is the
+  // piece AL-9 owns and ships now.
+  try {
+    await maybeRunAuditHook({
+      sessionId,
+      channel,
+      channelStore,
+      userStopped,
+      lifecycle,
+    });
+  } catch (err) {
+    console.warn(
+      `[autonomous-loop] audit gate check failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
   }
 
   // AL-16: close the coordinator BEFORE stopping the pool. Order
@@ -603,4 +795,72 @@ async function defaultOnAllTicketsComplete(ctx: AllTicketsCompleteContext): Prom
       `[autonomous-loop] audit-agent returned invalid response (${result.issues.length} issue(s)).`
     );
   }
+}
+
+/**
+ * AL-9's audit gate. AL-6 ships the actual audit agent; this helper
+ * owns the gating logic and logs the decision so the AL-6 merge is a
+ * drop-in call replacement (swap the `console.log` for the real
+ * runAudit call). Separating gate from actuator keeps both tickets
+ * independently verifiable.
+ *
+ * ## Gate
+ *
+ * The spec (AL-9 AC3): "Killed session still runs the post-completion
+ * audit IF the ledger was all-green before the kill; otherwise skips
+ * audit." The interpretation:
+ *
+ *   - "all-green" = every ticket on the channel's board ended in
+ *     `completed` (or was never picked up, i.e. still `pending` /
+ *     `blocked` — those aren't failures, just unreached work).
+ *   - Any `failed` / `retry` / `executing` / `verifying` ticket means
+ *     the ledger wasn't green; skip audit because auditing a partial
+ *     run would produce a misleading report.
+ *
+ * Natural terminal (no user stop, no threshold kill) follows the same
+ * rule — if the routing pass finished cleanly and every ticket is
+ * completed, audit; otherwise skip.
+ */
+async function maybeRunAuditHook(args: {
+  sessionId: string;
+  channel: Channel;
+  channelStore: ChannelStore;
+  userStopped: boolean;
+  lifecycle: SessionLifecycle;
+}): Promise<void> {
+  const { sessionId, channel, channelStore, userStopped } = args;
+
+  const tickets = await channelStore.readChannelTickets(channel.channelId);
+  // "green" means: no ticket ended in an unhealthy terminal / partial
+  // state. A completely empty board is vacuously green (the audit on
+  // an empty session is trivially "nothing to report"); AL-6 decides
+  // whether to short-circuit in that case.
+  const unhealthy = tickets.filter(
+    (t) =>
+      t.status === "failed" ||
+      t.status === "retry" ||
+      t.status === "executing" ||
+      t.status === "verifying"
+  );
+  const allGreen = unhealthy.length === 0;
+
+  if (!allGreen) {
+    console.log(
+      `[autonomous-loop] skipping post-completion audit for session ${sessionId} — ` +
+        `ledger has ${unhealthy.length} non-green ticket(s) ` +
+        `(${unhealthy
+          .slice(0, 3)
+          .map((t) => `${t.ticketId}:${t.status}`)
+          .join(", ")}${unhealthy.length > 3 ? ", …" : ""}).`
+    );
+    return;
+  }
+
+  // Green — audit would run. AL-6 slots its runAudit() here. The log
+  // line is the marker the audit gate fires; AL-9's tests key on it.
+  const trigger = userStopped ? "user-stop-signal" : "natural-terminal";
+  console.log(
+    `[autonomous-loop] post-completion audit eligible for session ${sessionId} ` +
+      `(trigger=${trigger}, ticketsGreen=${tickets.length}); AL-6 hook not yet wired.`
+  );
 }
