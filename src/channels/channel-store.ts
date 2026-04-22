@@ -258,6 +258,11 @@ export class ChannelStore {
     return this.updateChannel(channelId, { status: "archived" });
   }
 
+  async unarchiveChannel(channelId: string): Promise<Channel | null> {
+    assertSafeSegment(channelId, "channelId");
+    return this.updateChannel(channelId, { status: "active" });
+  }
+
   /**
    * Bump a channel's `updatedAt` without patching any user-visible field.
    * Called from activity writes (postEntry, recordDecision) so the sidebar

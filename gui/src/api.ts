@@ -20,7 +20,8 @@ import type {
 
 export const api = {
   listWorkspaces: () => invoke<WorkspaceEntry[]>("list_workspaces"),
-  listChannels: () => invoke<Channel[]>("list_channels"),
+  listChannels: (includeArchived = false) =>
+    invoke<Channel[]>("list_channels", { includeArchived }),
   getChannel: (channelId: string) => invoke<Channel | null>("get_channel", { channelId }),
   listFeed: (channelId: string, limit = 200) =>
     invoke<ChannelEntry[]>("list_feed", { channelId, limit }),
@@ -59,6 +60,7 @@ export const api = {
       primaryWorkspaceId,
     }),
   archiveChannel: (channelId: string) => invoke<unknown>("archive_channel", { channelId }),
+  unarchiveChannel: (channelId: string) => invoke<unknown>("unarchive_channel", { channelId }),
   updateChannelRepos: (
     channelId: string,
     repos: { alias: string; workspaceId: string; repoPath: string }[]

@@ -46,7 +46,23 @@ button {
   cursor: pointer;
 }
 button:hover { background: var(--bg-hover); }
-button.primary { background: var(--accent-dim); border-color: var(--accent); }
+/* Primary buttons sit on a light sapphire background, so inherit-color
+   (Catppuccin text is near-white) gives low-contrast light-on-light. Pin
+   an explicit dark foreground so the label reads on the accent fill. */
+button.primary {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--bg-panel);
+  font-weight: 600;
+}
+button.primary:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--bg-panel);
+}
+button.primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 
 .app {
   display: grid;
@@ -97,8 +113,66 @@ button.primary { background: var(--accent-dim); border-color: var(--accent); }
   background: var(--bg-hover);
   border-left-color: var(--accent);
 }
-.list-item .name { font-weight: 500; }
+.list-item.archived { opacity: 0.55; }
+.list-item.archived:hover { opacity: 0.8; }
+.list-item .name {
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 .list-item .meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.list-item-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.list-item-body { flex: 1; min-width: 0; }
+.channel-archive-btn {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  font-size: 12px;
+  line-height: 1;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.list-item:hover .channel-archive-btn,
+.channel-archive-btn:focus-visible {
+  opacity: 1;
+}
+.channel-archive-btn:hover:not(:disabled) {
+  border-color: var(--warn);
+  color: var(--warn);
+  background: transparent;
+}
+.channel-archive-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.archived-badge {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 1px 5px;
+  border-radius: 2px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.sidebar-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+  flex-shrink: 0;
+}
+.sidebar-toggle input { margin: 0; }
+.sidebar-toggle:hover { color: var(--text-dim); }
 
 .tabs {
   display: flex;

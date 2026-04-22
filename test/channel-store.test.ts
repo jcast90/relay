@@ -50,6 +50,41 @@ describe("channel store", () => {
     }
   });
 
+  it("unarchiveChannel flips status back to active", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+    const store = new ChannelStore(dir);
+
+    try {
+      const channel = await store.createChannel({
+        name: "#revive",
+        description: "Round-trip test",
+      });
+
+      const archived = await store.archiveChannel(channel.channelId);
+      expect(archived?.status).toBe("archived");
+
+      const unarchived = await store.unarchiveChannel(channel.channelId);
+      expect(unarchived?.status).toBe("active");
+
+      const active = await store.listChannels("active");
+      expect(active.some((c) => c.channelId === channel.channelId)).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("unarchiveChannel returns null for an unknown channel", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+    const store = new ChannelStore(dir);
+
+    try {
+      const result = await store.unarchiveChannel("does-not-exist");
+      expect(result).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("manages channel members (join/leave)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
     const store = new ChannelStore(dir);

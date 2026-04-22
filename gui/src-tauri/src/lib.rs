@@ -47,14 +47,17 @@ fn list_workspaces() -> Vec<data::WorkspaceEntry> {
 }
 
 #[tauri::command]
-fn list_channels() -> Vec<data::Channel> {
-    data::load_channels()
+fn list_channels(include_archived: Option<bool>) -> Vec<data::Channel> {
+    data::load_channels_with_status(include_archived.unwrap_or(false))
 }
 
 #[tauri::command]
 fn get_channel(channel_id: String) -> Result<Option<data::Channel>, String> {
     validate_id_segment(&channel_id, "channelId")?;
-    Ok(data::load_channels()
+    // Include archived channels so the UI can resolve a channel after it's
+    // been archived (needed for the unarchive round-trip and for any
+    // deep-linked view).
+    Ok(data::load_channels_with_status(true)
         .into_iter()
         .find(|c| c.channel_id == channel_id))
 }
@@ -349,6 +352,12 @@ fn create_channel(
 fn archive_channel(channel_id: String) -> Result<serde_json::Value, String> {
     validate_id_segment(&channel_id, "channelId")?;
     cli_json(&["channel", "archive", &channel_id, "--json"])
+}
+
+#[tauri::command]
+fn unarchive_channel(channel_id: String) -> Result<serde_json::Value, String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    cli_json(&["channel", "unarchive", &channel_id, "--json"])
 }
 
 #[tauri::command]
@@ -1868,6 +1877,7 @@ pub fn run() {
             run_cli,
             create_channel,
             archive_channel,
+            unarchive_channel,
             update_channel_repos,
             post_to_channel,
             create_session,
