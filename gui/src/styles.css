@@ -87,6 +87,21 @@ button.primary:disabled {
 }
 .panel:last-child { border-right: none; border-left: 1px solid var(--border); }
 
+/* Channel header strip in the CenterPane. Sits above the tabs and hosts
+   channel-level affordances (today: AL-0 full-access toggle). */
+.channel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.channel-header-name {
+  font-weight: 600;
+  font-size: 12px;
+}
+
 .panel-header {
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);

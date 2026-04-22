@@ -39,18 +39,10 @@ export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
   const defaultProvider = (process.env.HARNESS_PROVIDER ?? "claude") as "claude" | "codex";
   await registerAgentNames({ defaultProvider });
 
-  // Build agent registry
-  const registry = new AgentRegistry();
-  const agents = createLiveAgents({
-    cwd: repoPath,
-    defaultProvider,
-  });
-  for (const agent of agents) {
-    registry.register(agent);
-  }
-
-  // Resolve or create a channel
+  // Resolve or create a channel first — we need its `fullAccess` flag to
+  // decide whether agents should be constructed in unattended mode (AL-0).
   let channelId = input.channelId;
+  let channelFullAccess = false;
   if (!channelId) {
     const channel = await channelStore.createChannel({
       name: featureRequest.slice(0, 60),
@@ -58,6 +50,23 @@ export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
       workspaceIds: [workspaceId],
     });
     channelId = channel.channelId;
+    channelFullAccess = channel.fullAccess === true;
+  } else {
+    const existing = await channelStore.getChannel(channelId);
+    channelFullAccess = existing?.fullAccess === true;
+  }
+
+  // Build agent registry with the per-channel full-access flag threaded
+  // through so Claude gets `--dangerously-skip-permissions` / Codex gets
+  // `--full-auto` without requiring the machine-wide `RELAY_AUTO_APPROVE`.
+  const registry = new AgentRegistry();
+  const agents = createLiveAgents({
+    cwd: repoPath,
+    defaultProvider,
+    fullAccess: channelFullAccess,
+  });
+  for (const agent of agents) {
+    registry.register(agent);
   }
 
   const verificationRunner = new VerificationRunner(new NodeCommandInvoker(), artifactStore);

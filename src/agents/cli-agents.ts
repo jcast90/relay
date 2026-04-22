@@ -31,6 +31,14 @@ interface CliAgentOptions {
    * achieves the same parity. (OSS-06)
    */
   onStreamLine?: (line: string) => void;
+  /**
+   * Per-channel "full access" opt-in (AL-0). When `true`, Claude runs with
+   * `--dangerously-skip-permissions` and Codex with `--full-auto` regardless
+   * of the `RELAY_AUTO_APPROVE` env var. Channels without the flag still
+   * honor the env-based auto-approve behavior. Undefined / false means
+   * "behave exactly as before" — no change for existing callers.
+   */
+  fullAccess?: boolean;
 }
 
 interface ParsedProviderResult {
@@ -112,6 +120,13 @@ abstract class CliAgentBase implements Agent {
   protected readonly model?: string;
   protected readonly invoker: CommandInvoker;
   protected readonly onStreamLine?: (line: string) => void;
+  /**
+   * Per-channel full-access flag (AL-0). When `true`, the provider-specific
+   * "skip every permission prompt" flag is threaded through regardless of
+   * the env-based `RELAY_AUTO_APPROVE`. Kept as a member so tests can
+   * assert on the constructed args without mutating `process.env`.
+   */
+  protected readonly fullAccess: boolean;
 
   constructor(options: CliAgentOptions) {
     this.id = options.id;
@@ -122,6 +137,7 @@ abstract class CliAgentBase implements Agent {
     this.model = options.model;
     this.invoker = options.invoker;
     this.onStreamLine = options.onStreamLine;
+    this.fullAccess = options.fullAccess === true;
   }
 
   async run(request: WorkRequest) {
@@ -157,10 +173,12 @@ export class CodexCliAgent extends CliAgentBase {
 
     await writeFile(schemaPath, JSON.stringify(agentResultJsonSchema, null, 2));
 
-    // When RELAY_AUTO_APPROVE is set, drop the read-only sandbox so the
-    // dispatched codex agent can actually make changes unattended. Stays
-    // read-only by default so nothing surprising happens on a casual run.
+    // When RELAY_AUTO_APPROVE is set OR the channel has opted in to
+    // full-access mode (AL-0), drop the read-only sandbox so the dispatched
+    // codex agent can actually make changes unattended. Stays read-only by
+    // default so nothing surprising happens on a casual run.
     const autoApprove =
+      this.fullAccess ||
       process.env.RELAY_AUTO_APPROVE === "1" ||
       process.env.RELAY_AUTO_APPROVE === "true" ||
       process.env.RELAY_AUTO_APPROVE === "yes";
@@ -222,9 +240,11 @@ export class CodexCliAgent extends CliAgentBase {
 export class ClaudeCliAgent extends CliAgentBase {
   protected async invokeProvider(prompt: string): Promise<ParsedProviderResult> {
     // When the user sets RELAY_AUTO_APPROVE=1 (or launched with --auto-approve
-    // / --yolo), internal dispatched agents run fully unattended. Otherwise
-    // we stay on the default permission mode and users will be prompted.
+    // / --yolo), or the channel has opted in to full-access mode (AL-0),
+    // internal dispatched agents run fully unattended. Otherwise we stay on
+    // the default permission mode and users will be prompted.
     const autoApprove =
+      this.fullAccess ||
       process.env.RELAY_AUTO_APPROVE === "1" ||
       process.env.RELAY_AUTO_APPROVE === "true" ||
       process.env.RELAY_AUTO_APPROVE === "yes";

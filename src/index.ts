@@ -622,6 +622,54 @@ async function handleChannelCommand(args: string[]): Promise<void> {
     return;
   }
 
+  if (sub === "set-full-access") {
+    const channelId = args[1];
+    const stateArg = args[2];
+    if (!channelId || !stateArg) {
+      console.error("Usage: rly channel set-full-access <channelId> <on|off>");
+      process.exitCode = 1;
+      return;
+    }
+
+    // Accept the few obvious spellings so callers don't have to guess.
+    // Anything else is an error — silent coercion of "maybe" to "off" would
+    // be a footgun for a flag that disables permission prompts.
+    let next: boolean;
+    if (stateArg === "on" || stateArg === "true" || stateArg === "1") {
+      next = true;
+    } else if (stateArg === "off" || stateArg === "false" || stateArg === "0") {
+      next = false;
+    } else {
+      console.error(`set-full-access: expected "on" or "off", got "${stateArg}".`);
+      process.exitCode = 1;
+      return;
+    }
+
+    const sourceArg = parseNamedArg(args, "--source");
+    const actorName = parseNamedArg(args, "--actor");
+    const actor = {
+      source: sourceArg ?? "cli",
+      name: actorName ?? "CLI",
+      id: actorName ?? "cli",
+    };
+
+    const updated = await store.setFullAccess(channelId, next, actor);
+
+    if (args.includes("--json")) {
+      jsonOut(updated);
+    } else if (updated) {
+      console.log(
+        `Channel full-access ${updated.fullAccess ? "on" : "off"}: ${updated.name} (${
+          updated.channelId
+        })`
+      );
+    } else {
+      console.error(`Channel not found: ${channelId}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   if (sub === "update") {
     const channelId = args[1];
     if (!channelId) {
@@ -748,7 +796,9 @@ async function handleChannelCommand(args: string[]): Promise<void> {
   }
 
   if (!sub) {
-    console.error("Usage: rly channel <channelId|create|archive|unarchive|update|feed|post>");
+    console.error(
+      "Usage: rly channel <channelId|create|archive|unarchive|set-full-access|update|feed|post>"
+    );
     process.exitCode = 1;
     return;
   }
@@ -2135,7 +2185,7 @@ async function printTopLevelHelp(): Promise<void> {
     "",
     "Channels & sessions:",
     "  channels                 List channels (most-recently-active first)",
-    "  channel <subcommand>     Manage channels (create/update/archive/feed/post/...)",
+    "  channel <subcommand>     Manage channels (create/update/archive/set-full-access/feed/post/...)",
     "  session <subcommand>     Manage session transcripts",
     "  board <channelId>        Kanban view of tickets",
     "  decisions <channelId>    List decisions with rationale",

@@ -60,6 +60,14 @@ interface AgentFactoryOptions {
    * renderer per-agent (e.g. label it with the agent's displayName).
    */
   onStreamLineFor?: (spec: AgentSpec) => ((line: string) => void) | undefined;
+  /**
+   * Per-channel "full access" opt-in (AL-0). Threaded through to every
+   * constructed agent so `--dangerously-skip-permissions` (Claude) /
+   * `--full-auto` (Codex) gets passed without requiring callers to set
+   * `RELAY_AUTO_APPROVE`. Callers resolving per-channel state (e.g.
+   * `dispatch()`) read `channel.fullAccess` once and forward it here.
+   */
+  fullAccess?: boolean;
 }
 
 export function createLiveAgents(options: AgentFactoryOptions): Agent[] {
@@ -87,6 +95,7 @@ export function createLiveAgents(options: AgentFactoryOptions): Agent[] {
       model,
       invoker,
       onStreamLine,
+      fullAccess: options.fullAccess,
     });
   });
 }

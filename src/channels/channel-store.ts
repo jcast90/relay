@@ -264,6 +264,74 @@ export class ChannelStore {
   }
 
   /**
+   * Flip the per-channel `fullAccess` flag (AL-0). When set, agent
+   * subprocesses dispatched on behalf of this channel run with
+   * `--dangerously-skip-permissions` (Claude) / `--full-auto` (Codex) so
+   * they don't prompt for approval on every tool call. Scoping is
+   * per-channel, NOT per-workspace: two channels that happen to share a
+   * repo keep independent flags.
+   *
+   * Every toggle records a decision on the channel so the audit trail is
+   * durable — the entry shows up in `rly decisions <channelId>` and the GUI
+   * decisions tab. Returns the updated channel, or `null` when no channel
+   * matches the given id.
+   *
+   * @param channelId id of the channel to update
+   * @param on new value of the flag
+   * @param actor optional actor attribution for the decision entry. Defaults
+   *   to `"user"` / `"User"` — the CLI passes through an explicit actor when
+   *   one is available (e.g. the GUI's tauri command sets it to `"gui"`).
+   */
+  async setFullAccess(
+    channelId: string,
+    on: boolean,
+    actor?: { id?: string; name?: string; source?: string }
+  ): Promise<Channel | null> {
+    assertSafeSegment(channelId, "channelId");
+    const existing = await this.getChannel(channelId);
+    if (!existing) return null;
+
+    const previous = existing.fullAccess === true;
+    const next = on === true;
+
+    // Persist the flag change first. The decision entry is strictly
+    // supplementary audit — if it fails for some reason we'd rather the
+    // flag itself be on disk so the spawner reads the correct value.
+    const updated: Channel = {
+      ...existing,
+      fullAccess: next,
+      updatedAt: new Date().toISOString(),
+    };
+    await this.writeChannel(updated);
+
+    // Always record a decision — even for no-op toggles — so the audit
+    // trail shows the call was made. The acceptance criteria say "every
+    // set-full-access toggle", which we read as "every invocation of the
+    // setter", not "every observed state change".
+    const decidedBy = actor?.id ?? "user";
+    const decidedByName = actor?.name ?? "User";
+    const source = actor?.source ?? "cli";
+    const stateLabel = next ? "on" : "off";
+    await this.recordDecision(channelId, {
+      runId: null,
+      ticketId: null,
+      title: `Full-access mode turned ${stateLabel}`,
+      description:
+        `Channel ${channelId} full-access flag set to ${stateLabel} ` +
+        `(previous: ${previous ? "on" : "off"}).`,
+      rationale: `Agent subprocesses dispatched for this channel will ${
+        next ? "run with" : "no longer receive"
+      } --dangerously-skip-permissions (Claude) / --full-auto (Codex).`,
+      alternatives: [],
+      decidedBy,
+      decidedByName,
+      linkedArtifacts: [],
+    });
+
+    return updated;
+  }
+
+  /**
    * Bump a channel's `updatedAt` without patching any user-visible field.
    * Called from activity writes (postEntry, recordDecision) so the sidebar
    * can sort channels by most-recent activity. Silently no-ops if the
