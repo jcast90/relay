@@ -116,6 +116,37 @@ would block the rollout (any new role would break all sessions until a map
 entry landed). The warning ensures a typo never ships quietly as cosmetic
 enforcement.
 
+## Activation status
+
+The pool is **built but not yet wired into production runs**. AL-13 will
+define the admin handshake protocol + flip this flag to on.
+
+AL-12 ships the `RepoAdminPool` boot / restart / shutdown mechanics and
+tests them against a fake spawner, but the autonomous-loop driver
+(`src/orchestrator/autonomous-loop.ts`) gates pool construction behind
+the `RELAY_REPO_ADMIN_POOL_ENABLED` env var — defaulted **off**. When
+the flag is unset, the driver preserves the pre-AL-12 path: no pool is
+constructed, lifecycle transitions to `killed` with reason
+`"al-13-pending"`, and the CLI exits cleanly.
+
+Why the gate exists: the default spawner runs the real `claude` CLI,
+which today exits in milliseconds (no prompt wired up, stdin closed).
+Without AL-13's handshake protocol, enabling the pool in production
+would produce an immediate flap loop (each death respawns until the
+rapid-restart ceiling fires). Keeping the pool off by default lets the
+AL-12 code land and be exercised in isolation without that risk. AL-13
+flips the flag to on after wiring the handshake.
+
+To exercise the pool locally (e.g. with a fake spawner injected from a
+test harness or a scripted stub):
+
+```bash
+RELAY_REPO_ADMIN_POOL_ENABLED=1 rly run --autonomous --channel <id>
+```
+
+Recognised true-ish values: `1`, `true`, `yes`, `on` (case-insensitive).
+Anything else — including typos — is treated as off.
+
 ## Spawner wiring
 
 `createLiveAgents({ ..., role: "repo-admin" })` in `src/agents/factory.ts`

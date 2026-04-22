@@ -418,7 +418,7 @@ describe("runAutonomousCommand", () => {
     expect(lifecycle.transitions[0].reason).toBe("autonomous-session-started");
   });
 
-  it("happy path with real stub driver: ends lifecycle in killed/al-4-pending", async () => {
+  it("happy path with real stub driver: ends lifecycle in killed/al-13-pending", async () => {
     const { store, channelId } = await seedChannel();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -449,7 +449,10 @@ describe("runAutonomousCommand", () => {
       const lifecycle = JSON.parse(lifecycleRaw);
       expect(lifecycle.state).toBe("killed");
       const final = lifecycle.transitions[lifecycle.transitions.length - 1];
-      expect(final.reason).toBe("al-4-pending");
+      // AL-12 boots the repo-admin pool before the stub ends, so the
+      // terminal reason advanced from "al-4-pending" to "al-13-pending"
+      // (the next gap is ticket routing, AL-13).
+      expect(final.reason).toBe("al-13-pending");
     } finally {
       warnSpy.mockRestore();
       logSpy.mockRestore();
