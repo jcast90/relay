@@ -260,7 +260,11 @@ export function Composer({
   // workspaces. The user can still send — we just surface a heads-up that
   // those agents won't be routed to. One-click attach per offender.
   const unattachedMentions = computeUnattachedMentions(text, channel, workspaces);
-  const attachFromWarning = async (ws: { workspaceId: string; repoPath: string; alias: string }) => {
+  const attachFromWarning = async (ws: {
+    workspaceId: string;
+    repoPath: string;
+    alias: string;
+  }) => {
     setAttaching(ws.workspaceId);
     try {
       const next = [
@@ -440,16 +444,17 @@ function computeUnattachedMentions(
 ): Array<{ workspaceId: string; repoPath: string; alias: string }> {
   if (!text.trim()) return [];
   const attachedAliases = new Set(channel.repoAssignments.map((r) => r.alias.toLowerCase()));
-  const attachedWorkspaceIds = new Set(
-    channel.repoAssignments.map((r) => r.workspaceId)
-  );
+  const attachedWorkspaceIds = new Set(channel.repoAssignments.map((r) => r.workspaceId));
   const candidatesByAlias = new Map<
     string,
     { workspaceId: string; repoPath: string; alias: string }
   >();
   for (const w of workspaces) {
     if (attachedWorkspaceIds.has(w.workspaceId)) continue;
-    const alias = basename(w.repoPath).replace(/[^a-z0-9-]/gi, "").toLowerCase().slice(0, 12);
+    const alias = basename(w.repoPath)
+      .replace(/[^a-z0-9-]/gi, "")
+      .toLowerCase()
+      .slice(0, 12);
     if (!alias) continue;
     if (!candidatesByAlias.has(alias)) {
       candidatesByAlias.set(alias, { workspaceId: w.workspaceId, repoPath: w.repoPath, alias });
