@@ -91,6 +91,10 @@ describe("TokenTracker", () => {
       const off = tracker.onThreshold((evt) => events.push(evt));
 
       tracker.record(500, 0); // crosses 50
+      // Drain the write chain so the 50 emit has dispatched before we
+      // unsubscribe. Threshold emission is serialized behind the chain
+      // now; observing a specific emit requires awaiting flush first.
+      await tracker.flush();
       off();
       tracker.record(500, 0); // would cross 85, 95, 100
       await tracker.flush();
@@ -176,6 +180,48 @@ describe("TokenTracker", () => {
       expect(second.used).toBe(200); // recovered from the valid line only
       await second.close();
     });
+
+    it("record() called immediately after construction waits for replay to finish", async () => {
+      // Regression: previously record() read _used synchronously before
+      // replay had a chance to populate it, so the first recorded line had
+      // the wrong cumulativeUsed and any already-crossed threshold could
+      // re-fire on resume.
+      const sessionId = "s-replay-race";
+
+      // Pre-seed the file so replay has something to sum. Cumulative total
+      // should resume at 900 (90%).
+      const first = new TokenTracker(sessionId, 1000, { rootDir: root });
+      first.record(900, 0);
+      await first.close();
+
+      // Construct the resumed tracker and immediately record without
+      // awaiting flush() first. The append + threshold check should both
+      // wait for replay to finish.
+      const second = new TokenTracker(sessionId, 1000, { rootDir: root });
+      const events: ThresholdEvent[] = [];
+      second.onThreshold((evt) => events.push(evt));
+      second.record(5, 0); // +5 → 905 (90.5%), crosses nothing new
+
+      await second.flush();
+
+      // 50 and 85 already fired in the prior lifetime; they must not fire
+      // again on resume. 95 has not been crossed yet (we're at 90.5%).
+      expect(events).toEqual([]);
+      expect(second.used).toBe(905);
+
+      // And the appended line must carry the post-replay cumulative total.
+      const contents = await readFile(join(root, "sessions", sessionId, "budget.jsonl"), "utf8");
+      const lines = contents.trim().split("\n");
+      const last = JSON.parse(lines[lines.length - 1]);
+      expect(last.cumulativeUsed).toBe(905);
+
+      // Crossing 95% afterwards still fires exactly once.
+      second.record(100, 0); // 1005 → 100.5%, crosses 95 and 100
+      await second.flush();
+      expect(events.map((e) => e.threshold)).toEqual([95, 100]);
+
+      await second.close();
+    });
   });
 
   describe("concurrent writes", () => {
@@ -231,6 +277,54 @@ describe("TokenTracker", () => {
       await expect(stat(join(root, "sessions", "s-zero", "budget.jsonl"))).rejects.toThrow(
         /ENOENT/
       );
+    });
+  });
+
+  describe("listener isolation", () => {
+    it("a throwing listener does not abort the emit loop or kill record()", async () => {
+      const tracker = new TokenTracker("s-throwy", 1000, { rootDir: root });
+      const seen: number[] = [];
+      const secondListenerSeen: number[] = [];
+
+      // First listener throws on every call. Second listener records what
+      // it receives. Both must fire for every crossed threshold; record()
+      // must not throw.
+      tracker.onThreshold(() => {
+        throw new Error("boom");
+      });
+      tracker.onThreshold((evt) => secondListenerSeen.push(evt.threshold));
+      tracker.onThreshold((evt) => seen.push(evt.threshold));
+
+      const warnings: string[] = [];
+      const originalWarn = console.warn;
+      console.warn = (msg: unknown, ...rest: unknown[]) => {
+        warnings.push([msg, ...rest].map(String).join(" "));
+      };
+
+      try {
+        // Cross 50 and 85 in a single record. record() is void and must
+        // not throw even though a listener throws on every dispatch.
+        expect(() => tracker.record(900, 0)).not.toThrow();
+        await tracker.flush();
+      } finally {
+        console.warn = originalWarn;
+      }
+
+      // Both thresholds reached the healthy listeners.
+      expect(secondListenerSeen).toEqual([50, 85]);
+      expect(seen).toEqual([50, 85]);
+
+      // The throwing listener was logged per-threshold (at least one warn
+      // per crossed threshold, with the threshold number + error message).
+      expect(warnings.some((w) => w.includes("50") && w.includes("boom"))).toBe(true);
+      expect(warnings.some((w) => w.includes("85") && w.includes("boom"))).toBe(true);
+
+      // A later crossing still fires the remaining thresholds exactly once.
+      tracker.record(100, 0); // 1000 → 100%, crosses 95 and 100
+      await tracker.flush();
+      expect(secondListenerSeen).toEqual([50, 85, 95, 100]);
+
+      await tracker.close();
     });
   });
 

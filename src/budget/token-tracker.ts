@@ -103,11 +103,19 @@ export class TokenTracker {
   /**
    * Record the token cost of a single API call. Returns void — the write
    * is queued and flushed asynchronously. Callers that need to know the
-   * write hit disk should `await tracker.close()` (or `await flush()`).
+   * write hit disk (or that thresholds have fired) should `await
+   * tracker.close()` (or `await flush()`).
    *
    * Zero-token records are a no-op. Negative inputs throw (the Claude
    * stream never reports negative usage; a negative value indicates a
    * parsing bug we want to surface loudly, not silently absorb).
+   *
+   * Ordering: the threshold computation, event emission, and disk append
+   * are all chained behind any in-flight replay or earlier record so that
+   * a `record()` invoked immediately after construction still observes the
+   * resumed cumulative total. This means thresholds that already crossed
+   * in the replayed state never re-fire, and the JSONL line carries the
+   * correct post-replay `cumulativeUsed`.
    */
   record(inputTokens: number, outputTokens: number): void {
     if (this.closed) {
@@ -127,15 +135,31 @@ export class TokenTracker {
     const increment = inputTokens + outputTokens;
     if (increment === 0) return;
 
-    // Compute the new running total synchronously so `used` / `pct` reflect
-    // the record immediately (the disk write is queued but the in-memory
-    // number is authoritative for subscribers).
-    const previous = this._used;
-    this._used = previous + increment;
-    const crossed = this.findCrossedThresholds(previous, this._used);
-
-    // Queue the append behind any in-flight replay or earlier record.
+    // Chain the entire record — threshold compute, event dispatch, and
+    // disk append — onto the write chain. Replay is the first link, so
+    // any record queued before replay finishes still sees the resumed
+    // `_used` and already-crossed thresholds.
     this.writeChain = this.writeChain.then(async () => {
+      const previous = this._used;
+      this._used = previous + increment;
+      const crossed = this.findCrossedThresholds(previous, this._used);
+
+      // Fire threshold events before the disk write so listeners observe
+      // crossings in the same order they happen in `_used`. Each dispatch
+      // is isolated so a throwing listener can't abort the loop or take
+      // down the tracker (record() is a documented void hot path).
+      for (const threshold of crossed) {
+        this.firedThresholds.add(threshold);
+        const evt: ThresholdEvent = {
+          sessionId: this.sessionId,
+          used: this._used,
+          total: this._total,
+          pct: this.pct,
+          threshold,
+        };
+        this.safeEmitThreshold(evt);
+      }
+
       try {
         await this.appendLine({
           ts: new Date().toISOString(),
@@ -153,23 +177,15 @@ export class TokenTracker {
         }
       }
     });
-
-    // Fire threshold events synchronously after updating in-memory state
-    // so listeners see `used`/`pct` matching the event.
-    for (const threshold of crossed) {
-      this.firedThresholds.add(threshold);
-      const evt: ThresholdEvent = {
-        sessionId: this.sessionId,
-        used: this._used,
-        total: this._total,
-        pct: this.pct,
-        threshold,
-      };
-      this.emitter.emit("threshold", evt);
-    }
   }
 
-  /** Total tokens consumed so far (sum of all recorded input+output). */
+  /**
+   * Total tokens consumed so far (sum of all recorded input+output).
+   * Reflects the best-known cached value: 0 immediately after construction
+   * until replay completes, then the resumed total, then the post-record
+   * running total after each queued `record()` drains. Callers that need
+   * a consistent snapshot should `await tracker.flush()` first.
+   */
   get used(): number {
     return this._used;
   }
@@ -234,6 +250,24 @@ export class TokenTracker {
   }
 
   // --- internals -----------------------------------------------------------
+
+  /**
+   * Dispatch a threshold event to each subscriber individually. A listener
+   * that throws is logged to `console.warn` and the remaining listeners
+   * still fire — a single bad subscriber can't abort the emit loop or kill
+   * the tracker's void hot path.
+   */
+  private safeEmitThreshold(evt: ThresholdEvent): void {
+    const listeners = this.emitter.listeners("threshold") as ThresholdListener[];
+    for (const listener of listeners) {
+      try {
+        listener(evt);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`TokenTracker: threshold ${evt.threshold} listener threw: ${msg}`);
+      }
+    }
+  }
 
   private async replay(): Promise<void> {
     let content: string;
