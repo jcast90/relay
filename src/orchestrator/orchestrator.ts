@@ -6,20 +6,20 @@ import type {
   HarnessRun,
   PhaseLedgerEntry,
   RunEvent,
-  RunEventType
+  RunEventType,
 } from "../domain/run.js";
 import { assertTransition } from "../domain/state-machine.js";
 import { AgentRegistry } from "../agents/registry.js";
 import type { ArtifactStore } from "../execution/artifact-store.js";
 import {
   selectVerificationCommands,
-  VerificationRunner
+  VerificationRunner,
 } from "../execution/verification-runner.js";
 import {
   buildRetryContext,
   buildRetryObjective,
   fallbackFailureClassification,
-  isVerificationPlanIssue
+  isVerificationPlanIssue,
 } from "./failure-routing.js";
 
 export class Orchestrator {
@@ -51,11 +51,11 @@ export class Orchestrator {
       phaseLedgerPath: null,
       ticketLedger: [],
       ticketLedgerPath: null,
-      runIndexPath: null
+      runIndexPath: null,
     };
 
     this.recordEvent(run, "TaskSubmitted", "phase_00", {
-      featureRequest
+      featureRequest,
     });
 
     const planResult = await this.dispatch(run, {
@@ -66,7 +66,7 @@ export class Orchestrator {
       objective: featureRequest,
       acceptanceCriteria: [
         "Create bounded phases with acceptance criteria.",
-        "Include retry policy and verification commands."
+        "Include retry policy and verification commands.",
       ],
       allowedCommands: [],
       verificationCommands: [],
@@ -75,7 +75,7 @@ export class Orchestrator {
       artifactContext: [],
       attempt: 1,
       maxAttempts: 2,
-      priorEvidence: []
+      priorEvidence: [],
     });
     run.plan = planResult.phasePlan ?? createSeedPlan(featureRequest, this.repoRoot);
     this.initializePhaseLedger(run);
@@ -88,7 +88,7 @@ export class Orchestrator {
       await this.updatePhaseLedger(run, phase.id, {
         lifecycle: "implementing",
         verification: "pending",
-        chosenNextAction: "Implement the current phase objective."
+        chosenNextAction: "Implement the current phase objective.",
       });
 
       const checksPassed = await this.executePhaseUntilVerified(run, phase, featureRequest);
@@ -113,16 +113,16 @@ export class Orchestrator {
         context: phase.acceptanceCriteria,
         artifactContext: await this.collectArtifactContext(run, phase.id, {
           includeSuccessful: true,
-          limit: 3
+          limit: 3,
         }),
         attempt: 1,
         maxAttempts: phase.retryPolicy.maxAgentAttempts,
-        priorEvidence: this.collectPhaseEvidence(run, phase.id)
+        priorEvidence: this.collectPhaseEvidence(run, phase.id),
       });
       await this.transition(run, "ReviewResolved", phase.id);
       await this.updatePhaseLedger(run, phase.id, {
         lifecycle: "completed",
-        chosenNextAction: "Phase complete. Advance to the next phase."
+        chosenNextAction: "Phase complete. Advance to the next phase.",
       });
     }
     await this.transition(run, "NoPhasesRemain", run.plan.phases.at(-1)?.id ?? "phase_00");
@@ -133,17 +133,14 @@ export class Orchestrator {
     return run;
   }
 
-  private async dispatch(
-    run: HarnessRun,
-    input: Omit<WorkRequest, "runId">
-  ) {
+  private async dispatch(run: HarnessRun, input: Omit<WorkRequest, "runId">) {
     let lastError: Error | null = null;
 
     for (let attempt = 1; attempt <= input.maxAttempts; attempt += 1) {
       const request: WorkRequest = {
         runId: run.id,
         ...input,
-        attempt
+        attempt,
       };
       const agent = this.registry.resolve(request);
 
@@ -151,7 +148,7 @@ export class Orchestrator {
         agentId: agent.id,
         provider: agent.provider,
         workKind: input.kind,
-        attempt: String(attempt)
+        attempt: String(attempt),
       });
 
       try {
@@ -166,20 +163,20 @@ export class Orchestrator {
           summary: result.summary,
           evidence: result.evidence,
           proposedCommands: result.proposedCommands,
-          blockers: result.blockers
+          blockers: result.blockers,
         });
 
         this.recordEvent(run, "AgentCompleted", input.phaseId, {
           agentId: agent.id,
           summary: result.summary,
-          attempt: String(attempt)
+          attempt: String(attempt),
         });
 
         if (result.blockers.length > 0 && attempt < input.maxAttempts) {
           this.recordEvent(run, "AgentRetried", input.phaseId, {
             agentId: agent.id,
             attempt: String(attempt),
-            reason: result.blockers.join("; ")
+            reason: result.blockers.join("; "),
           });
           continue;
         }
@@ -189,13 +186,13 @@ export class Orchestrator {
         lastError = error instanceof Error ? error : new Error(String(error));
         this.recordEvent(run, "AgentFailed", input.phaseId, {
           attempt: String(attempt),
-          message: lastError.message
+          message: lastError.message,
         });
 
         if (attempt < input.maxAttempts) {
           this.recordEvent(run, "AgentRetried", input.phaseId, {
             attempt: String(attempt),
-            reason: lastError.message
+            reason: lastError.message,
           });
           continue;
         }
@@ -212,11 +209,7 @@ export class Orchestrator {
   ): Promise<boolean> {
     let classification: FailureClassification | null = null;
 
-    for (
-      let loop = 1;
-      loop <= phase.retryPolicy.maxTestFixLoops;
-      loop += 1
-    ) {
+    for (let loop = 1; loop <= phase.retryPolicy.maxTestFixLoops; loop += 1) {
       await this.dispatch(run, {
         phaseId: phase.id,
         kind: "implement_phase",
@@ -230,15 +223,15 @@ export class Orchestrator {
         context: [
           `Feature request: ${featureRequest}`,
           `Verification loop: ${loop} of ${phase.retryPolicy.maxTestFixLoops}`,
-          ...buildRetryContext(classification)
+          ...buildRetryContext(classification),
         ],
         artifactContext: await this.collectArtifactContext(run, phase.id, {
           includeSuccessful: false,
-          limit: 2
+          limit: 2,
         }),
         attempt: 1,
         maxAttempts: phase.retryPolicy.maxAgentAttempts,
-        priorEvidence: this.collectPhaseEvidence(run, phase.id)
+        priorEvidence: this.collectPhaseEvidence(run, phase.id),
       });
       await this.transition(run, "PatchGenerated", phase.id);
       await this.updatePhaseLedger(run, phase.id, {
@@ -246,7 +239,7 @@ export class Orchestrator {
         verification: "running",
         chosenNextAction: classification
           ? classification.nextAction
-          : "Run the verification commands for the current phase."
+          : "Run the verification commands for the current phase.",
       });
 
       const testerResult = await this.dispatch(run, {
@@ -264,11 +257,11 @@ export class Orchestrator {
         context: [...phase.acceptanceCriteria, ...buildRetryContext(classification)],
         artifactContext: await this.collectArtifactContext(run, phase.id, {
           includeSuccessful: false,
-          limit: 2
+          limit: 2,
         }),
         attempt: 1,
         maxAttempts: phase.retryPolicy.maxAgentAttempts,
-        priorEvidence: this.collectPhaseEvidence(run, phase.id)
+        priorEvidence: this.collectPhaseEvidence(run, phase.id),
       });
 
       const verificationResult = await this.executeVerificationCommands(
@@ -283,23 +276,19 @@ export class Orchestrator {
         await this.updatePhaseLedger(run, phase.id, {
           lifecycle: "reviewing",
           verification: "passed",
-          chosenNextAction: "Verification passed. Proceed to review."
+          chosenNextAction: "Verification passed. Proceed to review.",
         });
         return true;
       }
 
-      classification = await this.classifyFailure(
-        run,
-        phase,
-        verificationResult.rejected
-      );
+      classification = await this.classifyFailure(run, phase, verificationResult.rejected);
 
       if (loop < phase.retryPolicy.maxTestFixLoops) {
         await this.transition(run, "ChecksFailedRecoverable", phase.id);
         await this.updatePhaseLedger(run, phase.id, {
           lifecycle: "implementing",
           verification: "failed_recoverable",
-          chosenNextAction: classification.nextAction
+          chosenNextAction: classification.nextAction,
         });
         continue;
       }
@@ -308,7 +297,7 @@ export class Orchestrator {
       await this.updatePhaseLedger(run, phase.id, {
         lifecycle: "failed",
         verification: "failed_terminal",
-        chosenNextAction: classification.nextAction
+        chosenNextAction: classification.nextAction,
       });
       return false;
     }
@@ -323,7 +312,7 @@ export class Orchestrator {
   ): Promise<FailureClassification> {
     const artifactContext = await this.collectArtifactContext(run, phase.id, {
       includeSuccessful: false,
-      limit: 3
+      limit: 3,
     });
     const classificationResult = await this.dispatch(run, {
       phaseId: phase.id,
@@ -334,49 +323,48 @@ export class Orchestrator {
         "Classify the failing artifacts before retrying. Choose one category: fix_code, fix_test, or bad_command_plan.",
       acceptanceCriteria: [
         "Use artifact contents to choose the most likely failure category.",
-        "Explain the rationale and the next best retry action."
+        "Explain the rationale and the next best retry action.",
       ],
       allowedCommands: phase.allowedCommands,
       verificationCommands: phase.verificationCommands,
       docsToUpdate: [],
-      context: rejectedCommands.length > 0
-        ? [`Rejected commands: ${rejectedCommands.join(", ")}`]
-        : [],
+      context:
+        rejectedCommands.length > 0 ? [`Rejected commands: ${rejectedCommands.join(", ")}`] : [],
       artifactContext,
       attempt: 1,
       maxAttempts: phase.retryPolicy.maxAgentAttempts,
-      priorEvidence: this.collectPhaseEvidence(run, phase.id)
+      priorEvidence: this.collectPhaseEvidence(run, phase.id),
     });
 
     const classification =
       classificationResult.failureClassification ??
       fallbackFailureClassification({
         artifactContext,
-        rejectedCommands
+        rejectedCommands,
       });
 
     this.recordEvent(run, "FailureClassified", phase.id, {
       category: classification.category,
       rationale: classification.rationale,
-      nextAction: classification.nextAction
+      nextAction: classification.nextAction,
     });
     const artifact = await this.artifactStore.saveFailureClassification({
       runId: run.id,
       phaseId: phase.id,
-      classification
+      classification,
     });
     this.recordArtifact(run, artifact);
     this.recordEvent(run, "ArtifactCaptured", phase.id, {
       artifactId: artifact.artifactId,
-      path: artifact.path
+      path: artifact.path,
     });
     await this.updatePhaseLedger(run, phase.id, {
       lastClassification: {
         category: classification.category,
         rationale: classification.rationale,
-        nextAction: classification.nextAction
+        nextAction: classification.nextAction,
       },
-      chosenNextAction: classification.nextAction
+      chosenNextAction: classification.nextAction,
     });
 
     return classification;
@@ -388,15 +376,12 @@ export class Orchestrator {
     proposedCommands: string[],
     allowlistedCommands: string[]
   ) {
-    const selection = selectVerificationCommands(
-      proposedCommands,
-      allowlistedCommands
-    );
+    const selection = selectVerificationCommands(proposedCommands, allowlistedCommands);
 
     for (const rejected of selection.rejected) {
       this.recordEvent(run, "CommandRejected", phaseId, {
         command: rejected,
-        reason: "not_allowlisted"
+        reason: "not_allowlisted",
       });
     }
 
@@ -404,25 +389,25 @@ export class Orchestrator {
 
     for (const command of selection.commandsToRun) {
       this.recordEvent(run, "CommandStarted", phaseId, {
-        command
+        command,
       });
       const entry = await this.verificationRunner.executeCommand({
         runId: run.id,
         phaseId,
         repoRoot: this.repoRoot,
-        command
+        command,
       });
 
       this.recordArtifact(run, entry.artifact);
       this.recordEvent(run, "ArtifactCaptured", phaseId, {
         artifactId: entry.artifact.artifactId,
-        path: entry.artifact.path
+        path: entry.artifact.path,
       });
       this.recordEvent(run, "CommandCompleted", phaseId, {
         command,
         exitCode: String(entry.result.exitCode),
         stdoutBytes: String(entry.result.stdout.length),
-        stderrBytes: String(entry.result.stderr.length)
+        stderrBytes: String(entry.result.stderr.length),
       });
       this.recordEvidence(run, {
         phaseId,
@@ -434,13 +419,10 @@ export class Orchestrator {
         evidence: [
           `artifact=${entry.artifact.path}`,
           `stdout_bytes=${entry.result.stdout.length}`,
-          `stderr_bytes=${entry.result.stderr.length}`
+          `stderr_bytes=${entry.result.stderr.length}`,
         ],
         proposedCommands: [command],
-        blockers:
-          entry.result.exitCode === 0
-            ? []
-            : [`Verification command failed: ${command}`]
+        blockers: entry.result.exitCode === 0 ? [] : [`Verification command failed: ${command}`],
       });
 
       success = success && entry.result.exitCode === 0;
@@ -449,7 +431,7 @@ export class Orchestrator {
     return {
       success,
       executedCount: selection.commandsToRun.length,
-      rejected: selection.rejected
+      rejected: selection.rejected,
     };
   }
 
@@ -461,7 +443,7 @@ export class Orchestrator {
     run.state = assertTransition(run.state, eventType);
     run.updatedAt = new Date().toISOString();
     this.recordEvent(run, eventType, phaseId, {
-      state: run.state
+      state: run.state,
     });
     await this.persistRunIndex(run);
   }
@@ -476,7 +458,7 @@ export class Orchestrator {
       type,
       phaseId,
       details,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     };
 
     run.events.push(event);
@@ -509,7 +491,7 @@ export class Orchestrator {
       verification: "pending",
       lastClassification: null,
       chosenNextAction: "Await phase start.",
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
     }));
   }
 
@@ -525,7 +507,7 @@ export class Orchestrator {
     }
 
     Object.assign(entry, patch, {
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
     });
 
     await this.persistPhaseLedger(run);
@@ -534,7 +516,7 @@ export class Orchestrator {
   private async persistPhaseLedger(run: HarnessRun): Promise<void> {
     run.phaseLedgerPath = await this.artifactStore.savePhaseLedger({
       runId: run.id,
-      phaseLedger: run.phaseLedger
+      phaseLedger: run.phaseLedger,
     });
     run.updatedAt = new Date().toISOString();
     await this.persistRunIndex(run);
@@ -552,9 +534,9 @@ export class Orchestrator {
         channelId: run.channelId,
         phaseLedgerPath: run.phaseLedgerPath,
         artifactsRoot: this.artifactsDir
-        ? `${this.artifactsDir}/${run.id}`
-        : `${this.repoRoot}/.relay/artifacts/${run.id}`
-      }
+          ? `${this.artifactsDir}/${run.id}`
+          : `${this.repoRoot}/.relay/artifacts/${run.id}`,
+      },
     });
     await this.artifactStore.saveRunSnapshot(run);
   }
@@ -610,7 +592,7 @@ function formatArtifactContext(input: {
     "STDOUT:",
     stdout,
     "STDERR:",
-    stderr
+    stderr,
   ].join("\n");
 }
 

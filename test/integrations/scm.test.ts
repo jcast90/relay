@@ -6,7 +6,7 @@ function makePr(overrides: Partial<HarnessPR> = {}): HarnessPR {
   return {
     number: overrides.number ?? 7,
     url: overrides.url ?? "https://github.com/acme/widgets/pull/7",
-    branch: overrides.branch ?? "feat/seven"
+    branch: overrides.branch ?? "feat/seven",
   };
 }
 
@@ -14,7 +14,7 @@ const projectDescriptor = {
   owner: "acme",
   name: "widgets",
   path: "/tmp/repo",
-  defaultBranch: "main"
+  defaultBranch: "main",
 };
 
 describe("wrapScm — facade delegation", () => {
@@ -27,7 +27,7 @@ describe("wrapScm — facade delegation", () => {
       owner: "acme",
       repo: "widgets",
       baseBranch: "main",
-      isDraft: false
+      isDraft: false,
     }));
 
     const scm = { name: "gh", detectPR } as any;
@@ -38,12 +38,11 @@ describe("wrapScm — facade delegation", () => {
     expect(res).toEqual({
       number: 7,
       url: "https://github.com/acme/widgets/pull/7",
-      branch: "feat/seven"
+      branch: "feat/seven",
     });
-    const firstCall = detectPR.mock.calls[0] as unknown as [
-      { branch: string },
-      unknown
-    ] | undefined;
+    const firstCall = detectPR.mock.calls[0] as unknown as
+      | [{ branch: string }, unknown]
+      | undefined;
     expect(firstCall).toBeDefined();
     expect(firstCall![0].branch).toBe("feat/seven");
   });
@@ -62,9 +61,9 @@ describe("wrapScm — facade delegation", () => {
           line: 10,
           isResolved: false,
           createdAt: new Date(),
-          url: "https://github.com/acme/widgets/pull/7#c1"
-        }
-      ])
+          url: "https://github.com/acme/widgets/pull/7#c1",
+        },
+      ]),
     } as any;
 
     const wrapped = wrapScm(scm, projectDescriptor);
@@ -75,13 +74,13 @@ describe("wrapScm — facade delegation", () => {
 
     const comments = await wrapped.getPendingComments(pr);
     expect(comments).toEqual([
-      { id: "c1", author: "alice", body: "nit: rename", path: "src/a.ts", line: 10 }
+      { id: "c1", author: "alice", body: "nit: rename", path: "src/a.ts", line: 10 },
     ]);
 
     expect(scm.getCISummary).toHaveBeenCalledTimes(1);
-    const ciCall = scm.getCISummary.mock.calls[0] as unknown as [
-      { number: number; owner: string; repo: string }
-    ] | undefined;
+    const ciCall = scm.getCISummary.mock.calls[0] as unknown as
+      | [{ number: number; owner: string; repo: string }]
+      | undefined;
     expect(ciCall).toBeDefined();
     expect(ciCall![0].number).toBe(7);
     expect(ciCall![0].owner).toBe("acme");
@@ -91,23 +90,24 @@ describe("wrapScm — facade delegation", () => {
   it("enrichBatch prefers scm.enrichSessionsPRBatch when available", async () => {
     const scm = {
       name: "gh",
-      enrichSessionsPRBatch: vi.fn(async () =>
-        new Map([
-          [
-            "acme/widgets#7",
-            {
-              state: "open" as const,
-              ciStatus: "passing" as const,
-              reviewDecision: "approved" as const,
-              mergeable: true
-            }
-          ]
-        ])
+      enrichSessionsPRBatch: vi.fn(
+        async () =>
+          new Map([
+            [
+              "acme/widgets#7",
+              {
+                state: "open" as const,
+                ciStatus: "passing" as const,
+                reviewDecision: "approved" as const,
+                mergeable: true,
+              },
+            ],
+          ])
       ),
       // Fallback methods should NOT be called when the batch method exists.
       getPRState: vi.fn(),
       getCISummary: vi.fn(),
-      getReviewDecision: vi.fn()
+      getReviewDecision: vi.fn(),
     } as any;
 
     const wrapped = wrapScm(scm, projectDescriptor);
@@ -121,7 +121,7 @@ describe("wrapScm — facade delegation", () => {
     expect(result.get("acme/widgets#7")).toEqual({
       ci: "passing",
       review: "approved",
-      prState: "open"
+      prState: "open",
     });
   });
 });
@@ -136,7 +136,7 @@ describe("wrapScm — detectPR cross-repo routing", () => {
       owner: "a",
       name: "alpha",
       path: "/tmp/alpha",
-      defaultBranch: "main"
+      defaultBranch: "main",
     });
 
     // Call detectPR with a different repo (b/beta).
@@ -145,7 +145,7 @@ describe("wrapScm — detectPR cross-repo routing", () => {
     expect(detectPR).toHaveBeenCalledTimes(1);
     const call = detectPR.mock.calls[0] as unknown as [
       unknown,
-      { name: string; repo: string; path: string; defaultBranch: string; sessionPrefix: string }
+      { name: string; repo: string; path: string; defaultBranch: string; sessionPrefix: string },
     ];
     const projectArg = call[1];
 
@@ -165,15 +165,12 @@ describe("wrapScm — detectPR cross-repo routing", () => {
       owner: "a",
       name: "alpha",
       path: "/tmp/alpha",
-      defaultBranch: "main"
+      defaultBranch: "main",
     });
 
     await wrapped.detectPR("feat/x", { owner: "a", name: "alpha" });
 
-    const call = detectPR.mock.calls[0] as unknown as [
-      unknown,
-      { repo: string }
-    ];
+    const call = detectPR.mock.calls[0] as unknown as [unknown, { repo: string }];
     expect(call[1].repo).toBe("a/alpha");
   });
 });
@@ -185,13 +182,13 @@ describe("wrapScm — enrichBatch fallback", () => {
       // no enrichSessionsPRBatch defined
       getPRState: vi.fn(async () => "open" as const),
       getCISummary: vi.fn(async () => "failing" as const),
-      getReviewDecision: vi.fn(async () => "pending" as const)
+      getReviewDecision: vi.fn(async () => "pending" as const),
     } as any;
 
     const wrapped = wrapScm(scm, projectDescriptor);
     const prs = [
       makePr({ number: 1, url: "u1", branch: "b1" }),
-      makePr({ number: 2, url: "u2", branch: "b2" })
+      makePr({ number: 2, url: "u2", branch: "b2" }),
     ];
     const result = await wrapped.enrichBatch(prs);
 
@@ -199,12 +196,12 @@ describe("wrapScm — enrichBatch fallback", () => {
     expect(result.get("acme/widgets#1")).toEqual({
       prState: "open",
       ci: "failing",
-      review: "pending"
+      review: "pending",
     });
     expect(result.get("acme/widgets#2")).toEqual({
       prState: "open",
       ci: "failing",
-      review: "pending"
+      review: "pending",
     });
 
     // Per-PR calls: 2 PRs × 3 methods

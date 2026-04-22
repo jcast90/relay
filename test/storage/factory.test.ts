@@ -5,10 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { FileHarnessStore } from "../../src/storage/file-store.js";
-import {
-  buildHarnessStore,
-  NotImplementedError
-} from "../../src/storage/factory.js";
+import { buildHarnessStore, NotImplementedError } from "../../src/storage/factory.js";
 import { getHarnessStore } from "../../src/index.js";
 
 describe("buildHarnessStore", () => {
@@ -54,9 +51,7 @@ describe("buildHarnessStore", () => {
   });
 
   it("throws NotImplementedError for explicit opts.kind=sqlite (same guard path)", () => {
-    expect(() => buildHarnessStore({ kind: "sqlite" })).toThrow(
-      NotImplementedError
-    );
+    expect(() => buildHarnessStore({ kind: "sqlite" })).toThrow(NotImplementedError);
     expect(() => buildHarnessStore({ kind: "sqlite" })).toThrow(/sqlite/i);
   });
 
@@ -66,13 +61,13 @@ describe("buildHarnessStore", () => {
     expect(() =>
       buildHarnessStore({
         kind: "postgres",
-        postgresUrl: "postgres://example/db"
+        postgresUrl: "postgres://example/db",
       })
     ).toThrow(NotImplementedError);
     expect(() =>
       buildHarnessStore({
         kind: "postgres",
-        postgresUrl: "postgres://example/db"
+        postgresUrl: "postgres://example/db",
       })
     ).toThrow(/T-402/);
   });

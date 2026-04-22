@@ -69,7 +69,11 @@ describe("withEnvOverride — serialization of concurrent overlays", () => {
     // Both callers look at process.env[KEY] before and after an await.
     // If the mutex is correct, each caller sees only its own value at both
     // observation points.
-    const observations: Array<{ who: "A" | "B"; before: string | undefined; after: string | undefined }> = [];
+    const observations: Array<{
+      who: "A" | "B";
+      before: string | undefined;
+      after: string | undefined;
+    }> = [];
 
     const callA = withEnvOverride({ [KEY]: "AAA" }, async () => {
       const before = process.env[KEY];
@@ -107,7 +111,7 @@ describe("withEnvOverride — serialization of concurrent overlays", () => {
           order.push(`start:${label}:${process.env[KEY]}`);
           await new Promise((r) => setTimeout(r, 5));
           order.push(`end:${label}:${process.env[KEY]}`);
-        }),
+        })
       );
     }
     await Promise.all(jobs);
@@ -137,7 +141,7 @@ describe("withEnvOverride — restore on throw", () => {
     await expect(
       withEnvOverride({ [KEY]: "OVERLAY" }, () => {
         throw new Error("boom");
-      }),
+      })
     ).rejects.toThrow("boom");
     expect(process.env[KEY]).toBe("PRIOR");
   });
@@ -148,7 +152,7 @@ describe("withEnvOverride — restore on throw", () => {
       withEnvOverride({ [KEY]: "OVERLAY" }, async () => {
         await new Promise((r) => setTimeout(r, 5));
         throw new Error("async boom");
-      }),
+      })
     ).rejects.toThrow("async boom");
     expect(process.env[KEY]).toBe("PRIOR");
   });
@@ -183,9 +187,7 @@ describe("withEnvOverride — recursion self-deadlock guard", () => {
       await withEnvOverride({ [KEY]: "INNER" }, () => process.env[KEY]);
     });
 
-    await expect(recursive).rejects.toThrow(
-      /recursive call detected/,
-    );
+    await expect(recursive).rejects.toThrow(/recursive call detected/);
     // Outer's finally must have run, restoring env.
     expect(process.env[KEY]).toBeUndefined();
   });

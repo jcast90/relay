@@ -22,7 +22,7 @@ function makePoolMock(
     values: unknown[] | undefined
   ) => { rows: unknown[]; rowCount?: number } = () => ({
     rows: [],
-    rowCount: 0
+    rowCount: 0,
   })
 ) {
   const calls: QueryCall[] = [];
@@ -36,7 +36,7 @@ function makePoolMock(
     }),
     release: vi.fn(() => {
       released.push(true);
-    })
+    }),
   };
 
   const pool = {
@@ -45,7 +45,7 @@ function makePoolMock(
       return Promise.resolve(responses(text, values));
     }),
     connect: vi.fn(() => Promise.resolve(client)),
-    end: vi.fn(() => Promise.resolve())
+    end: vi.fn(() => Promise.resolve()),
   };
 
   return { pool, client, calls, clientCalls, released };
@@ -57,33 +57,28 @@ describe("PostgresHarnessStore (unit, mocked pg)", () => {
       const { pool, calls } = makePoolMock();
       const store = new PostgresHarnessStore({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        pool: pool as any
+        pool: pool as any,
       });
 
       const result = await store.getDoc("widgets", "w1");
 
       expect(result).toBeNull();
       expect(calls).toHaveLength(1);
-      expect(calls[0]?.text).toMatch(
-        /SELECT doc FROM harness_docs WHERE ns = \$1 AND id = \$2/
-      );
+      expect(calls[0]?.text).toMatch(/SELECT doc FROM harness_docs WHERE ns = \$1 AND id = \$2/);
       expect(calls[0]?.values).toEqual(["widgets", "w1"]);
     });
 
     it("returns the row's doc when present", async () => {
       const { pool } = makePoolMock(() => ({
         rows: [{ doc: { id: "w1", hello: "world" } }],
-        rowCount: 1
+        rowCount: 1,
       }));
       const store = new PostgresHarnessStore({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        pool: pool as any
+        pool: pool as any,
       });
 
-      const result = await store.getDoc<{ id: string; hello: string }>(
-        "widgets",
-        "w1"
-      );
+      const result = await store.getDoc<{ id: string; hello: string }>("widgets", "w1");
       expect(result).toEqual({ id: "w1", hello: "world" });
     });
   });
@@ -93,16 +88,14 @@ describe("PostgresHarnessStore (unit, mocked pg)", () => {
       const { pool, calls } = makePoolMock();
       const store = new PostgresHarnessStore({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        pool: pool as any
+        pool: pool as any,
       });
 
       await store.putDoc("widgets", "w1", { v: 1 });
 
       expect(calls).toHaveLength(1);
       expect(calls[0]?.text).toMatch(/INSERT INTO harness_docs/);
-      expect(calls[0]?.text).toMatch(
-        /ON CONFLICT \(ns, id\)\s+DO UPDATE SET doc = EXCLUDED\.doc/
-      );
+      expect(calls[0]?.text).toMatch(/ON CONFLICT \(ns, id\)\s+DO UPDATE SET doc = EXCLUDED\.doc/);
       // doc is serialized to a JSONB string literal — third param.
       expect(calls[0]?.values?.[0]).toBe("widgets");
       expect(calls[0]?.values?.[1]).toBe("w1");
@@ -115,7 +108,7 @@ describe("PostgresHarnessStore (unit, mocked pg)", () => {
       const { pool, calls } = makePoolMock();
       const store = new PostgresHarnessStore({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        pool: pool as any
+        pool: pool as any,
       });
 
       await store.listDocs("widgets");
@@ -130,7 +123,7 @@ describe("PostgresHarnessStore (unit, mocked pg)", () => {
       const { pool, calls } = makePoolMock();
       const store = new PostgresHarnessStore({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        pool: pool as any
+        pool: pool as any,
       });
 
       await store.listDocs("widgets", "alpha_b%c\\d");
@@ -152,14 +145,12 @@ describe("PostgresHarnessStore (unit, mocked pg)", () => {
       });
       const store = new PostgresHarnessStore({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        pool: pool as any
+        pool: pool as any,
       });
 
-      const next = await store.mutate<{ count: number }>(
-        "widgets",
-        "ctr",
-        (prev) => ({ count: (prev?.count ?? 0) + 1 })
-      );
+      const next = await store.mutate<{ count: number }>("widgets", "ctr", (prev) => ({
+        count: (prev?.count ?? 0) + 1,
+      }));
 
       expect(next).toEqual({ count: 2 });
       const texts = clientCalls.map((c) => c.text);
@@ -177,7 +168,7 @@ describe("PostgresHarnessStore (unit, mocked pg)", () => {
       const { pool, clientCalls } = makePoolMock();
       const store = new PostgresHarnessStore({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        pool: pool as any
+        pool: pool as any,
       });
 
       await expect(
@@ -202,10 +193,8 @@ describe("PostgresHarnessStore (unit, mocked pg)", () => {
       const originalClient = pg.Client;
       const fakeClient = Object.assign(new EventEmitter(), {
         connect: vi.fn((..._args: unknown[]) => Promise.resolve()),
-        query: vi.fn((..._args: unknown[]) =>
-          Promise.resolve({ rows: [], rowCount: 0 })
-        ),
-        end: vi.fn((..._args: unknown[]) => Promise.resolve())
+        query: vi.fn((..._args: unknown[]) => Promise.resolve({ rows: [], rowCount: 0 })),
+        end: vi.fn((..._args: unknown[]) => Promise.resolve()),
       });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (pg as any).Client = vi.fn(() => fakeClient);
@@ -215,7 +204,7 @@ describe("PostgresHarnessStore (unit, mocked pg)", () => {
         const store = new PostgresHarnessStore({
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           pool: pool as any,
-          connectionString: "postgres://x"
+          connectionString: "postgres://x",
         });
 
         const iterator = store.watch("my-ns", "id1")[Symbol.asyncIterator]();
@@ -248,25 +237,17 @@ describe("PostgresHarnessStore (unit, mocked pg)", () => {
       const { pool } = makePoolMock();
       const store = new PostgresHarnessStore({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        pool: pool as any
+        pool: pool as any,
       });
 
       for (const bad of unsafe) {
-        await expect(store.getDoc(bad, "ok")).rejects.toThrow(
+        await expect(store.getDoc(bad, "ok")).rejects.toThrow(/Unsafe path segment/);
+        await expect(store.putDoc(bad, "ok", {})).rejects.toThrow(/Unsafe path segment/);
+        await expect(store.deleteDoc(bad, "ok")).rejects.toThrow(/Unsafe path segment/);
+        await expect(store.appendLog(bad, "ok", {})).rejects.toThrow(/Unsafe path segment/);
+        await expect(store.putBlob(bad, "ok", new Uint8Array([1]))).rejects.toThrow(
           /Unsafe path segment/
         );
-        await expect(store.putDoc(bad, "ok", {})).rejects.toThrow(
-          /Unsafe path segment/
-        );
-        await expect(store.deleteDoc(bad, "ok")).rejects.toThrow(
-          /Unsafe path segment/
-        );
-        await expect(store.appendLog(bad, "ok", {})).rejects.toThrow(
-          /Unsafe path segment/
-        );
-        await expect(
-          store.putBlob(bad, "ok", new Uint8Array([1]))
-        ).rejects.toThrow(/Unsafe path segment/);
       }
     });
 
@@ -274,34 +255,24 @@ describe("PostgresHarnessStore (unit, mocked pg)", () => {
       const { pool } = makePoolMock();
       const store = new PostgresHarnessStore({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        pool: pool as any
+        pool: pool as any,
       });
 
       for (const bad of unsafe) {
-        await expect(store.getDoc("ok", bad)).rejects.toThrow(
+        await expect(store.getDoc("ok", bad)).rejects.toThrow(/Unsafe path segment/);
+        await expect(store.putDoc("ok", bad, {})).rejects.toThrow(/Unsafe path segment/);
+        await expect(store.deleteDoc("ok", bad)).rejects.toThrow(/Unsafe path segment/);
+        await expect(store.appendLog("ok", bad, {})).rejects.toThrow(/Unsafe path segment/);
+        await expect(store.putBlob("ok", bad, new Uint8Array([1]))).rejects.toThrow(
           /Unsafe path segment/
         );
-        await expect(store.putDoc("ok", bad, {})).rejects.toThrow(
-          /Unsafe path segment/
-        );
-        await expect(store.deleteDoc("ok", bad)).rejects.toThrow(
-          /Unsafe path segment/
-        );
-        await expect(store.appendLog("ok", bad, {})).rejects.toThrow(
-          /Unsafe path segment/
-        );
-        await expect(
-          store.putBlob("ok", bad, new Uint8Array([1]))
-        ).rejects.toThrow(/Unsafe path segment/);
       }
     });
   });
 
   describe("construction", () => {
     it("requires pool or connectionString", () => {
-      expect(() => new PostgresHarnessStore({})).toThrow(
-        /requires `pool` or `connectionString`/
-      );
+      expect(() => new PostgresHarnessStore({})).toThrow(/requires `pool` or `connectionString`/);
     });
   });
 
@@ -311,15 +282,13 @@ describe("PostgresHarnessStore (unit, mocked pg)", () => {
       const store = new PostgresHarnessStore({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         pool: pool as any,
-        connectionString: "postgres://x"
+        connectionString: "postgres://x",
       });
       const tooLong = "x".repeat(49);
       // Postgres truncates identifiers at 63 bytes. `harness_change_`
       // (15 chars) + 48-char ns = exactly 63 — anything longer loses
       // bytes off the tail so LISTEN and NOTIFY would disagree.
-      expect(() => store.watch(tooLong, "id1")).toThrow(
-        /ns exceeds 48 chars/
-      );
+      expect(() => store.watch(tooLong, "id1")).toThrow(/ns exceeds 48 chars/);
     });
   });
 });

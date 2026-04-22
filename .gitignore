@@ -13,3 +13,4 @@ gui/tsconfig.tsbuildinfo
 # on demand by `pnpm tauri icon`.
 gui/src-tauri/icons/android/
 gui/src-tauri/icons/ios/
+.claude/

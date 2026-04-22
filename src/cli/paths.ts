@@ -1,10 +1,4 @@
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  renameSync,
-  symlinkSync
-} from "node:fs";
+import { existsSync, lstatSync, mkdirSync, renameSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 

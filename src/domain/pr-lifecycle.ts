@@ -11,7 +11,7 @@ export const PrStageSchema = z.enum([
   "changes_requested",
   "approved",
   "merged",
-  "closed"
+  "closed",
 ]);
 
 export type PrStage = z.infer<typeof PrStageSchema>;
@@ -19,7 +19,7 @@ export type PrStage = z.infer<typeof PrStageSchema>;
 export const PrEventSchema = z.object({
   stage: PrStageSchema,
   timestamp: z.string(),
-  details: z.record(z.string()).default({})
+  details: z.record(z.string()).default({}),
 });
 
 export type PrEvent = z.infer<typeof PrEventSchema>;
@@ -33,7 +33,7 @@ export const PrLifecycleSchema = z.object({
   currentStage: PrStageSchema,
   events: z.array(PrEventSchema),
   createdAt: z.string(),
-  updatedAt: z.string()
+  updatedAt: z.string(),
 });
 
 export type PrLifecycle = z.infer<typeof PrLifecycleSchema>;
@@ -56,11 +56,11 @@ export function createPrLifecycle(input: {
       {
         stage: "branch_created",
         timestamp: now,
-        details: { branch: input.branch }
-      }
+        details: { branch: input.branch },
+      },
     ],
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
   };
 }
 
@@ -81,10 +81,10 @@ export function advancePrStage(
       {
         stage,
         timestamp: now,
-        details: details ?? {}
-      }
+        details: details ?? {},
+      },
     ],
-    updatedAt: now
+    updatedAt: now,
   };
 }
 
@@ -99,7 +99,7 @@ const VALID_TRANSITIONS: Record<PrStage, PrStage[]> = {
   changes_requested: ["commits_pushed"],
   approved: ["merged", "checks_running"],
   merged: [],
-  closed: []
+  closed: [],
 };
 
 export function canTransition(from: PrStage, to: PrStage): boolean {

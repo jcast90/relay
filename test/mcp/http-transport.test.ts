@@ -17,14 +17,14 @@ function stubHandler(): { handler: McpMessageHandler; cleanup: () => void } {
         result: {
           protocolVersion: "2024-11-05",
           capabilities: { tools: {} },
-          serverInfo: { name: "relay-test", version: "0.0.0" }
-        }
+          serverInfo: { name: "relay-test", version: "0.0.0" },
+        },
       };
     }
     return {
       jsonrpc: "2.0",
       id: message.id ?? null,
-      error: { code: -32601, message: `Method not found: ${message.method}` }
+      error: { code: -32601, message: `Method not found: ${message.method}` },
     };
   };
   return { handler, cleanup: () => {} };
@@ -51,7 +51,7 @@ async function openSse(
     return {
       response,
       readFrame: async () => null,
-      close: () => controller.abort()
+      close: () => controller.abort(),
     };
   }
 
@@ -91,7 +91,7 @@ async function openSse(
       } finally {
         controller.abort();
       }
-    }
+    },
   };
 }
 
@@ -128,8 +128,8 @@ describe("startHttpMcpServer", () => {
         jsonrpc: "2.0",
         id: 1,
         method: "initialize",
-        params: {}
-      })
+        params: {},
+      }),
     });
     expect(postRes.status).toBe(202);
     // Drain the body so fetch/undici doesn't leak the socket into the next tick.
@@ -139,7 +139,9 @@ describe("startHttpMcpServer", () => {
     expect(messageFrame?.event).toBe("message");
     const payload = JSON.parse(messageFrame?.data ?? "{}") as JsonRpcMessage;
     expect(payload.id).toBe(1);
-    expect((payload.result as { serverInfo?: { name?: string } })?.serverInfo?.name).toBe("relay-test");
+    expect((payload.result as { serverInfo?: { name?: string } })?.serverInfo?.name).toBe(
+      "relay-test"
+    );
 
     sse.close();
   });
@@ -147,7 +149,7 @@ describe("startHttpMcpServer", () => {
   it("rejects /sse when the auth token is missing", async () => {
     handle = await startHttpMcpServer(async () => stubHandler(), {
       port: 0,
-      authToken: "secret"
+      authToken: "secret",
     });
 
     const response = await fetch(handle.url);
@@ -158,11 +160,11 @@ describe("startHttpMcpServer", () => {
   it("rejects /sse when the auth token is wrong", async () => {
     handle = await startHttpMcpServer(async () => stubHandler(), {
       port: 0,
-      authToken: "secret"
+      authToken: "secret",
     });
 
     const response = await fetch(handle.url, {
-      headers: { Authorization: "Bearer wrong" }
+      headers: { Authorization: "Bearer wrong" },
     });
     expect(response.status).toBe(401);
     await response.text();
@@ -171,7 +173,7 @@ describe("startHttpMcpServer", () => {
   it("accepts /sse with the correct bearer token", async () => {
     handle = await startHttpMcpServer(async () => stubHandler(), {
       port: 0,
-      authToken: "secret"
+      authToken: "secret",
     });
 
     const sse = await openSse(handle.url, "secret");
@@ -200,7 +202,7 @@ describe("startHttpMcpServer", () => {
     const postRes = await fetch(`http://${handle.host}:${handle.port}${messagePath}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: "{not valid json,"
+      body: "{not valid json,",
     });
     expect(postRes.status).toBe(400);
     const body = (await postRes.json()) as { error?: string; error_detail?: string };
@@ -224,7 +226,7 @@ describe("startHttpMcpServer", () => {
     const postRes = await fetch(`http://${handle.host}:${handle.port}${messagePath}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "foo", params: { blob: oversized } })
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "foo", params: { blob: oversized } }),
     });
     expect(postRes.status).toBe(413);
     const body = (await postRes.json()) as { error?: string; error_detail?: string };
@@ -246,7 +248,7 @@ describe("startHttpMcpServer", () => {
       return {
         jsonrpc: "2.0",
         id: message.id ?? null,
-        result: { ok: true }
+        result: { ok: true },
       };
     };
 
@@ -257,10 +259,7 @@ describe("startHttpMcpServer", () => {
     process.on("unhandledRejection", onRejection);
 
     try {
-      handle = await startHttpMcpServer(
-        async () => ({ handler, cleanup: () => {} }),
-        { port: 0 }
-      );
+      handle = await startHttpMcpServer(async () => ({ handler, cleanup: () => {} }), { port: 0 });
 
       const sse = await openSse(handle.url);
       const endpointFrame = await sse.readFrame();
@@ -269,7 +268,7 @@ describe("startHttpMcpServer", () => {
       const postRes = await fetch(`http://${handle.host}:${handle.port}${messagePath}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 42, method: "slow", params: {} })
+        body: JSON.stringify({ jsonrpc: "2.0", id: 42, method: "slow", params: {} }),
       });
       expect(postRes.status).toBe(202);
       await postRes.text();

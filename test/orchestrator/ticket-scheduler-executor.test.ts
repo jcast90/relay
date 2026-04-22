@@ -7,15 +7,12 @@ import { describe, expect, it } from "vitest";
 import { NodeCommandInvoker } from "../../src/agents/command-invoker.js";
 import { createLiveAgents } from "../../src/agents/factory.js";
 import { AgentRegistry } from "../../src/agents/registry.js";
-import type {
-  AgentResult,
-  WorkRequest
-} from "../../src/domain/agent.js";
+import type { AgentResult, WorkRequest } from "../../src/domain/agent.js";
 import type { HarnessRun, RunEventType } from "../../src/domain/run.js";
 import {
   initializeTicketLedger,
   parseTicketPlan,
-  type TicketDefinition
+  type TicketDefinition,
 } from "../../src/domain/ticket.js";
 import { LocalArtifactStore } from "../../src/execution/artifact-store.js";
 import { FileHarnessStore } from "../../src/storage/file-store.js";
@@ -36,7 +33,7 @@ function ticket(id: string): TicketDefinition {
     verificationCommands: [],
     docsToUpdate: [],
     dependsOn: [],
-    retryPolicy: { maxAgentAttempts: 1, maxTestFixLoops: 1 }
+    retryPolicy: { maxAgentAttempts: 1, maxTestFixLoops: 1 },
   };
 }
 
@@ -47,7 +44,7 @@ function buildRun(repoRoot: string, tickets: TicketDefinition[]): HarnessRun {
     task: {
       title: "Test run",
       featureRequest: "Test feature",
-      repoRoot
+      repoRoot,
     },
     classification: {
       tier: "feature_small",
@@ -55,11 +52,11 @@ function buildRun(repoRoot: string, tickets: TicketDefinition[]): HarnessRun {
       suggestedSpecialties: ["general"],
       estimatedTicketCount: tickets.length,
       needsDesignDoc: false,
-      needsUserApproval: false
+      needsUserApproval: false,
     },
     tickets,
     finalVerification: { commands: [] },
-    docsToUpdate: []
+    docsToUpdate: [],
   });
 
   return {
@@ -80,7 +77,7 @@ function buildRun(repoRoot: string, tickets: TicketDefinition[]): HarnessRun {
     phaseLedgerPath: null,
     ticketLedger: initializeTicketLedger(tickets),
     ticketLedgerPath: null,
-    runIndexPath: null
+    runIndexPath: null,
   };
 }
 
@@ -88,7 +85,7 @@ async function buildBasics(repoRoot: string) {
   const registry = new AgentRegistry();
   for (const agent of createLiveAgents({
     cwd: repoRoot,
-    invoker: new ScriptedInvoker(repoRoot)
+    invoker: new ScriptedInvoker(repoRoot),
   })) {
     registry.register(agent);
   }
@@ -97,10 +94,7 @@ async function buildBasics(repoRoot: string) {
     join(repoRoot, "artifacts"),
     new FileHarnessStore(join(repoRoot, "__hs__"))
   );
-  const verificationRunner = new VerificationRunner(
-    new NodeCommandInvoker(),
-    artifactStore
-  );
+  const verificationRunner = new VerificationRunner(new NodeCommandInvoker(), artifactStore);
   return { registry, artifactStore, verificationRunner };
 }
 
@@ -108,18 +102,9 @@ describe("TicketScheduler + executor wiring", () => {
   it("throws when neither dispatch nor executor is supplied", async () => {
     const tmp = await mkdtemp(join(tmpdir(), "ts-exec-none-"));
     try {
-      const { registry, artifactStore, verificationRunner } =
-        await buildBasics(tmp);
+      const { registry, artifactStore, verificationRunner } = await buildBasics(tmp);
       expect(
-        () =>
-          new TicketScheduler(
-            tmp,
-            artifactStore,
-            verificationRunner,
-            registry,
-            null,
-            () => {}
-          )
+        () => new TicketScheduler(tmp, artifactStore, verificationRunner, registry, null, () => {})
       ).toThrow(/either a dispatch callback or options.executor/);
     } finally {
       await rm(tmp, { recursive: true, force: true });
@@ -129,13 +114,12 @@ describe("TicketScheduler + executor wiring", () => {
   it("throws when both dispatch and executor are supplied", async () => {
     const tmp = await mkdtemp(join(tmpdir(), "ts-exec-both-"));
     try {
-      const { registry, artifactStore, verificationRunner } =
-        await buildBasics(tmp);
+      const { registry, artifactStore, verificationRunner } = await buildBasics(tmp);
       const dispatch = async (): Promise<AgentResult> => ({
         summary: "ok",
         evidence: [],
         proposedCommands: [],
-        blockers: []
+        blockers: [],
       });
       expect(
         () =>
@@ -157,8 +141,7 @@ describe("TicketScheduler + executor wiring", () => {
   it("runs an end-to-end ticket via options.executor (no dispatch callback)", async () => {
     const tmp = await mkdtemp(join(tmpdir(), "ts-exec-run-"));
     try {
-      const { registry, artifactStore, verificationRunner } =
-        await buildBasics(tmp);
+      const { registry, artifactStore, verificationRunner } = await buildBasics(tmp);
 
       // Track that the executor actually gets invoked. The adapter maps
       // executor.start().wait() results back onto AgentResult so the
@@ -169,12 +152,9 @@ describe("TicketScheduler + executor wiring", () => {
       const executor: AgentExecutor = {
         async start(t, opts): Promise<ExecutionHandle> {
           startCalls += 1;
-          const sandbox = await sandboxProvider.create(
-            { root: tmp },
-            "main"
-          );
+          const sandbox = await sandboxProvider.create({ root: tmp }, "main");
           return underlying.start(t, { ...opts, sandbox });
-        }
+        },
       };
 
       const scheduler = new TicketScheduler(
@@ -206,8 +186,7 @@ describe("TicketScheduler + executor wiring", () => {
   it("converts an executor.start() throw into an AgentResult blocker so retry engages", async () => {
     const tmp = await mkdtemp(join(tmpdir(), "ts-exec-throw-"));
     try {
-      const { registry, artifactStore, verificationRunner } =
-        await buildBasics(tmp);
+      const { registry, artifactStore, verificationRunner } = await buildBasics(tmp);
 
       // Fake executor that rejects on the first start() call and then
       // succeeds on subsequent calls by delegating to NoopExecutor. If the
@@ -218,7 +197,11 @@ describe("TicketScheduler + executor wiring", () => {
       let startCalls = 0;
       const sandboxProvider = new NoopSandboxProvider();
       const underlying = new NoopExecutor();
-      const events: Array<{ type: RunEventType; phaseId: string; details: Record<string, string> }> = [];
+      const events: Array<{
+        type: RunEventType;
+        phaseId: string;
+        details: Record<string, string>;
+      }> = [];
       const executor: AgentExecutor = {
         async start(t, opts): Promise<ExecutionHandle> {
           startCalls += 1;
@@ -227,7 +210,7 @@ describe("TicketScheduler + executor wiring", () => {
           }
           const sandbox = await sandboxProvider.create({ root: tmp }, "main");
           return underlying.start(t, { ...opts, sandbox });
-        }
+        },
       };
 
       const scheduler = new TicketScheduler(
@@ -253,9 +236,7 @@ describe("TicketScheduler + executor wiring", () => {
       // exception. The start counter must be at least 2, proving the retry
       // path actually re-engaged instead of the scheduler dying.
       expect(startCalls).toBeGreaterThanOrEqual(2);
-      const startFailure = events.find(
-        (e) => e.phaseId === "__executor_start__"
-      );
+      const startFailure = events.find((e) => e.phaseId === "__executor_start__");
       expect(startFailure).toBeDefined();
       expect(startFailure?.details.error).toContain("simulated spawn failure");
       expect(startFailure?.details.ticketId).toBe("t_throw");
@@ -267,8 +248,7 @@ describe("TicketScheduler + executor wiring", () => {
   it("preserves the legacy dispatch path when no executor is supplied", async () => {
     const tmp = await mkdtemp(join(tmpdir(), "ts-exec-legacy-"));
     try {
-      const { registry, artifactStore, verificationRunner } =
-        await buildBasics(tmp);
+      const { registry, artifactStore, verificationRunner } = await buildBasics(tmp);
       const dispatched: Array<Omit<WorkRequest, "runId">> = [];
       const dispatch = async (
         _run: HarnessRun,
@@ -279,7 +259,7 @@ describe("TicketScheduler + executor wiring", () => {
           summary: `ok:${req.kind}`,
           evidence: [],
           proposedCommands: [],
-          blockers: []
+          blockers: [],
         };
       };
 

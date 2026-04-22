@@ -9,7 +9,7 @@ import {
   buildCodexLaunchArgs,
   ensureClaudeMcpConfig,
   hasHarnessMcpOptOut,
-  stripHarnessMcpOptOut
+  stripHarnessMcpOptOut,
 } from "../src/cli/agent-wrapper.js";
 import { getHarnessWorkspacePaths } from "../src/cli/workspace.js";
 
@@ -22,7 +22,7 @@ describe("agent wrapper", () => {
       const configPath = await ensureClaudeMcpConfig({
         cwd,
         cliEntrypoint: "/tmp/agent-harness/dist/cli.js",
-        paths
+        paths,
       });
       const config = JSON.parse(await readFile(configPath, "utf8")) as {
         mcpServers: {
@@ -40,18 +40,14 @@ describe("agent wrapper", () => {
         "/tmp/agent-harness/dist/cli.js",
         "mcp-server",
         "--workspace",
-        cwd
+        cwd,
       ]);
-      expect(config.mcpServers.relay.env.AGENT_HARNESS_HOME).toBe(
-        paths.rootDir
-      );
-      expect(config.mcpServers.relay.env.AGENT_HARNESS_RUNS_INDEX).toBe(
-        paths.runsIndexPath
-      );
+      expect(config.mcpServers.relay.env.AGENT_HARNESS_HOME).toBe(paths.rootDir);
+      expect(config.mcpServers.relay.env.AGENT_HARNESS_RUNS_INDEX).toBe(paths.runsIndexPath);
     } finally {
       await rm(cwd, {
         recursive: true,
-        force: true
+        force: true,
       });
     }
   });
@@ -59,12 +55,12 @@ describe("agent wrapper", () => {
   it("builds launch arguments that auto-attach MCP to Claude and Codex", () => {
     const claudeArgs = buildClaudeLaunchArgs({
       userArgs: ["--help"],
-      mcpConfigPath: "/tmp/claude.mcp.json"
+      mcpConfigPath: "/tmp/claude.mcp.json",
     });
     const codexArgs = buildCodexLaunchArgs({
       userArgs: ["--help"],
       cwd: "/tmp/workspace",
-      cliEntrypoint: "/tmp/agent-harness/dist/cli.js"
+      cliEntrypoint: "/tmp/agent-harness/dist/cli.js",
     });
 
     expect(claudeArgs).toContain("--mcp-config");
@@ -74,9 +70,7 @@ describe("agent wrapper", () => {
     expect(claudeArgs.at(-1)).toBe("--help");
 
     expect(codexArgs).toContain("-c");
-    expect(codexArgs).toContain(
-      `mcp_servers.relay.command=${JSON.stringify(process.execPath)}`
-    );
+    expect(codexArgs).toContain(`mcp_servers.relay.command=${JSON.stringify(process.execPath)}`);
     expect(codexArgs).toContain(
       'mcp_servers.relay.args=["/tmp/agent-harness/dist/cli.js","mcp-server","--workspace","/tmp/workspace"]'
     );
@@ -86,8 +80,6 @@ describe("agent wrapper", () => {
   it("supports opting out of harness MCP attachment", () => {
     expect(hasHarnessMcpOptOut(["--no-harness-mcp", "--help"])).toBe(true);
     expect(hasHarnessMcpOptOut(["--help"])).toBe(false);
-    expect(stripHarnessMcpOptOut(["--no-harness-mcp", "--help"])).toEqual([
-      "--help"
-    ]);
+    expect(stripHarnessMcpOptOut(["--no-harness-mcp", "--help"])).toEqual(["--help"]);
   });
 });

@@ -14,7 +14,7 @@ export const TicketStatusSchema = z.enum([
   "verifying",
   "retry",
   "completed",
-  "failed"
+  "failed",
 ]);
 
 export type TicketStatus = z.infer<typeof TicketStatusSchema>;
@@ -29,7 +29,7 @@ export const TicketDefinitionSchema = z.object({
   verificationCommands: z.array(z.string()).default([]),
   docsToUpdate: z.array(z.string()).default([]),
   dependsOn: z.array(z.string()).default([]),
-  retryPolicy: RetryPolicySchema
+  retryPolicy: RetryPolicySchema,
 });
 
 export type TicketDefinition = z.infer<typeof TicketDefinitionSchema>;
@@ -39,14 +39,14 @@ export const TicketPlanSchema = z.object({
   task: z.object({
     title: z.string().min(1),
     featureRequest: z.string().min(1),
-    repoRoot: z.string().min(1)
+    repoRoot: z.string().min(1),
   }),
   classification: ClassificationResultSchema,
   tickets: z.array(TicketDefinitionSchema).min(1),
   finalVerification: z.object({
-    commands: z.array(z.string()).default([])
+    commands: z.array(z.string()).default([]),
   }),
-  docsToUpdate: z.array(z.string()).default([])
+  docsToUpdate: z.array(z.string()).default([]),
 });
 
 export type TicketPlan = z.infer<typeof TicketPlanSchema>;
@@ -104,7 +104,7 @@ export function initializeTicketLedger(
     ticketId: ticket.id,
     title: ticket.title,
     specialty: ticket.specialty,
-    status: ticket.dependsOn.length > 0 ? "blocked" as const : "ready" as const,
+    status: ticket.dependsOn.length > 0 ? ("blocked" as const) : ("ready" as const),
     dependsOn: ticket.dependsOn,
     assignedAgentId: null,
     assignedAgentName: null,
@@ -116,7 +116,7 @@ export function initializeTicketLedger(
     startedAt: null,
     completedAt: null,
     updatedAt: now,
-    runId
+    runId,
   }));
 }
 
@@ -187,9 +187,7 @@ export function validateTicketDag(tickets: TicketDefinition[]): {
     return { valid: true, order, cycle: null };
   }
 
-  const remaining = tickets
-    .filter((t) => !order.includes(t.id))
-    .map((t) => t.id);
+  const remaining = tickets.filter((t) => !order.includes(t.id)).map((t) => t.id);
 
   return { valid: false, order, cycle: remaining };
 }
@@ -197,7 +195,7 @@ export function validateTicketDag(tickets: TicketDefinition[]): {
 export function linearizeTickets(tickets: TicketDefinition[]): TicketDefinition[] {
   return tickets.map((ticket, index) => ({
     ...ticket,
-    dependsOn: index > 0 ? [tickets[index - 1].id] : []
+    dependsOn: index > 0 ? [tickets[index - 1].id] : [],
   }));
 }
 
@@ -214,21 +212,38 @@ export const ticketPlanJsonSchema = {
       properties: {
         title: { type: "string" },
         featureRequest: { type: "string" },
-        repoRoot: { type: "string" }
-      }
+        repoRoot: { type: "string" },
+      },
     },
     classification: {
       type: "object",
       additionalProperties: false,
-      required: ["tier", "rationale", "suggestedSpecialties", "estimatedTicketCount", "needsDesignDoc", "needsUserApproval"],
+      required: [
+        "tier",
+        "rationale",
+        "suggestedSpecialties",
+        "estimatedTicketCount",
+        "needsDesignDoc",
+        "needsUserApproval",
+      ],
       properties: {
-        tier: { type: "string", enum: ["trivial", "bugfix", "feature_small", "feature_large", "architectural", "multi_repo"] },
+        tier: {
+          type: "string",
+          enum: [
+            "trivial",
+            "bugfix",
+            "feature_small",
+            "feature_large",
+            "architectural",
+            "multi_repo",
+          ],
+        },
         rationale: { type: "string" },
         suggestedSpecialties: { type: "array", items: { type: "string" } },
         estimatedTicketCount: { type: "integer", minimum: 1, maximum: 50 },
         needsDesignDoc: { type: "boolean" },
-        needsUserApproval: { type: "boolean" }
-      }
+        needsUserApproval: { type: "boolean" },
+      },
     },
     tickets: {
       type: "array",
@@ -241,7 +256,10 @@ export const ticketPlanJsonSchema = {
           id: { type: "string" },
           title: { type: "string" },
           objective: { type: "string" },
-          specialty: { type: "string", enum: ["general", "ui", "business_logic", "api_crud", "devops", "testing"] },
+          specialty: {
+            type: "string",
+            enum: ["general", "ui", "business_logic", "api_crud", "devops", "testing"],
+          },
           acceptanceCriteria: { type: "array", minItems: 1, items: { type: "string" } },
           allowedCommands: { type: "array", items: { type: "string" } },
           verificationCommands: { type: "array", items: { type: "string" } },
@@ -253,20 +271,20 @@ export const ticketPlanJsonSchema = {
             required: ["maxAgentAttempts", "maxTestFixLoops"],
             properties: {
               maxAgentAttempts: { type: "integer", minimum: 1, maximum: 5 },
-              maxTestFixLoops: { type: "integer", minimum: 1, maximum: 10 }
-            }
-          }
-        }
-      }
+              maxTestFixLoops: { type: "integer", minimum: 1, maximum: 10 },
+            },
+          },
+        },
+      },
     },
     finalVerification: {
       type: "object",
       additionalProperties: false,
       required: ["commands"],
       properties: {
-        commands: { type: "array", items: { type: "string" } }
-      }
+        commands: { type: "array", items: { type: "string" } },
+      },
     },
-    docsToUpdate: { type: "array", items: { type: "string" } }
-  }
+    docsToUpdate: { type: "array", items: { type: "string" } },
+  },
 } as const;

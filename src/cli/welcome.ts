@@ -49,7 +49,7 @@ const c = {
   mauve: "\x1b[38;5;183m",
   green: "\x1b[38;5;151m",
   peach: "\x1b[38;5;216m",
-  red: "\x1b[38;5;211m"
+  red: "\x1b[38;5;211m",
 };
 
 export interface WelcomeOptions {
@@ -62,7 +62,7 @@ export interface WelcomeOptions {
 export function parseWelcomeFlags(args: string[]): WelcomeOptions {
   return {
     reset: args.includes("--reset"),
-    nonInteractive: args.includes("--non-interactive") || !process.stdin.isTTY
+    nonInteractive: args.includes("--non-interactive") || !process.stdin.isTTY,
   };
 }
 
@@ -91,9 +91,7 @@ function header(step: number, total: number, title: string): void {
   const bar = `${c.dim}${"─".repeat(66)}${c.reset}`;
   console.log("");
   console.log(bar);
-  console.log(
-    `${c.bold}${c.blue}Step ${step}/${total}${c.reset}  ${c.bold}${title}${c.reset}`
-  );
+  console.log(`${c.bold}${c.blue}Step ${step}/${total}${c.reset}  ${c.bold}${title}${c.reset}`);
   console.log(bar);
 }
 
@@ -155,9 +153,7 @@ export async function runWelcome(options: WelcomeOptions): Promise<number> {
     // ── 1. Intro ─────────────────────────────────────────────────────────
     header(1, total, "What Relay is");
     p("");
-    p(
-      `${c.bold}Relay${c.reset} is a local-first orchestration layer for coding agents.`
-    );
+    p(`${c.bold}Relay${c.reset} is a local-first orchestration layer for coding agents.`);
     p("It takes a request — a sentence, an issue URL, a vague idea — and:");
     p("");
     p(`  ${c.green}1.${c.reset} classifies the work (trivial / feature / architectural)`);
@@ -176,13 +172,16 @@ export async function runWelcome(options: WelcomeOptions): Promise<number> {
     const tokens = await readTokensFromConfig();
     const workspaces = await listRegisteredWorkspaces();
 
-    const ok = (b: boolean) =>
-      b ? `${c.green}✓${c.reset}` : `${c.peach}·${c.reset}`;
+    const ok = (b: boolean) => (b ? `${c.green}✓${c.reset}` : `${c.peach}·${c.reset}`);
 
     p("");
     p(`  ${ok(configEnvExists)} ~/.relay/config.env ${configEnvExists ? "present" : "missing"}`);
-    p(`  ${ok(tokens.github)} GITHUB_TOKEN      ${tokens.github ? "set" : "not set — PR watcher + GitHub issues disabled"}`);
-    p(`  ${ok(tokens.linear)} LINEAR_API_KEY    ${tokens.linear ? "set" : "not set — Linear issue ingestion disabled"}`);
+    p(
+      `  ${ok(tokens.github)} GITHUB_TOKEN      ${tokens.github ? "set" : "not set — PR watcher + GitHub issues disabled"}`
+    );
+    p(
+      `  ${ok(tokens.linear)} LINEAR_API_KEY    ${tokens.linear ? "set" : "not set — Linear issue ingestion disabled"}`
+    );
     p(
       `  ${ok(workspaces.length > 0)} repos registered  ${workspaces.length} workspace${workspaces.length === 1 ? "" : "s"}`
     );
@@ -194,10 +193,7 @@ export async function runWelcome(options: WelcomeOptions): Promise<number> {
     if (!configEnvExists) {
       if (rl) {
         const answer = (
-          await ask(
-            rl,
-            "No ~/.relay/config.env yet — copy the template into place now? [Y/n]"
-          )
+          await ask(rl, "No ~/.relay/config.env yet — copy the template into place now? [Y/n]")
         ).toLowerCase();
         if (answer === "" || answer === "y" || answer === "yes") {
           const result = await scaffoldConfigEnv(relayDir);
@@ -209,7 +205,9 @@ export async function runWelcome(options: WelcomeOptions): Promise<number> {
             p(`  ${c.dim}Already exists at ${result.path} — left untouched.${c.reset}`);
           } else {
             p(`  ${c.peach}!${c.reset} Template not found at ${result.expectedTemplate}.`);
-            p(`    ${c.dim}Re-run install.sh to drop it in, or create config.env by hand.${c.reset}`);
+            p(
+              `    ${c.dim}Re-run install.sh to drop it in, or create config.env by hand.${c.reset}`
+            );
           }
         } else {
           p(`  ${c.dim}Skipped — when you're ready, run:${c.reset}`);
@@ -222,7 +220,9 @@ export async function runWelcome(options: WelcomeOptions): Promise<number> {
         p(`    source ~/.relay/config.env    ${c.dim}# or add to ~/.zshrc${c.reset}`);
       }
     } else if (!tokens.github) {
-      p(`  ${c.dim}To enable GitHub/Linear, open${c.reset} ${c.bold}~/.relay/config.env${c.reset} ${c.dim}and fill in tokens, then:${c.reset}`);
+      p(
+        `  ${c.dim}To enable GitHub/Linear, open${c.reset} ${c.bold}~/.relay/config.env${c.reset} ${c.dim}and fill in tokens, then:${c.reset}`
+      );
       p(`    source ~/.relay/config.env    ${c.dim}# or add to ~/.zshrc${c.reset}`);
     }
     if (workspaces.length === 0) {

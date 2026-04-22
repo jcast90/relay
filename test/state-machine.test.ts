@@ -10,15 +10,11 @@ describe("state machine", () => {
   });
 
   it("can fail a phase when verification budget is exhausted", () => {
-    expect(getNextState("TEST_FIX_LOOP", "ChecksFailedNonRecoverable")).toBe(
-      "FAILED"
-    );
+    expect(getNextState("TEST_FIX_LOOP", "ChecksFailedNonRecoverable")).toBe("FAILED");
   });
 
   it("throws for invalid transitions", () => {
-    expect(() => assertTransition("DRAFT_PLAN", "ChecksPassed")).toThrow(
-      /Invalid transition/
-    );
+    expect(() => assertTransition("DRAFT_PLAN", "ChecksPassed")).toThrow(/Invalid transition/);
   });
 
   it("supports classification and ticket execution path", () => {

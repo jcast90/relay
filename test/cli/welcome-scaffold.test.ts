@@ -28,7 +28,7 @@ describe("scaffoldConfigEnv", () => {
   });
 
   it("copies template -> config.env when target is missing", async () => {
-    const templateBody = "# test template\n# export GITHUB_TOKEN=\"\"\n";
+    const templateBody = '# test template\n# export GITHUB_TOKEN=""\n';
     await writeFile(join(dir, "config.env.template"), templateBody);
 
     const result = await scaffoldConfigEnv(dir);

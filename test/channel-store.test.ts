@@ -14,7 +14,7 @@ describe("channel store", () => {
     try {
       const channel = await store.createChannel({
         name: "#feature-auth",
-        description: "Authentication feature work"
+        description: "Authentication feature work",
       });
 
       expect(channel.name).toBe("#feature-auth");
@@ -36,9 +36,11 @@ describe("channel store", () => {
     try {
       const ch1 = await store.createChannel({ name: "#active", description: "Active" });
       await store.createChannel({ name: "#archived", description: "Archived" });
-      await store.archiveChannel((await store.listChannels())[0].channelId === ch1.channelId
-        ? (await store.listChannels())[1].channelId
-        : (await store.listChannels())[0].channelId);
+      await store.archiveChannel(
+        (await store.listChannels())[0].channelId === ch1.channelId
+          ? (await store.listChannels())[1].channelId
+          : (await store.listChannels())[0].channelId
+      );
 
       // At least one active channel
       const active = await store.listChannels("active");
@@ -60,7 +62,7 @@ describe("channel store", () => {
         displayName: "Claude (Planner)",
         role: "planner",
         provider: "claude",
-        sessionId: null
+        sessionId: null,
       });
 
       const updated = await store.getChannel(channel.channelId);
@@ -88,7 +90,7 @@ describe("channel store", () => {
         fromAgentId: "agent-1",
         fromDisplayName: "Agent One",
         content: "Hello channel!",
-        metadata: {}
+        metadata: {},
       });
 
       await store.postEntry(channel.channelId, {
@@ -96,7 +98,7 @@ describe("channel store", () => {
         fromAgentId: null,
         fromDisplayName: null,
         content: "Run started",
-        metadata: { runId: "run-1" }
+        metadata: { runId: "run-1" },
       });
 
       const feed = await store.readFeed(channel.channelId);
@@ -124,7 +126,7 @@ describe("channel store", () => {
       await store.addRef(channel.channelId, {
         type: "repo",
         targetId: "/path/to/repo",
-        label: "Backend repo"
+        label: "Backend repo",
       });
 
       const updated = await store.getChannel(channel.channelId);
@@ -163,7 +165,10 @@ describe("channel store", () => {
     const store = new ChannelStore(dir);
 
     try {
-      const channel = await store.createChannel({ name: "#decisions", description: "Decisions test" });
+      const channel = await store.createChannel({
+        name: "#decisions",
+        description: "Decisions test",
+      });
 
       const decision = await store.recordDecision(channel.channelId, {
         runId: "run-1",
@@ -174,7 +179,7 @@ describe("channel store", () => {
         alternatives: ["MySQL", "SQLite"],
         decidedBy: "planner-claude",
         decidedByName: "Claude (Planner)",
-        linkedArtifacts: []
+        linkedArtifacts: [],
       });
 
       expect(decision.title).toBe("Use PostgreSQL over MySQL");
@@ -202,7 +207,7 @@ describe("channel store", () => {
     const assignments = [
       { alias: "ui", workspaceId: "ws-ui", repoPath: "/tmp/ui" },
       { alias: "be", workspaceId: "ws-be", repoPath: "/tmp/be" },
-      { alias: "brain", workspaceId: "ws-brain", repoPath: "/tmp/brain" }
+      { alias: "brain", workspaceId: "ws-brain", repoPath: "/tmp/brain" },
     ];
 
     it("persists primaryWorkspaceId passed to createChannel", async () => {
@@ -213,7 +218,7 @@ describe("channel store", () => {
           name: "#multi-repo",
           description: "Multi-repo channel",
           repoAssignments: assignments,
-          primaryWorkspaceId: "ws-be"
+          primaryWorkspaceId: "ws-be",
         });
 
         expect(channel.primaryWorkspaceId).toBe("ws-be");
@@ -232,7 +237,7 @@ describe("channel store", () => {
           name: "#bad-primary",
           description: "Dangling primary",
           repoAssignments: assignments,
-          primaryWorkspaceId: "ws-does-not-exist"
+          primaryWorkspaceId: "ws-does-not-exist",
         });
 
         expect(channel.primaryWorkspaceId).toBeUndefined();
@@ -249,7 +254,7 @@ describe("channel store", () => {
           name: "#primary-set",
           description: "Primary set",
           repoAssignments: assignments,
-          primaryWorkspaceId: "ws-brain"
+          primaryWorkspaceId: "ws-brain",
         });
 
         const primary = store.getPrimaryAssignment(channel);
@@ -268,7 +273,7 @@ describe("channel store", () => {
         const channel = await store.createChannel({
           name: "#primary-unset",
           description: "Primary unset",
-          repoAssignments: assignments
+          repoAssignments: assignments,
         });
 
         expect(channel.primaryWorkspaceId).toBeUndefined();
@@ -290,7 +295,7 @@ describe("channel store", () => {
         const channel = await store.createChannel({
           name: "#stale-primary",
           description: "Stale primary",
-          repoAssignments: assignments
+          repoAssignments: assignments,
         });
         const stale = { ...channel, primaryWorkspaceId: "ws-gone" };
 
@@ -308,7 +313,7 @@ describe("channel store", () => {
       try {
         const channel = await store.createChannel({
           name: "#no-repos",
-          description: "No repos"
+          description: "No repos",
         });
         expect(store.getPrimaryAssignment(channel)).toBeNull();
       } finally {
@@ -324,11 +329,11 @@ describe("channel store", () => {
           name: "#shrink",
           description: "Shrink repos",
           repoAssignments: assignments,
-          primaryWorkspaceId: "ws-brain"
+          primaryWorkspaceId: "ws-brain",
         });
 
         const updated = await store.updateChannel(channel.channelId, {
-          repoAssignments: [assignments[0], assignments[1]] // drops brain
+          repoAssignments: [assignments[0], assignments[1]], // drops brain
         });
 
         expect(updated).not.toBeNull();
@@ -347,11 +352,11 @@ describe("channel store", () => {
           name: "#preserve",
           description: "Preserve primary",
           repoAssignments: assignments,
-          primaryWorkspaceId: "ws-be"
+          primaryWorkspaceId: "ws-be",
         });
 
         const updated = await store.updateChannel(channel.channelId, {
-          repoAssignments: [assignments[0], assignments[1]] // keeps be
+          repoAssignments: [assignments[0], assignments[1]], // keeps be
         });
 
         expect(updated!.primaryWorkspaceId).toBe("ws-be");
@@ -368,11 +373,11 @@ describe("channel store", () => {
           name: "#repoint",
           description: "Repoint primary",
           repoAssignments: assignments,
-          primaryWorkspaceId: "ws-ui"
+          primaryWorkspaceId: "ws-ui",
         });
 
         const updated = await store.updateChannel(channel.channelId, {
-          primaryWorkspaceId: "ws-brain"
+          primaryWorkspaceId: "ws-brain",
         });
 
         expect(updated!.primaryWorkspaceId).toBe("ws-brain");
@@ -389,11 +394,11 @@ describe("channel store", () => {
           name: "#clear",
           description: "Clear primary",
           repoAssignments: assignments,
-          primaryWorkspaceId: "ws-ui"
+          primaryWorkspaceId: "ws-ui",
         });
 
         const updated = await store.updateChannel(channel.channelId, {
-          repoAssignments: []
+          repoAssignments: [],
         });
 
         expect(updated!.primaryWorkspaceId).toBeUndefined();

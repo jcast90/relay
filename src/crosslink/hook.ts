@@ -188,10 +188,10 @@ export function getClaudeHookConfig(shellScriptPath: string): object {
       UserPromptSubmit: [
         {
           type: "command",
-          command: shellScriptPath
-        }
-      ]
-    }
+          command: shellScriptPath,
+        },
+      ],
+    },
   };
 }
 
@@ -203,5 +203,7 @@ export function printHookSetupInstructions(shellScriptPath: string): void {
   console.log(JSON.stringify(getClaudeHookConfig(shellScriptPath), null, 2));
   console.log("");
   console.log("For Codex, add this system prompt instruction to your codex config:");
-  console.log('  "At the start of each task, call crosslink_poll to check for messages from other sessions."');
+  console.log(
+    '  "At the start of each task, call crosslink_poll to check for messages from other sessions."'
+  );
 }

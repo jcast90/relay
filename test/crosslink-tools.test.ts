@@ -8,7 +8,7 @@ import { CrosslinkStore } from "../src/crosslink/store.js";
 import {
   callCrosslinkTool,
   isCrosslinkTool,
-  type CrosslinkToolState
+  type CrosslinkToolState,
 } from "../src/crosslink/tools.js";
 
 describe("crosslink tools", () => {
@@ -29,15 +29,15 @@ describe("crosslink tools", () => {
         description: "Test session",
         capabilities: ["general"],
         agentProvider: "claude",
-        status: "active"
+        status: "active",
       });
 
       const state: CrosslinkToolState = {
         sessionId: session.sessionId,
-        store
+        store,
       };
 
-      const result = await callCrosslinkTool("crosslink_discover", {}, state) as {
+      const result = (await callCrosslinkTool("crosslink_discover", {}, state)) as {
         currentSessionId: string;
         sessions: Array<{ sessionId: string; isSelf: boolean }>;
       };
@@ -61,7 +61,7 @@ describe("crosslink tools", () => {
         description: "Session A",
         capabilities: ["general"],
         agentProvider: "claude",
-        status: "active"
+        status: "active",
       });
 
       const sessionB = await store.registerSession({
@@ -70,22 +70,26 @@ describe("crosslink tools", () => {
         description: "Session B",
         capabilities: ["code_implementation"],
         agentProvider: "codex",
-        status: "active"
+        status: "active",
       });
 
       const stateA: CrosslinkToolState = { sessionId: sessionA.sessionId, store };
       const stateB: CrosslinkToolState = { sessionId: sessionB.sessionId, store };
 
       // A sends to B
-      const sendResult = await callCrosslinkTool("crosslink_send", {
-        toSessionId: sessionB.sessionId,
-        content: "What endpoints exist?"
-      }, stateA) as { messageId: string };
+      const sendResult = (await callCrosslinkTool(
+        "crosslink_send",
+        {
+          toSessionId: sessionB.sessionId,
+          content: "What endpoints exist?",
+        },
+        stateA
+      )) as { messageId: string };
 
       expect(sendResult.messageId).toMatch(/^msg-/);
 
       // B polls
-      const pollResult = await callCrosslinkTool("crosslink_poll", {}, stateB) as {
+      const pollResult = (await callCrosslinkTool("crosslink_poll", {}, stateB)) as {
         count: number;
         messages: Array<{ messageId: string; content: string; fromSessionId: string }>;
       };
@@ -95,15 +99,19 @@ describe("crosslink tools", () => {
       expect(pollResult.messages[0].fromSessionId).toBe(sessionA.sessionId);
 
       // B replies
-      const replyResult = await callCrosslinkTool("crosslink_reply", {
-        messageId: pollResult.messages[0].messageId,
-        content: "GET /users, POST /users"
-      }, stateB) as { replyMessageId: string; toSessionId: string };
+      const replyResult = (await callCrosslinkTool(
+        "crosslink_reply",
+        {
+          messageId: pollResult.messages[0].messageId,
+          content: "GET /users, POST /users",
+        },
+        stateB
+      )) as { replyMessageId: string; toSessionId: string };
 
       expect(replyResult.toSessionId).toBe(sessionA.sessionId);
 
       // A polls and gets the reply
-      const replyPoll = await callCrosslinkTool("crosslink_poll", {}, stateA) as {
+      const replyPoll = (await callCrosslinkTool("crosslink_poll", {}, stateA)) as {
         count: number;
         messages: Array<{ content: string; inReplyTo: string | null }>;
       };
@@ -127,15 +135,19 @@ describe("crosslink tools", () => {
         description: "Initial",
         capabilities: ["general"],
         agentProvider: "claude",
-        status: "active"
+        status: "active",
       });
 
       const state: CrosslinkToolState = { sessionId: session.sessionId, store };
 
-      const result = await callCrosslinkTool("crosslink_register", {
-        description: "Working on auth module",
-        capabilities: ["code_implementation", "architecture"]
-      }, state) as { description: string; capabilities: string[] };
+      const result = (await callCrosslinkTool(
+        "crosslink_register",
+        {
+          description: "Working on auth module",
+          capabilities: ["code_implementation", "architecture"],
+        },
+        state
+      )) as { description: string; capabilities: string[] };
 
       expect(result.description).toBe("Working on auth module");
       expect(result.capabilities).toEqual(["code_implementation", "architecture"]);
@@ -155,12 +167,12 @@ describe("crosslink tools", () => {
         description: "Test",
         capabilities: ["general"],
         agentProvider: "claude",
-        status: "active"
+        status: "active",
       });
 
       const state: CrosslinkToolState = { sessionId: session.sessionId, store };
 
-      const result = await callCrosslinkTool("crosslink_deregister", {}, state) as {
+      const result = (await callCrosslinkTool("crosslink_deregister", {}, state)) as {
         deregistered: string;
       };
 

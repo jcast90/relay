@@ -38,7 +38,7 @@ function runCli(
     const child = spawn(tsxBin, [cliEntry, ...args], {
       cwd: opts.cwd ?? repoRoot,
       env: { ...process.env, ...(opts.env ?? {}) },
-      stdio: ["ignore", "pipe", "pipe"]
+      stdio: ["ignore", "pipe", "pipe"],
     });
 
     let stdout = "";
@@ -76,15 +76,7 @@ describe("rly serve — flag validation", () => {
 
   it("refuses to start when binding non-loopback without --token or --allow-unauthenticated-remote", async () => {
     const result = await runCli(
-      [
-        "serve",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "0",
-        "--workspace",
-        "test-workspace"
-      ],
+      ["serve", "--host", "0.0.0.0", "--port", "0", "--workspace", "test-workspace"],
       { cwd: tmpRepo, env: { RELAY_TOKEN: "" } }
     );
 
@@ -117,17 +109,11 @@ describe("rly serve — startup errors map to friendly messages", () => {
 
   it("EADDRINUSE — prints a clear 'port is already in use' message and exits 1", async () => {
     const result = await runCli(
-      [
-        "serve",
-        "--port",
-        String(blockedPort),
-        "--workspace",
-        "test-workspace"
-      ],
+      ["serve", "--port", String(blockedPort), "--workspace", "test-workspace"],
       {
         // Point at a scratch cwd so workspace-registry fallback isn't the
         // error we trip on.
-        cwd: tmpdir()
+        cwd: tmpdir(),
       }
     );
 

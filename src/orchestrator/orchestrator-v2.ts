@@ -3,7 +3,7 @@ import {
   tierNeedsApproval,
   tierNeedsDesignDoc,
   tierSkipsPlanning,
-  type ClassificationResult
+  type ClassificationResult,
 } from "../domain/classification.js";
 import { createSeedPlan } from "../domain/phase-plan.js";
 import type {
@@ -11,7 +11,7 @@ import type {
   EvidenceRecord,
   HarnessRun,
   RunEvent,
-  RunEventType
+  RunEventType,
 } from "../domain/run.js";
 import { initializeTicketLedger } from "../domain/ticket.js";
 import { assertTransition } from "../domain/state-machine.js";
@@ -114,7 +114,7 @@ export class OrchestratorV2 {
       phaseLedgerPath: null,
       ticketLedger: [],
       ticketLedgerPath: null,
-      runIndexPath: null
+      runIndexPath: null,
     };
 
     this.recordEvent(run, "TaskSubmitted", "phase_00", { featureRequest });
@@ -125,7 +125,7 @@ export class OrchestratorV2 {
         const channel = await this.channelStore.createChannel({
           name: featureRequest.slice(0, 60),
           description: featureRequest,
-          workspaceIds: [this.workspaceId]
+          workspaceIds: [this.workspaceId],
         });
         run.channelId = channel.channelId;
         await this.channelStore.linkRun(channel.channelId, run.id, this.workspaceId);
@@ -134,16 +134,14 @@ export class OrchestratorV2 {
           fromAgentId: null,
           fromDisplayName: "Orchestrator",
           content: `Run started: ${featureRequest}`,
-          metadata: { runId: run.id, state: run.state }
+          metadata: { runId: run.id, state: run.state },
         });
       } catch (err) {
         // Channel creation is non-critical — continue without it, but don't
         // swallow silently. A logged warning lets operators see why a run
         // has no channel without having to trace through the code.
         const message = err instanceof Error ? err.message : String(err);
-        console.warn(
-          `[orchestrator] channel creation failed (runId=${run.id}): ${message}`
-        );
+        console.warn(`[orchestrator] channel creation failed (runId=${run.id}): ${message}`);
       }
     }
 
@@ -152,19 +150,19 @@ export class OrchestratorV2 {
       run,
       featureRequest,
       repoRoot: this.repoRoot,
-      dispatch: (r, req) => this.dispatch(r, req)
+      dispatch: (r, req) => this.dispatch(r, req),
     });
 
     run.classification = classification;
     await this.artifactStore.saveClassification({
       runId: run.id,
-      classification
+      classification,
     });
 
     await this.transition(run, "ClassificationComplete", "phase_00");
     this.recordEvent(run, "ClassificationComplete", "phase_00", {
       tier: classification.tier,
-      rationale: classification.rationale
+      rationale: classification.rationale,
     });
 
     // Step 2: Route by tier
@@ -181,19 +179,19 @@ export class OrchestratorV2 {
       objective: featureRequest,
       acceptanceCriteria: [
         "Create bounded phases with acceptance criteria.",
-        "Include retry policy and verification commands."
+        "Include retry policy and verification commands.",
       ],
       allowedCommands: [],
       verificationCommands: [],
       docsToUpdate: ["README.md"],
       context: [
         `Repository root: ${this.repoRoot}`,
-        `Classification: ${classification.tier} (${classification.rationale})`
+        `Classification: ${classification.tier} (${classification.rationale})`,
       ],
       artifactContext: [],
       attempt: 1,
       maxAttempts: 2,
-      priorEvidence: []
+      priorEvidence: [],
     });
 
     run.plan = planResult.phasePlan ?? createSeedPlan(featureRequest, this.repoRoot);
@@ -209,7 +207,7 @@ export class OrchestratorV2 {
         objective: `Create an architectural design document for: ${featureRequest}`,
         acceptanceCriteria: [
           "Document should cover architecture, trade-offs, and implementation approach.",
-          "Include component boundaries and data flow."
+          "Include component boundaries and data flow.",
         ],
         allowedCommands: [],
         verificationCommands: [],
@@ -217,17 +215,17 @@ export class OrchestratorV2 {
         context: [
           `Repository root: ${this.repoRoot}`,
           `Plan: ${run.plan.task.title}`,
-          ...run.plan.phases.map((p) => `Phase: ${p.title} (${p.specialty})`)
+          ...run.plan.phases.map((p) => `Phase: ${p.title} (${p.specialty})`),
         ],
         artifactContext: [],
         attempt: 1,
         maxAttempts: 2,
-        priorEvidence: []
+        priorEvidence: [],
       });
 
       await this.artifactStore.saveDesignDoc({
         runId: run.id,
-        content: designResult.summary
+        content: designResult.summary,
       });
     }
 
@@ -237,7 +235,7 @@ export class OrchestratorV2 {
       plan: run.plan,
       classification,
       repoRoot: this.repoRoot,
-      dispatch: (r, req) => this.dispatch(r, req)
+      dispatch: (r, req) => this.dispatch(r, req),
     });
 
     run.ticketPlan = ticketPlan;
@@ -245,7 +243,7 @@ export class OrchestratorV2 {
 
     await this.artifactStore.saveTicketLedger({
       runId: run.id,
-      ticketLedger: run.ticketLedger
+      ticketLedger: run.ticketLedger,
     });
 
     // Channel board is the live, unified ticket view across chat + orchestrator.
@@ -261,7 +259,7 @@ export class OrchestratorV2 {
       // Non-blocking: check if approval already exists, otherwise return waiting
       const approvalResult = await checkApproval({
         runId: run.id,
-        artifactStore: this.artifactStore
+        artifactStore: this.artifactStore,
       });
 
       if (!approvalResult) {
@@ -285,7 +283,7 @@ export class OrchestratorV2 {
     }
 
     this.recordEvent(run, "TicketsCreated", "phase_00", {
-      ticketCount: String(ticketPlan.tickets.length)
+      ticketCount: String(ticketPlan.tickets.length),
     });
 
     const scheduler = this.buildScheduler(run);
@@ -301,7 +299,7 @@ export class OrchestratorV2 {
 
     if (allTicketsSucceeded) {
       this.recordEvent(run, "AllTicketsComplete", "phase_00", {
-        ticketCount: String(run.ticketLedger.length)
+        ticketCount: String(run.ticketLedger.length),
       });
     }
 
@@ -316,7 +314,7 @@ export class OrchestratorV2 {
           fromAgentId: null,
           fromDisplayName: "Orchestrator",
           content: `Run completed: ${run.state}`,
-          metadata: { runId: run.id, state: run.state }
+          metadata: { runId: run.id, state: run.state },
         })
         .catch((err: unknown) => this.warnChannelPostFailed(run, err));
     }
@@ -335,7 +333,7 @@ export class OrchestratorV2 {
         const channel = await this.channelStore.createChannel({
           name: featureRequest.slice(0, 60),
           description: featureRequest,
-          workspaceIds: [this.workspaceId]
+          workspaceIds: [this.workspaceId],
         });
         run.channelId = channel.channelId;
         await this.channelStore.linkRun(channel.channelId, run.id, this.workspaceId);
@@ -344,13 +342,11 @@ export class OrchestratorV2 {
           fromAgentId: null,
           fromDisplayName: "Orchestrator",
           content: `Run started (trivial): ${featureRequest}`,
-          metadata: { runId: run.id, state: run.state }
+          metadata: { runId: run.id, state: run.state },
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        console.warn(
-          `[orchestrator] trivial channel setup failed (runId=${run.id}): ${message}`
-        );
+        console.warn(`[orchestrator] trivial channel setup failed (runId=${run.id}): ${message}`);
       }
     }
 
@@ -370,7 +366,7 @@ export class OrchestratorV2 {
 
     this.recordEvent(run, "TicketsCreated", "phase_00", {
       ticketCount: String(ticketPlan.tickets.length),
-      fastTrack: "trivial"
+      fastTrack: "trivial",
     });
 
     const scheduler = this.buildScheduler(run);
@@ -393,7 +389,7 @@ export class OrchestratorV2 {
           fromAgentId: null,
           fromDisplayName: "Orchestrator",
           content: `Run completed: ${run.state}`,
-          metadata: { runId: run.id, state: run.state }
+          metadata: { runId: run.id, state: run.state },
         })
         .catch((err: unknown) => this.warnChannelPostFailed(run, err));
     }
@@ -422,15 +418,12 @@ export class OrchestratorV2 {
       (r, type, phaseId, details) => this.recordEvent(r, type, phaseId, details),
       {
         channelStore: this.channelStore,
-        ...(this.executor ? { executor: this.executor } : {})
+        ...(this.executor ? { executor: this.executor } : {}),
       }
     );
   }
 
-  private startPoller(
-    run: HarnessRun,
-    scheduler: TicketScheduler
-  ): PollerHandle | null {
+  private startPoller(run: HarnessRun, scheduler: TicketScheduler): PollerHandle | null {
     if (!this.pollerFactory) return null;
     try {
       const poller = this.pollerFactory({ run, scheduler });
@@ -438,17 +431,12 @@ export class OrchestratorV2 {
       return poller;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.warn(
-        `[orchestrator] poller start failed (runId=${run.id}): ${message}`
-      );
+      console.warn(`[orchestrator] poller start failed (runId=${run.id}): ${message}`);
       return null;
     }
   }
 
-  private async dispatch(
-    run: HarnessRun,
-    input: Omit<WorkRequest, "runId">
-  ): Promise<AgentResult> {
+  private async dispatch(run: HarnessRun, input: Omit<WorkRequest, "runId">): Promise<AgentResult> {
     let lastError: Error | null = null;
 
     for (let attempt = 1; attempt <= input.maxAttempts; attempt += 1) {
@@ -459,7 +447,7 @@ export class OrchestratorV2 {
         agentId: agent.id,
         provider: agent.provider,
         workKind: input.kind,
-        attempt: String(attempt)
+        attempt: String(attempt),
       });
 
       if (run.channelId && this.channelStore) {
@@ -469,7 +457,7 @@ export class OrchestratorV2 {
             fromAgentId: agent.id,
             fromDisplayName: agent.name,
             content: `Dispatched for ${input.kind}: ${input.title}`,
-            metadata: { attempt: String(attempt) }
+            metadata: { attempt: String(attempt) },
           })
           .catch((err: unknown) => this.warnChannelPostFailed(run, err));
       }
@@ -486,20 +474,20 @@ export class OrchestratorV2 {
           summary: result.summary,
           evidence: result.evidence,
           proposedCommands: result.proposedCommands,
-          blockers: result.blockers
+          blockers: result.blockers,
         });
 
         this.recordEvent(run, "AgentCompleted", input.phaseId, {
           agentId: agent.id,
           summary: result.summary,
-          attempt: String(attempt)
+          attempt: String(attempt),
         });
 
         if (result.blockers.length > 0 && attempt < input.maxAttempts) {
           this.recordEvent(run, "AgentRetried", input.phaseId, {
             agentId: agent.id,
             attempt: String(attempt),
-            reason: result.blockers.join("; ")
+            reason: result.blockers.join("; "),
           });
           continue;
         }
@@ -509,13 +497,13 @@ export class OrchestratorV2 {
         lastError = error instanceof Error ? error : new Error(String(error));
         this.recordEvent(run, "AgentFailed", input.phaseId, {
           attempt: String(attempt),
-          message: lastError.message
+          message: lastError.message,
         });
 
         if (attempt < input.maxAttempts) {
           this.recordEvent(run, "AgentRetried", input.phaseId, {
             attempt: String(attempt),
-            reason: lastError.message
+            reason: lastError.message,
           });
           continue;
         }
@@ -542,7 +530,7 @@ export class OrchestratorV2 {
           fromAgentId: null,
           fromDisplayName: "Orchestrator",
           content: `${eventType} → ${run.state}`,
-          metadata: { runId: run.id, state: run.state, event: eventType }
+          metadata: { runId: run.id, state: run.state, event: eventType },
         })
         .catch((err: unknown) => this.warnChannelPostFailed(run, err));
     }
@@ -558,15 +546,13 @@ export class OrchestratorV2 {
       type,
       phaseId,
       details,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     };
 
     run.events.push(event);
     this.artifactStore.appendEvent(run.id, event).catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
-      console.warn(
-        `[orchestrator] appendEvent failed (runId=${run.id} type=${type}): ${message}`
-      );
+      console.warn(`[orchestrator] appendEvent failed (runId=${run.id} type=${type}): ${message}`);
     });
   }
 
@@ -587,8 +573,8 @@ export class OrchestratorV2 {
         phaseLedgerPath: run.phaseLedgerPath,
         artifactsRoot: this.artifactsDir
           ? `${this.artifactsDir}/${run.id}`
-          : `${this.repoRoot}/.relay/artifacts/${run.id}`
-      }
+          : `${this.repoRoot}/.relay/artifacts/${run.id}`,
+      },
     });
     await this.artifactStore.saveRunSnapshot(run);
   }

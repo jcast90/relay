@@ -6,7 +6,7 @@ export const AgentSpecialtySchema = z.enum([
   "business_logic",
   "api_crud",
   "devops",
-  "testing"
+  "testing",
 ]);
 
 export type AgentSpecialty = z.infer<typeof AgentSpecialtySchema>;

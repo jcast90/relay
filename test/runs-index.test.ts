@@ -24,8 +24,8 @@ describe("runs index", () => {
           completedAt: "2026-03-30T00:01:00.000Z",
           channelId: null,
           phaseLedgerPath: "/tmp/run-1/phase-ledger.json",
-          artifactsRoot: "/tmp/run-1"
-        }
+          artifactsRoot: "/tmp/run-1",
+        },
       });
 
       await store.saveRunsIndex({
@@ -38,8 +38,8 @@ describe("runs index", () => {
           completedAt: "2026-03-30T00:03:00.000Z",
           channelId: null,
           phaseLedgerPath: "/tmp/run-2/phase-ledger.json",
-          artifactsRoot: "/tmp/run-2"
-        }
+          artifactsRoot: "/tmp/run-2",
+        },
       });
 
       const entries = await store.readRunsIndex();
@@ -52,11 +52,11 @@ describe("runs index", () => {
     } finally {
       await rm(artifactRoot, {
         recursive: true,
-        force: true
+        force: true,
       });
       await rm(storeRoot, {
         recursive: true,
-        force: true
+        force: true,
       });
     }
   });

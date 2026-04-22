@@ -14,10 +14,7 @@
 import type { HarnessRun } from "../domain/run.js";
 import type { TicketDefinition } from "../domain/ticket.js";
 import type { TicketScheduler } from "../orchestrator/ticket-scheduler.js";
-import type {
-  FollowUpDispatcher,
-  FollowUpRequest
-} from "./pr-poller.js";
+import type { FollowUpDispatcher, FollowUpRequest } from "./pr-poller.js";
 
 export interface SchedulerFollowUpDispatcherOptions {
   scheduler: Pick<TicketScheduler, "enqueue">;
@@ -26,7 +23,7 @@ export interface SchedulerFollowUpDispatcherOptions {
 
 const DEFAULT_RETRY_POLICY = {
   maxAgentAttempts: 2,
-  maxTestFixLoops: 2
+  maxTestFixLoops: 2,
 } as const;
 
 export class SchedulerFollowUpDispatcher implements FollowUpDispatcher {
@@ -53,7 +50,7 @@ export class SchedulerFollowUpDispatcher implements FollowUpDispatcher {
       acceptanceCriteria: [
         request.kind === "fix-ci"
           ? "CI checks on the PR are passing after the follow-up commits."
-          : "All reviewer comments on the PR are addressed and resolved."
+          : "All reviewer comments on the PR are addressed and resolved.",
       ],
       allowedCommands: [],
       verificationCommands: [],
@@ -62,7 +59,7 @@ export class SchedulerFollowUpDispatcher implements FollowUpDispatcher {
       // block on the parent ticket, which by this point has already produced
       // a PR and moved on.
       dependsOn: [],
-      retryPolicy: DEFAULT_RETRY_POLICY
+      retryPolicy: DEFAULT_RETRY_POLICY,
     };
   }
 }

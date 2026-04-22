@@ -4,14 +4,12 @@ import {
   ACTIVITY_TOP_N,
   appendActivityCapped,
   describeToolUse,
-  parseClaudeStreamLine
+  parseClaudeStreamLine,
 } from "../src/domain/tool-activity.js";
 
 describe("describeToolUse", () => {
   it("renders Read with basename", () => {
-    expect(describeToolUse("Read", { file_path: "/abs/path/src/foo.ts" })).toBe(
-      "Reading foo.ts"
-    );
+    expect(describeToolUse("Read", { file_path: "/abs/path/src/foo.ts" })).toBe("Reading foo.ts");
   });
 
   it("renders Edit with basename", () => {
@@ -52,7 +50,7 @@ describe("parseClaudeStreamLine", () => {
   it("returns null for text chunks", () => {
     const line = JSON.stringify({
       type: "assistant",
-      message: { content: [{ type: "text", text: "hello" }] }
+      message: { content: [{ type: "text", text: "hello" }] },
     });
     expect(parseClaudeStreamLine(line)).toBeNull();
   });
@@ -63,9 +61,9 @@ describe("parseClaudeStreamLine", () => {
       message: {
         content: [
           { type: "text", text: "let me look" },
-          { type: "tool_use", name: "Read", input: { file_path: "src/foo.ts" } }
-        ]
-      }
+          { type: "tool_use", name: "Read", input: { file_path: "src/foo.ts" } },
+        ],
+      },
     });
     expect(parseClaudeStreamLine(line)).toBe("Reading foo.ts");
   });
@@ -85,7 +83,7 @@ describe("appendActivityCapped", () => {
   it("caps BEFORE appending (no momentary overshoot)", () => {
     const full = Array.from({ length: ACTIVITY_STACK_MAX }, (_, i) => ({
       text: `x${i}`,
-      ts: i
+      ts: i,
     }));
     const next = appendActivityCapped(full, { text: "new", ts: 99 });
     expect(next.length).toBe(ACTIVITY_STACK_MAX);

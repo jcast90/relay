@@ -1,7 +1,11 @@
 import { writeFile } from "node:fs/promises";
 
 import { createSeedPlan } from "../domain/phase-plan.js";
-import type { CommandInvocation, CommandInvoker, CommandResult } from "../agents/command-invoker.js";
+import type {
+  CommandInvocation,
+  CommandInvoker,
+  CommandResult,
+} from "../agents/command-invoker.js";
 
 export class ScriptedInvoker implements CommandInvoker {
   constructor(private readonly cwd: string) {}
@@ -12,9 +16,7 @@ export class ScriptedInvoker implements CommandInvoker {
 
     if (invocation.command === "codex") {
       const outputFlagIndex = invocation.args.findIndex((arg) => arg === "-o");
-      const outputPath = outputFlagIndex >= 0
-        ? invocation.args[outputFlagIndex + 1]
-        : undefined;
+      const outputPath = outputFlagIndex >= 0 ? invocation.args[outputFlagIndex + 1] : undefined;
 
       if (!outputPath) {
         throw new Error("Scripted codex invocation missing output file path.");
@@ -25,14 +27,14 @@ export class ScriptedInvoker implements CommandInvoker {
       return {
         stdout: "",
         stderr: "",
-        exitCode: 0
+        exitCode: 0,
       };
     }
 
     return {
       stdout: JSON.stringify(response),
       stderr: "",
-      exitCode: 0
+      exitCode: 0,
     };
   }
 }
@@ -44,9 +46,7 @@ function buildResponse(prompt: string, cwd: string) {
   if (workKind === "classify_request") {
     return {
       summary: `Classified "${title}" as a feature_small request.`,
-      evidence: [
-        "Request appears to be a moderate-scope feature addition."
-      ],
+      evidence: ["Request appears to be a moderate-scope feature addition."],
       proposedCommands: [],
       blockers: [],
       classification: {
@@ -55,19 +55,17 @@ function buildResponse(prompt: string, cwd: string) {
         suggestedSpecialties: ["general"],
         estimatedTicketCount: 3,
         needsDesignDoc: false,
-        needsUserApproval: false
-      }
+        needsUserApproval: false,
+      },
     };
   }
 
   if (workKind === "generate_design_doc") {
     return {
       summary: `Generated design document for "${title}".`,
-      evidence: [
-        "Design document covers architecture, trade-offs, and implementation approach."
-      ],
+      evidence: ["Design document covers architecture, trade-offs, and implementation approach."],
       proposedCommands: [],
-      blockers: []
+      blockers: [],
     };
   }
 
@@ -76,7 +74,7 @@ function buildResponse(prompt: string, cwd: string) {
       summary: `Decomposed "${title}" into parallelizable tickets.`,
       evidence: [
         "Tickets were derived from the phase plan.",
-        "Dependencies between tickets were identified."
+        "Dependencies between tickets were identified.",
       ],
       proposedCommands: [],
       blockers: [],
@@ -85,7 +83,7 @@ function buildResponse(prompt: string, cwd: string) {
         task: {
           title,
           featureRequest: title,
-          repoRoot: cwd
+          repoRoot: cwd,
         },
         classification: {
           tier: "feature_small",
@@ -93,7 +91,7 @@ function buildResponse(prompt: string, cwd: string) {
           suggestedSpecialties: ["general"],
           estimatedTicketCount: 2,
           needsDesignDoc: false,
-          needsUserApproval: false
+          needsUserApproval: false,
         },
         tickets: [
           {
@@ -106,7 +104,7 @@ function buildResponse(prompt: string, cwd: string) {
             verificationCommands: ["pnpm typecheck"],
             docsToUpdate: [],
             dependsOn: [],
-            retryPolicy: { maxAgentAttempts: 2, maxTestFixLoops: 2 }
+            retryPolicy: { maxAgentAttempts: 2, maxTestFixLoops: 2 },
           },
           {
             id: "ticket_02",
@@ -118,12 +116,12 @@ function buildResponse(prompt: string, cwd: string) {
             verificationCommands: ["pnpm typecheck", "pnpm test"],
             docsToUpdate: ["README.md"],
             dependsOn: ["ticket_01"],
-            retryPolicy: { maxAgentAttempts: 2, maxTestFixLoops: 2 }
-          }
+            retryPolicy: { maxAgentAttempts: 2, maxTestFixLoops: 2 },
+          },
         ],
         finalVerification: { commands: ["pnpm typecheck", "pnpm test"] },
-        docsToUpdate: ["README.md"]
-      }
+        docsToUpdate: ["README.md"],
+      },
     };
   }
 
@@ -132,11 +130,11 @@ function buildResponse(prompt: string, cwd: string) {
       summary: `Created a structured phase plan for "${title}".`,
       evidence: [
         "Planner produced a bounded multi-phase plan.",
-        "Retry budgets and verification commands were included."
+        "Retry budgets and verification commands were included.",
       ],
       proposedCommands: [],
       blockers: [],
-      phasePlan: createSeedPlan(title, cwd)
+      phasePlan: createSeedPlan(title, cwd),
     };
   }
 
@@ -145,10 +143,10 @@ function buildResponse(prompt: string, cwd: string) {
       summary: `Prepared implementation guidance for "${title}".`,
       evidence: [
         "Implementation agent identified the phase objective.",
-        "Acceptance criteria were preserved in the response."
+        "Acceptance criteria were preserved in the response.",
       ],
       proposedCommands: ["pnpm typecheck"],
-      blockers: []
+      blockers: [],
     };
   }
 
@@ -180,37 +178,31 @@ function buildResponse(prompt: string, cwd: string) {
 
     return {
       summary: `Classified the failure for "${title}" as ${category}.`,
-      evidence: [
-        "Failure category was derived from captured artifact contents."
-      ],
+      evidence: ["Failure category was derived from captured artifact contents."],
       proposedCommands: [],
       blockers: [],
       failureClassification: {
         category,
         rationale,
-        nextAction
-      }
+        nextAction,
+      },
     };
   }
 
   if (workKind === "run_checks") {
     return {
       summary: `Prepared a verification pass for "${title}".`,
-      evidence: [
-        "Verification commands were surfaced back to the harness."
-      ],
+      evidence: ["Verification commands were surfaced back to the harness."],
       proposedCommands: ["pnpm typecheck", "pnpm test"],
-      blockers: []
+      blockers: [],
     };
   }
 
   return {
     summary: `Reviewed "${title}" for correctness and scope alignment.`,
-    evidence: [
-      "Review covered scope drift and missing acceptance criteria."
-    ],
+    evidence: ["Review covered scope drift and missing acceptance criteria."],
     proposedCommands: [],
-    blockers: []
+    blockers: [],
   };
 }
 

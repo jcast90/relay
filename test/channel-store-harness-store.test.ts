@@ -1,10 +1,4 @@
-import {
-  cp,
-  mkdtemp,
-  readFile,
-  rm,
-  stat
-} from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,12 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ChannelStore } from "../src/channels/channel-store.js";
 import { FileHarnessStore } from "../src/storage/file-store.js";
 import { STORE_NS } from "../src/storage/namespaces.js";
-import type {
-  BlobRef,
-  ChangeEvent,
-  HarnessStore,
-  ReadLogOptions
-} from "../src/storage/store.js";
+import type { BlobRef, ChangeEvent, HarnessStore, ReadLogOptions } from "../src/storage/store.js";
 
 /**
  * Minimal in-memory HarnessStore. Good enough to verify ChannelStore calls
@@ -59,11 +48,7 @@ class FakeHarnessStore implements HarnessStore {
     throw new Error("FakeHarnessStore.appendLog is not implemented");
   }
 
-  async readLog<T>(
-    _ns: string,
-    _id: string,
-    _opts?: ReadLogOptions
-  ): Promise<T[]> {
+  async readLog<T>(_ns: string, _id: string, _opts?: ReadLogOptions): Promise<T[]> {
     throw new Error("FakeHarnessStore.readLog is not implemented");
   }
 
@@ -75,11 +60,7 @@ class FakeHarnessStore implements HarnessStore {
     throw new Error("FakeHarnessStore.getBlob is not implemented");
   }
 
-  async mutate<T>(
-    ns: string,
-    id: string,
-    fn: (prev: T | null) => T
-  ): Promise<T> {
+  async mutate<T>(ns: string, id: string, fn: (prev: T | null) => T): Promise<T> {
     this.mutateCalls.push({ ns, id });
     const prev = (this.docs.get(this.key(ns, id)) as T | undefined) ?? null;
     const next = fn(prev);
@@ -111,7 +92,7 @@ describe("ChannelStore with HarnessStore injection", () => {
   it("routes ticket-board coordination through HarnessStore.mutate", async () => {
     const channel = await store.createChannel({
       name: "#coord",
-      description: "coord-test"
+      description: "coord-test",
     });
 
     await store.upsertChannelTickets(channel.channelId, [
@@ -131,14 +112,14 @@ describe("ChannelStore with HarnessStore injection", () => {
         startedAt: null,
         completedAt: null,
         updatedAt: "2025-01-01T00:00:00.000Z",
-        runId: null
-      }
+        runId: null,
+      },
     ]);
 
     // The upsert must have written a coordination record through the store.
     expect(fake.mutateCalls).toContainEqual({
       ns: STORE_NS.channelTickets,
-      id: channel.channelId
+      id: channel.channelId,
     });
 
     const rec = await fake.getDoc<{ updatedAt: string; count: number }>(
@@ -153,7 +134,7 @@ describe("ChannelStore with HarnessStore injection", () => {
   it("keeps the Rust-compat tickets.json layout on disk", async () => {
     const channel = await store.createChannel({
       name: "#layout",
-      description: "layout-test"
+      description: "layout-test",
     });
 
     await store.upsertChannelTickets(channel.channelId, [
@@ -173,8 +154,8 @@ describe("ChannelStore with HarnessStore injection", () => {
         startedAt: null,
         completedAt: null,
         updatedAt: "2025-01-01T00:00:00.000Z",
-        runId: null
-      }
+        runId: null,
+      },
     ]);
 
     // Tickets still live at `channels/<id>/tickets.json` — not under the
@@ -190,7 +171,7 @@ describe("ChannelStore with HarnessStore injection", () => {
   it("channel doc stays at channelsDir/<id>.json (Rust-compat)", async () => {
     const channel = await store.createChannel({
       name: "#rust-doc",
-      description: "rust-doc-test"
+      description: "rust-doc-test",
     });
 
     const docPath = join(channelsDir, `${channel.channelId}.json`);
@@ -209,7 +190,7 @@ describe("ChannelStore with HarnessStore injection", () => {
     const defaulted = new ChannelStore(channelsDir);
     const channel = await defaulted.createChannel({
       name: "#default",
-      description: "default-ctor"
+      description: "default-ctor",
     });
     expect(channel.channelId).toMatch(/^channel-/);
   });
@@ -217,7 +198,7 @@ describe("ChannelStore with HarnessStore injection", () => {
   it("mirrors recorded decisions through HarnessStore.putDoc", async () => {
     const channel = await store.createChannel({
       name: "#decisions",
-      description: "decision-mirror-test"
+      description: "decision-mirror-test",
     });
 
     const decision = await store.recordDecision(channel.channelId, {
@@ -229,7 +210,7 @@ describe("ChannelStore with HarnessStore injection", () => {
       alternatives: ["redux", "context-only"],
       decidedBy: "planner-claude",
       decidedByName: "Claude (Planner)",
-      linkedArtifacts: []
+      linkedArtifacts: [],
     });
 
     // Primary source of truth still lives at channels/<id>/decisions/<did>.json
@@ -251,7 +232,7 @@ describe("ChannelStore with HarnessStore injection", () => {
     const storeId = `${channel.channelId}:${decision.decisionId}`;
     expect(fake.putCalls).toContainEqual({
       ns: STORE_NS.decision,
-      id: storeId
+      id: storeId,
     });
     const mirrored = await fake.getDoc<{ decisionId: string; title: string }>(
       STORE_NS.decision,
@@ -288,19 +269,16 @@ describe("ChannelStore with HarnessStore injection", () => {
       getBlob: async () => {
         throw new Error("not implemented");
       },
-      mutate: async <T>(
-        _ns: string,
-        _id: string,
-        fn: (prev: T | null) => T
-      ): Promise<T> => fn(null),
+      mutate: async <T>(_ns: string, _id: string, fn: (prev: T | null) => T): Promise<T> =>
+        fn(null),
       watch: async function* () {
         throw new Error("not implemented");
-      }
+      },
     };
     const flakyStore = new ChannelStore(channelsDir, flaky);
     const channel = await flakyStore.createChannel({
       name: "#flaky",
-      description: "flaky-mirror"
+      description: "flaky-mirror",
     });
 
     const decision = await flakyStore.recordDecision(channel.channelId, {
@@ -312,7 +290,7 @@ describe("ChannelStore with HarnessStore injection", () => {
       alternatives: [],
       decidedBy: "planner-claude",
       decidedByName: "Claude (Planner)",
-      linkedArtifacts: []
+      linkedArtifacts: [],
     });
 
     // Disk copy still landed.
@@ -328,7 +306,7 @@ describe("ChannelStore with HarnessStore injection", () => {
   it("serializes concurrent upsertChannelTickets on the same channel", async () => {
     const channel = await store.createChannel({
       name: "#race",
-      description: "race-test"
+      description: "race-test",
     });
 
     const makeTicket = (ticketId: string) => ({
@@ -347,7 +325,7 @@ describe("ChannelStore with HarnessStore injection", () => {
       startedAt: null,
       completedAt: null,
       updatedAt: "2025-01-01T00:00:00.000Z",
-      runId: null
+      runId: null,
     });
 
     // Fire 4 concurrent upserts with distinct ticketIds. The in-process
@@ -356,7 +334,7 @@ describe("ChannelStore with HarnessStore injection", () => {
       store.upsertChannelTickets(channel.channelId, [makeTicket("t-1")]),
       store.upsertChannelTickets(channel.channelId, [makeTicket("t-2")]),
       store.upsertChannelTickets(channel.channelId, [makeTicket("t-3")]),
-      store.upsertChannelTickets(channel.channelId, [makeTicket("t-4")])
+      store.upsertChannelTickets(channel.channelId, [makeTicket("t-4")]),
     ]);
 
     const final = await store.readChannelTickets(channel.channelId);
@@ -373,9 +351,7 @@ describe("ChannelStore reads legacy Rust-layout fixtures", () => {
     // hermetic and can create additional subdirectories without touching the
     // source tree.
     workDir = await mkdtemp(join(tmpdir(), "ch-legacy-"));
-    const src = fileURLToPath(
-      new URL("./fixtures/legacy-channel", import.meta.url)
-    );
+    const src = fileURLToPath(new URL("./fixtures/legacy-channel", import.meta.url));
     await cp(src, workDir, { recursive: true });
   });
 
@@ -388,10 +364,7 @@ describe("ChannelStore reads legacy Rust-layout fixtures", () => {
     // fixture test shouldn't depend on the user's home directory.
     const storeRoot = await mkdtemp(join(tmpdir(), "ch-legacy-store-"));
     try {
-      const store = new ChannelStore(
-        workDir,
-        new FileHarnessStore(storeRoot)
-      );
+      const store = new ChannelStore(workDir, new FileHarnessStore(storeRoot));
 
       const channel = await store.getChannel("channel-abc");
       expect(channel).not.toBeNull();
@@ -406,10 +379,7 @@ describe("ChannelStore reads legacy Rust-layout fixtures", () => {
       expect(feed[1].metadata).toEqual({ runId: "run-legacy-1" });
 
       const tickets = await store.readChannelTickets("channel-abc");
-      expect(tickets.map((t) => t.ticketId)).toEqual([
-        "ticket-legacy-1",
-        "ticket-legacy-2"
-      ]);
+      expect(tickets.map((t) => t.ticketId)).toEqual(["ticket-legacy-1", "ticket-legacy-2"]);
       expect(tickets[0].status).toBe("executing");
 
       const runs = await store.readRunLinks("channel-abc");
@@ -440,9 +410,7 @@ describe("ChannelStore reads legacy decisions fixture", () => {
 
   beforeEach(async () => {
     workDir = await mkdtemp(join(tmpdir(), "ch-dec-legacy-"));
-    const src = fileURLToPath(
-      new URL("./fixtures/legacy-channel-decisions", import.meta.url)
-    );
+    const src = fileURLToPath(new URL("./fixtures/legacy-channel-decisions", import.meta.url));
     await cp(src, workDir, { recursive: true });
   });
 
@@ -454,34 +422,25 @@ describe("ChannelStore reads legacy decisions fixture", () => {
     const storeRoot = await mkdtemp(join(tmpdir(), "ch-dec-legacy-store-"));
     try {
       const channelsDir = join(workDir, "channels");
-      const store = new ChannelStore(
-        channelsDir,
-        new FileHarnessStore(storeRoot)
-      );
+      const store = new ChannelStore(channelsDir, new FileHarnessStore(storeRoot));
 
       const decisions = await store.listDecisions("channel-decisions-legacy");
       // Sorted descending by createdAt in `listDecisions`, so the newer beta
       // comes first.
       expect(decisions.map((d) => d.decisionId)).toEqual([
         "decision-legacy-beta",
-        "decision-legacy-alpha"
+        "decision-legacy-alpha",
       ]);
       expect(decisions[0].title).toBe("JWT for v1 session tokens");
       expect(decisions[0].linkedArtifacts).toHaveLength(1);
       expect(decisions[1].alternatives).toContain("Redis SETNX");
 
-      const alpha = await store.getDecision(
-        "channel-decisions-legacy",
-        "decision-legacy-alpha"
-      );
+      const alpha = await store.getDecision("channel-decisions-legacy", "decision-legacy-alpha");
       expect(alpha).not.toBeNull();
       expect(alpha!.decidedBy).toBe("planner-claude");
       expect(alpha!.runId).toBe("run-legacy-alpha");
 
-      const beta = await store.getDecision(
-        "channel-decisions-legacy",
-        "decision-legacy-beta"
-      );
+      const beta = await store.getDecision("channel-decisions-legacy", "decision-legacy-beta");
       expect(beta).not.toBeNull();
       expect(beta!.ticketId).toBe("ticket-legacy-auth");
       expect(beta!.runId).toBeNull();

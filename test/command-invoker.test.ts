@@ -4,7 +4,7 @@ import {
   DEFAULT_ENV_WHITELIST,
   NodeCommandInvoker,
   isSecretEnvName,
-  sanitizeEnv
+  sanitizeEnv,
 } from "../src/agents/command-invoker.js";
 
 /**
@@ -81,7 +81,7 @@ describe("sanitizeEnv", () => {
     LINEAR_API_KEY: "lin-secret",
     DATABASE_PASSWORD: "pw",
     // Unrelated var that isn't whitelisted: should be stripped too.
-    RANDOM_VAR: "nope"
+    RANDOM_VAR: "nope",
   };
 
   it("forwards the default whitelist and strips everything else", () => {
@@ -114,7 +114,7 @@ describe("sanitizeEnv", () => {
 
   it("lets passEnv opt specific secrets back in", () => {
     const out = sanitizeEnv(secretHeavyEnv, {
-      passEnv: ["ANTHROPIC_API_KEY", "GITHUB_TOKEN"]
+      passEnv: ["ANTHROPIC_API_KEY", "GITHUB_TOKEN"],
     });
 
     expect(out.ANTHROPIC_API_KEY).toBe("sk-ant-secret");
@@ -125,10 +125,7 @@ describe("sanitizeEnv", () => {
   });
 
   it("silently skips passEnv names not present in parent env", () => {
-    const out = sanitizeEnv(
-      { PATH: "/usr/bin" },
-      { passEnv: ["NOT_SET", "ALSO_NOT_SET"] }
-    );
+    const out = sanitizeEnv({ PATH: "/usr/bin" }, { passEnv: ["NOT_SET", "ALSO_NOT_SET"] });
 
     expect(out.PATH).toBe("/usr/bin");
     expect(out.NOT_SET).toBeUndefined();
@@ -136,7 +133,7 @@ describe("sanitizeEnv", () => {
 
   it("env overrides layer on top unfiltered", () => {
     const out = sanitizeEnv(secretHeavyEnv, {
-      env: { API_KEY_FOR_TESTS: "explicit" }
+      env: { API_KEY_FOR_TESTS: "explicit" },
     });
 
     expect(out.API_KEY_FOR_TESTS).toBe("explicit");
@@ -146,7 +143,7 @@ describe("sanitizeEnv", () => {
 
   it("env value of undefined unsets the key", () => {
     const out = sanitizeEnv(secretHeavyEnv, {
-      env: { PATH: undefined }
+      env: { PATH: undefined },
     });
 
     expect(out.PATH).toBeUndefined();
@@ -181,7 +178,7 @@ describe("NodeCommandInvoker — env sanitization in a real subprocess", () => {
       INJECTED_GITHUB_TOKEN: process.env.INJECTED_GITHUB_TOKEN,
       INJECTED_API_KEY: process.env.INJECTED_API_KEY,
       INJECTED_SAFE_VAR: process.env.INJECTED_SAFE_VAR,
-      HARNESS_INJECTED: process.env.HARNESS_INJECTED
+      HARNESS_INJECTED: process.env.HARNESS_INJECTED,
     };
     process.env.INJECTED_GITHUB_TOKEN = "ghp_should_not_leak";
     process.env.INJECTED_API_KEY = "sk-should-not-leak";
@@ -191,14 +188,11 @@ describe("NodeCommandInvoker — env sanitization in a real subprocess", () => {
     try {
       const result = await invoker.exec({
         command: process.execPath,
-        args: [
-          "-e",
-          "console.log(JSON.stringify(process.env))"
-        ],
+        args: ["-e", "console.log(JSON.stringify(process.env))"],
         cwd: process.cwd(),
         timeoutMs: 10_000,
         passEnv: opts.passEnv,
-        env: opts.env
+        env: opts.env,
       });
       expect(result.exitCode).toBe(0);
       return JSON.parse(result.stdout.trim()) as Record<string, string>;
@@ -230,7 +224,7 @@ describe("NodeCommandInvoker — env sanitization in a real subprocess", () => {
 
   it("passEnv opts a named secret back in", async () => {
     const childEnv = await runEnvDump({
-      passEnv: ["INJECTED_GITHUB_TOKEN"]
+      passEnv: ["INJECTED_GITHUB_TOKEN"],
     });
 
     expect(childEnv.INJECTED_GITHUB_TOKEN).toBe("ghp_should_not_leak");
@@ -240,7 +234,7 @@ describe("NodeCommandInvoker — env sanitization in a real subprocess", () => {
 
   it("env overrides deliver explicit key/value pairs to the child", async () => {
     const childEnv = await runEnvDump({
-      env: { RELAY_EXPLICIT_OVERRIDE: "deliberate" }
+      env: { RELAY_EXPLICIT_OVERRIDE: "deliberate" },
     });
 
     expect(childEnv.RELAY_EXPLICIT_OVERRIDE).toBe("deliberate");

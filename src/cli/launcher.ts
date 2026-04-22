@@ -11,9 +11,9 @@ export async function launchInteractiveCommand(input: {
       cwd: input.cwd,
       env: {
         ...process.env,
-        ...input.env
+        ...input.env,
       },
-      stdio: "inherit"
+      stdio: "inherit",
     });
 
     child.on("error", (error) => {

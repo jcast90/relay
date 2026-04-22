@@ -41,7 +41,7 @@ describe("ChannelStore.post", () => {
         type: "event",
         fromAgentId: "agent-7",
         fromDisplayName: "PR Bot",
-        metadata: { eventId: "evt-1", priority: "info" }
+        metadata: { eventId: "evt-1", priority: "info" },
       });
 
       const feed = await store.readFeed(channel.channelId);
@@ -69,8 +69,8 @@ describe("ChannelStore.post", () => {
           count: 42,
           flag: true,
           payload: { nested: { value: [1, 2, 3] } },
-          tags: ["a", "b"]
-        }
+          tags: ["a", "b"],
+        },
       });
 
       const feed = await store.readFeed(channel.channelId);
@@ -99,14 +99,11 @@ describe("ChannelStore.post", () => {
         metadata: {
           plain: "hello",
           count: 42,
-          payload: { x: 1 }
-        }
+          payload: { x: 1 },
+        },
       });
 
-      const rawLine = (await readFile(
-        join(dir, channel.channelId, "feed.jsonl"),
-        "utf8"
-      )).trim();
+      const rawLine = (await readFile(join(dir, channel.channelId, "feed.jsonl"), "utf8")).trim();
       const onDisk = JSON.parse(rawLine) as {
         metadata: Record<string, string>;
       };
@@ -142,8 +139,8 @@ describe("ChannelStore.post", () => {
           deep: doubleTagged,
           // A plain string that never touches the tag must not be double-
           // encoded (it should stay verbatim on disk).
-          plain: "just a string"
-        }
+          plain: "just a string",
+        },
       });
 
       const feed = await store.readFeed(channel.channelId);
@@ -153,10 +150,7 @@ describe("ChannelStore.post", () => {
 
       // On-disk shape is still strings only; the plain string stays
       // verbatim while the tag-colliding strings are tagged JSON.
-      const rawLine = (await readFile(
-        join(dir, channel.channelId, "feed.jsonl"),
-        "utf8"
-      )).trim();
+      const rawLine = (await readFile(join(dir, channel.channelId, "feed.jsonl"), "utf8")).trim();
       const onDisk = JSON.parse(rawLine) as {
         metadata: Record<string, string>;
       };
@@ -182,8 +176,8 @@ describe("ChannelStore.post", () => {
         metadata: {
           keep: "yes",
           droppedNull: null,
-          droppedUndef: undefined
-        }
+          droppedUndef: undefined,
+        },
       });
 
       const feed = await store.readFeed(channel.channelId);

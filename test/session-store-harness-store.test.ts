@@ -8,12 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionStore } from "../src/cli/session-store.js";
 import { FileHarnessStore } from "../src/storage/file-store.js";
 import { STORE_NS } from "../src/storage/namespaces.js";
-import type {
-  BlobRef,
-  ChangeEvent,
-  HarnessStore,
-  ReadLogOptions
-} from "../src/storage/store.js";
+import type { BlobRef, ChangeEvent, HarnessStore, ReadLogOptions } from "../src/storage/store.js";
 
 class FakeHarnessStore implements HarnessStore {
   readonly docs: Map<string, unknown> = new Map();
@@ -46,11 +41,7 @@ class FakeHarnessStore implements HarnessStore {
     throw new Error("FakeHarnessStore.appendLog is not implemented");
   }
 
-  async readLog<T>(
-    _ns: string,
-    _id: string,
-    _opts?: ReadLogOptions
-  ): Promise<T[]> {
+  async readLog<T>(_ns: string, _id: string, _opts?: ReadLogOptions): Promise<T[]> {
     throw new Error("FakeHarnessStore.readLog is not implemented");
   }
 
@@ -62,11 +53,7 @@ class FakeHarnessStore implements HarnessStore {
     throw new Error("FakeHarnessStore.getBlob is not implemented");
   }
 
-  async mutate<T>(
-    ns: string,
-    id: string,
-    fn: (prev: T | null) => T
-  ): Promise<T> {
+  async mutate<T>(ns: string, id: string, fn: (prev: T | null) => T): Promise<T> {
     this.mutateCalls.push({ ns, id });
     const prev = (this.docs.get(this.key(ns, id)) as T | undefined) ?? null;
     const next = fn(prev);
@@ -101,7 +88,7 @@ describe("SessionStore with HarnessStore injection", () => {
     const expectedId = `channel-1:${session.sessionId}`;
     expect(fake.mutateCalls).toContainEqual({
       ns: STORE_NS.session,
-      id: expectedId
+      id: expectedId,
     });
 
     const rec = await fake.getDoc<{ updatedAt: string; messageCount: number }>(
@@ -121,7 +108,7 @@ describe("SessionStore with HarnessStore injection", () => {
       role: "user",
       content: "hi",
       timestamp: "2025-01-01T00:00:00.000Z",
-      agentAlias: null
+      agentAlias: null,
     });
 
     const rec = await fake.getDoc<{ updatedAt: string; messageCount: number }>(
@@ -132,9 +119,7 @@ describe("SessionStore with HarnessStore injection", () => {
     expect(rec!.messageCount).toBe(1);
 
     // Sanity: at least two mutate calls (create + append → updateSession).
-    const calls = fake.mutateCalls.filter(
-      (c) => c.ns === STORE_NS.session && c.id === coordId
-    );
+    const calls = fake.mutateCalls.filter((c) => c.ns === STORE_NS.session && c.id === coordId);
     expect(calls.length).toBeGreaterThanOrEqual(2);
   });
 
@@ -145,7 +130,7 @@ describe("SessionStore with HarnessStore injection", () => {
       role: "user",
       content: "rust?",
       timestamp: "2025-01-01T00:00:00.000Z",
-      agentAlias: null
+      agentAlias: null,
     });
 
     // Sessions index where Rust's `sessions_index_path` expects it.
@@ -159,17 +144,9 @@ describe("SessionStore with HarnessStore injection", () => {
     expect(raw[0].messageCount).toBe(1);
 
     // Chat JSONL where Rust's `session_chat_path` expects it.
-    const chatPath = join(
-      channelsDir,
-      "channel-rust",
-      "sessions",
-      `${session.sessionId}.jsonl`
-    );
+    const chatPath = join(channelsDir, "channel-rust", "sessions", `${session.sessionId}.jsonl`);
     await expect(stat(chatPath)).resolves.toBeTruthy();
-    const lines = (await readFile(chatPath, "utf8"))
-      .trimEnd()
-      .split("\n")
-      .filter(Boolean);
+    const lines = (await readFile(chatPath, "utf8")).trimEnd().split("\n").filter(Boolean);
     expect(lines).toHaveLength(1);
   });
 
@@ -181,7 +158,7 @@ describe("SessionStore with HarnessStore injection", () => {
 
     expect(fake.deleteCalls).toContainEqual({
       ns: STORE_NS.session,
-      id: coordId
+      id: coordId,
     });
 
     const rec = await fake.getDoc(STORE_NS.session, coordId);
@@ -202,12 +179,8 @@ describe("SessionStore with HarnessStore injection", () => {
     const indexPath = join(channelDir, "sessions.json");
     await writeFile(indexPath, "this is not JSON", "utf8");
 
-    await expect(store.listSessions("corrupt-channel")).rejects.toThrow(
-      /Corrupt sessions index/
-    );
-    await expect(store.listSessions("corrupt-channel")).rejects.toThrow(
-      indexPath
-    );
+    await expect(store.listSessions("corrupt-channel")).rejects.toThrow(/Corrupt sessions index/);
+    await expect(store.listSessions("corrupt-channel")).rejects.toThrow(indexPath);
   });
 
   it("swallows coordination-record mutate failures + logs (disk write still commits)", async () => {
@@ -221,18 +194,11 @@ describe("SessionStore with HarnessStore injection", () => {
       .mockRejectedValueOnce(new Error("coordination store exploded"));
 
     try {
-      const session = await store.createSession(
-        "mutate-fails-channel",
-        "disk still commits"
-      );
+      const session = await store.createSession("mutate-fails-channel", "disk still commits");
       expect(session.sessionId).toBeTruthy();
 
       // Disk write committed — sessions.json has the entry.
-      const indexPath = join(
-        channelsDir,
-        "mutate-fails-channel",
-        "sessions.json"
-      );
+      const indexPath = join(channelsDir, "mutate-fails-channel", "sessions.json");
       const raw = JSON.parse(await readFile(indexPath, "utf8")) as Array<{
         sessionId: string;
       }>;
@@ -240,12 +206,8 @@ describe("SessionStore with HarnessStore injection", () => {
 
       // Operator-visible diagnostic was emitted.
       const warnings = warnSpy.mock.calls.map((c) => c.join(" "));
-      expect(
-        warnings.some((w) => w.includes("coordination-record mutate failed"))
-      ).toBe(true);
-      expect(
-        warnings.some((w) => w.includes("coordination store exploded"))
-      ).toBe(true);
+      expect(warnings.some((w) => w.includes("coordination-record mutate failed"))).toBe(true);
+      expect(warnings.some((w) => w.includes("coordination store exploded"))).toBe(true);
     } finally {
       warnSpy.mockRestore();
       mutateSpy.mockRestore();
@@ -258,22 +220,13 @@ describe("SessionStore with HarnessStore injection", () => {
       role: "user",
       content: "valid",
       timestamp: "2025-01-01T00:00:00.000Z",
-      agentAlias: null
+      agentAlias: null,
     });
 
     // Manually append a garbage line to simulate data corruption /
     // manual edit damage.
-    const chatPath = join(
-      channelsDir,
-      "jsonl-warn",
-      "sessions",
-      `${session.sessionId}.jsonl`
-    );
-    await writeFile(
-      chatPath,
-      (await readFile(chatPath, "utf8")) + "this is not JSON\n",
-      "utf8"
-    );
+    const chatPath = join(channelsDir, "jsonl-warn", "sessions", `${session.sessionId}.jsonl`);
+    await writeFile(chatPath, (await readFile(chatPath, "utf8")) + "this is not JSON\n", "utf8");
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
@@ -284,9 +237,7 @@ describe("SessionStore with HarnessStore injection", () => {
       expect(messages[0].content).toBe("valid");
 
       const warnings = warnSpy.mock.calls.map((c) => c.join(" "));
-      expect(
-        warnings.some((w) => w.includes("skipping malformed JSONL line"))
-      ).toBe(true);
+      expect(warnings.some((w) => w.includes("skipping malformed JSONL line"))).toBe(true);
       expect(warnings.some((w) => w.includes(chatPath))).toBe(true);
       // Line number should be present — 2 (second line is garbage).
       expect(warnings.some((w) => /:2:/.test(w))).toBe(true);
@@ -301,9 +252,7 @@ describe("SessionStore reads legacy Rust-layout fixtures", () => {
 
   beforeEach(async () => {
     workDir = await mkdtemp(join(tmpdir(), "sess-legacy-"));
-    const fixtureSrc = fileURLToPath(
-      new URL("./fixtures/legacy-session", import.meta.url)
-    );
+    const fixtureSrc = fileURLToPath(new URL("./fixtures/legacy-session", import.meta.url));
     await cp(fixtureSrc, workDir, { recursive: true });
   });
 
@@ -328,9 +277,7 @@ describe("SessionStore reads legacy Rust-layout fixtures", () => {
       expect(messages[1].role).toBe("assistant");
 
       // Legacy-read path must not have written coordination state.
-      await expect(
-        stat(join(storeRoot, "session"))
-      ).rejects.toThrow();
+      await expect(stat(join(storeRoot, "session"))).rejects.toThrow();
     } finally {
       await rm(storeRoot, { recursive: true, force: true });
     }

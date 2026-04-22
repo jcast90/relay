@@ -5,10 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  CrosslinkStore,
-  __resetLegacyLayoutWarnings
-} from "../src/crosslink/store.js";
+import { CrosslinkStore, __resetLegacyLayoutWarnings } from "../src/crosslink/store.js";
 
 describe("crosslink store", () => {
   it("registers and discovers a session", async () => {
@@ -22,7 +19,7 @@ describe("crosslink store", () => {
         description: "Test session",
         capabilities: ["general"],
         agentProvider: "claude",
-        status: "active"
+        status: "active",
       });
 
       expect(session.sessionId).toMatch(/^session-/);
@@ -48,7 +45,7 @@ describe("crosslink store", () => {
         description: "Test session",
         capabilities: ["general"],
         agentProvider: "claude",
-        status: "active"
+        status: "active",
       });
 
       await store.deregisterSession(session.sessionId);
@@ -72,7 +69,7 @@ describe("crosslink store", () => {
         description: "Dead session",
         capabilities: ["general"],
         agentProvider: "claude",
-        status: "active"
+        status: "active",
       });
 
       // Manually set heartbeat to the past to trigger stale detection
@@ -84,11 +81,7 @@ describe("crosslink store", () => {
       // directly to simulate a stale heartbeat since the public API
       // refreshes it on every write.
       const { writeFile } = await import("node:fs/promises");
-      const sessionFile = join(
-        root,
-        "crosslink-session",
-        `${session.sessionId}.json`
-      );
+      const sessionFile = join(root, "crosslink-session", `${session.sessionId}.json`);
       const raw = JSON.parse(
         await (await import("node:fs/promises")).readFile(sessionFile, "utf8")
       );
@@ -113,7 +106,7 @@ describe("crosslink store", () => {
         description: "Session A",
         capabilities: ["general"],
         agentProvider: "claude",
-        status: "active"
+        status: "active",
       });
 
       const sessionB = await store.registerSession({
@@ -122,7 +115,7 @@ describe("crosslink store", () => {
         description: "Session B",
         capabilities: ["code_implementation"],
         agentProvider: "codex",
-        status: "active"
+        status: "active",
       });
 
       // A sends to B
@@ -130,7 +123,7 @@ describe("crosslink store", () => {
         fromSessionId: sessionA.sessionId,
         toSessionId: sessionB.sessionId,
         content: "What is the API schema for /users?",
-        type: "question"
+        type: "question",
       });
 
       expect(message.messageId).toMatch(/^msg-/);
@@ -162,14 +155,14 @@ describe("crosslink store", () => {
         description: "Test",
         capabilities: ["general"],
         agentProvider: "claude",
-        status: "active"
+        status: "active",
       });
 
       const message = await store.sendMessage({
         fromSessionId: "other-session",
         toSessionId: session.sessionId,
         content: "Hello",
-        type: "question"
+        type: "question",
       });
 
       await store.updateMessageStatus(session.sessionId, message.messageId, "replied");
@@ -193,12 +186,12 @@ describe("crosslink store", () => {
         description: "Initial",
         capabilities: ["general"],
         agentProvider: "claude",
-        status: "active"
+        status: "active",
       });
 
       const updated = await store.updateSession(session.sessionId, {
         description: "Working on auth feature",
-        capabilities: ["code_implementation", "architecture"]
+        capabilities: ["code_implementation", "architecture"],
       });
 
       expect(updated).not.toBeNull();
@@ -223,14 +216,14 @@ describe("crosslink store", () => {
         description: "Test",
         capabilities: ["general"],
         agentProvider: "claude",
-        status: "active"
+        status: "active",
       });
 
       const message = await store.sendMessage({
         fromSessionId: "other",
         toSessionId: session.sessionId,
         content: "Old message",
-        type: "question"
+        type: "question",
       });
 
       // Manually backdate the message. Same layout rationale as above —
@@ -267,9 +260,7 @@ describe("crosslink store reads legacy canonical-layout fixture", () => {
     // pre-populated data and surface it through the new API without any
     // bootstrap writes.
     workDir = await mkdtemp(join(tmpdir(), "xlink-legacy-"));
-    const src = fileURLToPath(
-      new URL("./fixtures/legacy-crosslink", import.meta.url)
-    );
+    const src = fileURLToPath(new URL("./fixtures/legacy-crosslink", import.meta.url));
     await cp(src, workDir, { recursive: true });
   });
 

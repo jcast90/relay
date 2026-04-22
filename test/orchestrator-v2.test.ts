@@ -22,7 +22,7 @@ function buildOrchestrator(
   const registry = new AgentRegistry();
   const agents = createLiveAgents({
     cwd,
-    invoker: new ScriptedInvoker(cwd)
+    invoker: new ScriptedInvoker(cwd),
   });
 
   for (const agent of agents) {
@@ -33,10 +33,7 @@ function buildOrchestrator(
     artifactsDir,
     new FileHarnessStore(join(artifactsDir, "__hs__"))
   );
-  const verificationRunner = new VerificationRunner(
-    new NodeCommandInvoker(),
-    artifactStore
-  );
+  const verificationRunner = new VerificationRunner(new NodeCommandInvoker(), artifactStore);
 
   return new OrchestratorV2(
     registry,
@@ -135,9 +132,9 @@ describe("OrchestratorV2 integration", () => {
 
     try {
       const artifactStore = new LocalArtifactStore(
-    artifactsDir,
-    new FileHarnessStore(join(artifactsDir, "__hs__"))
-  );
+        artifactsDir,
+        new FileHarnessStore(join(artifactsDir, "__hs__"))
+      );
       const orchestrator = buildOrchestrator(tmpDir, artifactsDir);
       const run = await orchestrator.run("Fix typo in README");
 
@@ -168,7 +165,7 @@ describe("OrchestratorV2 integration", () => {
       const channelStore = new ChannelStore(channelsDir);
       const orchestrator = buildOrchestrator(tmpDir, artifactsDir, {
         channelStore,
-        workspaceId: "ws-test"
+        workspaceId: "ws-test",
       });
       const run = await orchestrator.run(
         "Implement a new authentication system with JWT tokens and session management"
@@ -197,7 +194,7 @@ describe("OrchestratorV2 integration", () => {
       const channelStore = new ChannelStore(channelsDir);
       const orchestrator = buildOrchestrator(tmpDir, artifactsDir, {
         channelStore,
-        workspaceId: "ws-test"
+        workspaceId: "ws-test",
       });
       const run = await orchestrator.run("Fix typo in README");
 
@@ -226,7 +223,7 @@ describe("OrchestratorV2 integration", () => {
 
       const orchestrator = buildOrchestrator(tmpDir, artifactsDir, {
         channelStore,
-        workspaceId: "ws-test"
+        workspaceId: "ws-test",
       });
       const run = await orchestrator.run(
         "Implement a new authentication system with JWT tokens and session management"

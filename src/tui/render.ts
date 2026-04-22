@@ -31,7 +31,7 @@ export function moveTo(row: number, col: number): void {
 export function getTerminalSize(): { rows: number; cols: number } {
   return {
     rows: process.stdout.rows ?? 24,
-    cols: process.stdout.columns ?? 80
+    cols: process.stdout.columns ?? 80,
   };
 }
 

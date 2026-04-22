@@ -13,13 +13,13 @@ import {
   callChannelTool,
   getChannelToolDefinitions,
   isChannelTool,
-  type ChannelToolState
+  type ChannelToolState,
 } from "./channel-tools.js";
 import {
   callCrosslinkTool,
   getCrosslinkToolDefinitions,
   isCrosslinkTool,
-  type CrosslinkToolState
+  type CrosslinkToolState,
 } from "../crosslink/tools.js";
 
 export interface JsonRpcMessage {
@@ -57,24 +57,26 @@ export async function buildMcpMessageHandler(
   const crosslinkStore = new CrosslinkStore(undefined, getHarnessStore());
   const crosslinkState: CrosslinkToolState = {
     sessionId: null,
-    store: crosslinkStore
+    store: crosslinkStore,
   };
   const channelStore = new ChannelStore(undefined, getHarnessStore());
   const channelState: ChannelToolState = {
     sessionId: null,
-    channelStore
+    channelStore,
   };
 
   // Auto-register this session
   const agentProvider = (process.env.AGENT_HARNESS_PROVIDER ?? "unknown") as
-    "claude" | "codex" | "unknown";
+    | "claude"
+    | "codex"
+    | "unknown";
   const session = await crosslinkStore.registerSession({
     pid: process.pid,
     repoPath: workspaceRoot,
     description: `Agent session in ${workspaceRoot}`,
     capabilities: ["general"],
     agentProvider,
-    status: "active"
+    status: "active",
   });
   crosslinkState.sessionId = session.sessionId;
   channelState.sessionId = session.sessionId;
@@ -99,7 +101,7 @@ export async function buildMcpMessageHandler(
 
   return {
     handler,
-    context: { workspaceRoot, artifactStore, crosslinkState, channelState, cleanup }
+    context: { workspaceRoot, artifactStore, crosslinkState, channelState, cleanup },
   };
 }
 
@@ -107,8 +109,14 @@ export async function startMcpServer(workspaceRoot: string): Promise<void> {
   const { handler, context } = await buildMcpMessageHandler(workspaceRoot);
 
   process.on("exit", context.cleanup);
-  process.on("SIGTERM", () => { context.cleanup(); process.exit(0); });
-  process.on("SIGINT", () => { context.cleanup(); process.exit(0); });
+  process.on("SIGTERM", () => {
+    context.cleanup();
+    process.exit(0);
+  });
+  process.on("SIGINT", () => {
+    context.cleanup();
+    process.exit(0);
+  });
 
   const transport = new StdioJsonRpcTransport(handler);
   transport.start();
@@ -133,13 +141,13 @@ async function handleMessage(
         result: {
           protocolVersion: "2024-11-05",
           capabilities: {
-            tools: {}
+            tools: {},
           },
           serverInfo: {
             name: "relay",
-            version: "0.1.0"
-          }
-        }
+            version: "0.1.0",
+          },
+        },
       };
     case "notifications/initialized":
       return null;
@@ -157,8 +165,8 @@ async function handleMessage(
               inputSchema: {
                 type: "object",
                 additionalProperties: false,
-                properties: {}
-              }
+                properties: {},
+              },
             },
             {
               name: "harness_list_runs",
@@ -167,22 +175,23 @@ async function handleMessage(
                 type: "object",
                 additionalProperties: false,
                 properties: {
-                  limit: { type: "integer", minimum: 1, maximum: 50 }
-                }
-              }
+                  limit: { type: "integer", minimum: 1, maximum: 50 },
+                },
+              },
             },
             {
               name: "harness_get_run_detail",
-              description: "Get full run snapshot including classification, tickets, evidence, artifacts, and optionally the event log.",
+              description:
+                "Get full run snapshot including classification, tickets, evidence, artifacts, and optionally the event log.",
               inputSchema: {
                 type: "object",
                 additionalProperties: false,
                 required: ["runId"],
                 properties: {
                   runId: { type: "string" },
-                  includeEvents: { type: "boolean" }
-                }
-              }
+                  includeEvents: { type: "boolean" },
+                },
+              },
             },
             {
               name: "harness_get_artifact",
@@ -192,9 +201,9 @@ async function handleMessage(
                 additionalProperties: false,
                 required: ["path"],
                 properties: {
-                  path: { type: "string" }
-                }
-              }
+                  path: { type: "string" },
+                },
+              },
             },
             {
               name: "harness_approve_plan",
@@ -204,9 +213,9 @@ async function handleMessage(
                 additionalProperties: false,
                 required: ["runId"],
                 properties: {
-                  runId: { type: "string" }
-                }
-              }
+                  runId: { type: "string" },
+                },
+              },
             },
             {
               name: "harness_reject_plan",
@@ -217,9 +226,9 @@ async function handleMessage(
                 required: ["runId"],
                 properties: {
                   runId: { type: "string" },
-                  feedback: { type: "string" }
-                }
-              }
+                  feedback: { type: "string" },
+                },
+              },
             },
             {
               name: "project_create",
@@ -233,14 +242,14 @@ async function handleMessage(
                 properties: {
                   name: {
                     type: "string",
-                    description: "Project name, e.g. 'Auth Refactor' or 'New Dashboard'"
+                    description: "Project name, e.g. 'Auth Refactor' or 'New Dashboard'",
                   },
                   description: {
                     type: "string",
-                    description: "What the project is about"
-                  }
-                }
-              }
+                    description: "What the project is about",
+                  },
+                },
+              },
             },
             {
               name: "harness_dispatch",
@@ -255,17 +264,19 @@ async function handleMessage(
                 properties: {
                   featureRequest: {
                     type: "string",
-                    description: "The feature to build — should be well-defined from your chat discussion"
+                    description:
+                      "The feature to build — should be well-defined from your chat discussion",
                   },
                   channelId: {
                     type: "string",
-                    description: "Channel/project to link this run to. If omitted, a new channel is created."
-                  }
-                }
-              }
-            }
-          ]
-        }
+                    description:
+                      "Channel/project to link this run to. If omitted, a new channel is created.",
+                  },
+                },
+              },
+            },
+          ],
+        },
       };
     case "tools/call":
       try {
@@ -284,11 +295,11 @@ async function handleMessage(
             content: [
               {
                 type: "text",
-                text: JSON.stringify(toolResult, null, 2)
-              }
+                text: JSON.stringify(toolResult, null, 2),
+              },
             ],
-            isError: false
-          }
+            isError: false,
+          },
         };
       } catch (error) {
         return {
@@ -298,11 +309,11 @@ async function handleMessage(
             content: [
               {
                 type: "text",
-                text: error instanceof Error ? error.message : "Unknown MCP tool failure."
-              }
+                text: error instanceof Error ? error.message : "Unknown MCP tool failure.",
+              },
             ],
-            isError: true
-          }
+            isError: true,
+          },
         };
       }
     default:
@@ -311,8 +322,8 @@ async function handleMessage(
         id: message.id ?? null,
         error: {
           code: -32601,
-          message: `Method not found: ${message.method}`
-        }
+          message: `Method not found: ${message.method}`,
+        },
       };
   }
 }
@@ -342,17 +353,13 @@ async function callTool(
         throw new Error(`Run snapshot not found: ${runId}`);
       }
 
-      const events = includeEvents
-        ? await artifactStore.readEventLog(runId)
-        : [];
+      const events = includeEvents ? await artifactStore.readEventLog(runId) : [];
 
       return { ...snapshot, events };
     }
     case "harness_get_artifact": {
       const inputPath = String(args.path ?? "");
-      const path = isAbsolute(inputPath)
-        ? inputPath
-        : resolve(workspacePaths.rootDir, inputPath);
+      const path = isAbsolute(inputPath) ? inputPath : resolve(workspacePaths.rootDir, inputPath);
 
       if (!path.startsWith(workspacePaths.rootDir)) {
         throw new Error("Artifact path must be inside the workspace harness directory.");
@@ -365,7 +372,7 @@ async function callTool(
       const path = await submitApproval({
         runId,
         decision: "approved",
-        artifactStore
+        artifactStore,
       });
       return { runId, decision: "approved", path };
     }
@@ -376,7 +383,7 @@ async function callTool(
         runId,
         decision: "rejected",
         feedback,
-        artifactStore
+        artifactStore,
       });
       return { runId, decision: "rejected", feedback, path };
     }
@@ -388,21 +395,21 @@ async function callTool(
       const channel = await channelStore.createChannel({
         name,
         description,
-        workspaceIds: [workspaceId]
+        workspaceIds: [workspaceId],
       });
       await channelStore.postEntry(channel.channelId, {
         type: "status_update",
         fromAgentId: null,
         fromDisplayName: "Orchestrator",
         content: `Project "${name}" created.`,
-        metadata: { workspaceId }
+        metadata: { workspaceId },
       });
       return {
         projectId: channel.channelId,
         channelId: channel.channelId,
         name: channel.name,
         description: channel.description,
-        workspaceId
+        workspaceId,
       };
     }
     case "harness_dispatch": {
@@ -412,7 +419,7 @@ async function callTool(
       const result = await dispatch({
         featureRequest,
         repoPath: workspaceRoot,
-        channelId
+        channelId,
       });
       return result;
     }

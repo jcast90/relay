@@ -10,7 +10,7 @@ import {
   readRegistry,
   registerWorkspace,
   resolveWorkspaceForRepo,
-  writeRegistry
+  writeRegistry,
 } from "../src/cli/workspace-registry.js";
 
 describe("workspace registry", () => {
@@ -32,10 +32,7 @@ describe("workspace registry", () => {
 
   it("registers and resolves workspaces via file-backed registry", async () => {
     // This test writes to the real global registry, so we use unique paths
-    const fakePath = join(
-      await mkdtemp(join(tmpdir(), "ws-reg-test-")),
-      "fake-repo"
-    );
+    const fakePath = join(await mkdtemp(join(tmpdir(), "ws-reg-test-")), "fake-repo");
 
     try {
       const entry = await registerWorkspace(fakePath);
@@ -58,9 +55,7 @@ describe("workspace registry", () => {
     } finally {
       // Clean up: remove our test entry from the global registry
       const registry = await readRegistry();
-      registry.workspaces = registry.workspaces.filter(
-        (w) => w.repoPath !== fakePath
-      );
+      registry.workspaces = registry.workspaces.filter((w) => w.repoPath !== fakePath);
       await writeRegistry(registry);
       await rm(fakePath, { recursive: true, force: true }).catch(() => {});
     }

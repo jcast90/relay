@@ -25,23 +25,11 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 import type { ChannelStore } from "../channels/channel-store.js";
-import {
-  createScm,
-  wrapScm,
-  type HarnessProject,
-  type HarnessScm
-} from "../integrations/scm.js";
-import {
-  PrPoller,
-  type TrackedPr,
-  type TrackedPrSnapshot
-} from "../integrations/pr-poller.js";
+import { createScm, wrapScm, type HarnessProject, type HarnessScm } from "../integrations/scm.js";
+import { PrPoller, type TrackedPr, type TrackedPrSnapshot } from "../integrations/pr-poller.js";
 import type { TrackedPrRow } from "../domain/pr-row.js";
 import { SchedulerFollowUpDispatcher } from "../integrations/scheduler-follow-up-dispatcher.js";
-import type {
-  PollerFactory,
-  PollerHandle
-} from "../orchestrator/orchestrator-v2.js";
+import type { PollerFactory, PollerHandle } from "../orchestrator/orchestrator-v2.js";
 
 // execFile (argv-based) is used deliberately instead of exec (shell string)
 // so repo paths can never be shell-interpreted.
@@ -130,8 +118,7 @@ export function __resetActiveWatcherForTests(): void {
  * Default git runner: `git -C <repoRoot> <...args>`. Kept outside the factory
  * so tests can substitute a mock via `opts.execGit`.
  */
-const defaultExecGit: ExecGit = (repoRoot, args) =>
-  execFileAsync("git", ["-C", repoRoot, ...args]);
+const defaultExecGit: ExecGit = (repoRoot, args) => execFileAsync("git", ["-C", repoRoot, ...args]);
 
 /**
  * Parse both HTTPS and SSH GitHub remotes:
@@ -183,10 +170,7 @@ async function detectRepo(
  * and then at the run-level classification's suggestedBranch. Returns null
  * when nothing plausible is found — we'd rather skip a ticket than guess.
  */
-function branchHintFor(
-  ticketId: string,
-  run: Parameters<PollerFactory>[0]["run"]
-): string | null {
+function branchHintFor(ticketId: string, run: Parameters<PollerFactory>[0]["run"]): string | null {
   // TicketDefinition doesn't carry branchName today, but the classifier does
   // populate `suggestedBranch` on the run-level ClassificationResult when the
   // request came from an issue URL. That branch applies to the whole run, so
@@ -241,8 +225,8 @@ export function createPrWatcherFactory(opts: CreateFactoryOpts): PollerFactory {
               runId: run.id,
               channelId,
               warning: "missing_github_token",
-              component: "pr-watcher"
-            }
+              component: "pr-watcher",
+            },
           })
           .catch((err: unknown) => {
             const message = err instanceof Error ? err.message : String(err);
@@ -256,12 +240,13 @@ export function createPrWatcherFactory(opts: CreateFactoryOpts): PollerFactory {
 
     // Lazy repo detection with memoized result. `undefined` means "not tried",
     // `null` means "tried and failed".
-    const repoPromise = cachedRepo === undefined
-      ? detectRepo(opts.repoRoot, execGit).then((r) => {
-          cachedRepo = r;
-          return r;
-        })
-      : Promise.resolve(cachedRepo);
+    const repoPromise =
+      cachedRepo === undefined
+        ? detectRepo(opts.repoRoot, execGit).then((r) => {
+            cachedRepo = r;
+            return r;
+          })
+        : Promise.resolve(cachedRepo);
 
     // Build the SCM + poller eagerly with a placeholder project; we'll
     // short-circuit `start()` if repo detection failed. This keeps the handle
@@ -287,7 +272,7 @@ export function createPrWatcherFactory(opts: CreateFactoryOpts): PollerFactory {
           const project: HarnessProject = {
             owner: repo.owner,
             name: repo.name,
-            path: opts.repoRoot
+            path: opts.repoRoot,
           };
 
           // The no-token overload of createScm is synchronous; the plugin
@@ -306,7 +291,7 @@ export function createPrWatcherFactory(opts: CreateFactoryOpts): PollerFactory {
               // doesn't back up the poller. The channel dir is created on
               // demand by ChannelStore.writeTrackedPrs.
               void persistSnapshot(opts.channelStore, rows);
-            }
+            },
           });
           poller.start();
 
@@ -319,7 +304,7 @@ export function createPrWatcherFactory(opts: CreateFactoryOpts): PollerFactory {
             },
             listTracked() {
               return poller?.listTracked() ?? [];
-            }
+            },
           };
           if (activeWatcher && activeWatcher.handle !== handle) {
             console.warn(
@@ -341,7 +326,7 @@ export function createPrWatcherFactory(opts: CreateFactoryOpts): PollerFactory {
               scm,
               poller: poller!,
               defaultChannelId: opts.defaultChannelId,
-              autoTracked
+              autoTracked,
             }).catch(() => {
               /* detection must never crash the run */
             });
@@ -353,7 +338,7 @@ export function createPrWatcherFactory(opts: CreateFactoryOpts): PollerFactory {
             scm,
             poller: poller!,
             defaultChannelId: opts.defaultChannelId,
-            autoTracked
+            autoTracked,
           }).catch(() => {});
         });
       },
@@ -367,7 +352,7 @@ export function createPrWatcherFactory(opts: CreateFactoryOpts): PollerFactory {
         if (activeWatcher?.handle === handle) {
           activeWatcher = null;
         }
-      }
+      },
     };
 
     return handle;
@@ -381,7 +366,7 @@ function noopHandle(): PollerHandle {
     },
     stop(): void {
       /* intentional no-op */
-    }
+    },
   };
 }
 
@@ -426,7 +411,7 @@ async function scanCompletedTickets(input: {
         ticketId: entry.ticketId,
         channelId,
         pr,
-        repo: input.repo
+        repo: input.repo,
       });
       input.autoTracked.add(entry.ticketId);
     } catch {
@@ -466,7 +451,7 @@ async function persistSnapshot(
       ci: row.last?.ci ?? null,
       review: row.last?.review ?? null,
       prState: row.last?.prState ?? null,
-      updatedAt: now
+      updatedAt: now,
     });
     grouped.set(row.channelId, list);
   }
@@ -475,10 +460,7 @@ async function persistSnapshot(
       try {
         await channelStore.writeTrackedPrs(channelId, list);
       } catch (err) {
-        console.warn(
-          `[pr-watcher] failed to persist tracked-prs for ${channelId}:`,
-          err
-        );
+        console.warn(`[pr-watcher] failed to persist tracked-prs for ${channelId}:`, err);
       }
     })
   );

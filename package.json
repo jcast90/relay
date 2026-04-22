@@ -37,7 +37,9 @@
     "gui:build": "cd gui && pnpm tauri build",
     "prepare": "pnpm build",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "format": "prettier --write \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx}\" \"gui/src/**/*.{ts,tsx}\" \"scripts/**/*.{ts,mts}\" \"*.md\" \"docs/**/*.md\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx}\" \"gui/src/**/*.{ts,tsx}\" \"scripts/**/*.{ts,mts}\" \"*.md\" \"docs/**/*.md\""
   },
   "devDependencies": {
     "@types/node": "^22.15.30",

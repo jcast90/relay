@@ -19,32 +19,32 @@ const AGENT_SPECS: AgentSpec[] = [
     id: "atlas",
     displayName: "Atlas (Planner)",
     role: "planner",
-    specialties: ["general"]
+    specialties: ["general"],
   },
   {
     id: "pixel",
     displayName: "Pixel (UI Engineer)",
     role: "implementer",
-    specialties: ["ui", "general"]
+    specialties: ["ui", "general"],
   },
   {
     id: "forge",
     displayName: "Forge (Backend Engineer)",
     role: "implementer",
-    specialties: ["api_crud", "business_logic", "general"]
+    specialties: ["api_crud", "business_logic", "general"],
   },
   {
     id: "lens",
     displayName: "Lens (Code Reviewer)",
     role: "reviewer",
-    specialties: ["general", "ui", "business_logic", "api_crud"]
+    specialties: ["general", "ui", "business_logic", "api_crud"],
   },
   {
     id: "probe",
     displayName: "Probe (Test Engineer)",
     role: "tester",
-    specialties: ["general", "ui", "business_logic", "api_crud"]
-  }
+    specialties: ["general", "ui", "business_logic", "api_crud"],
+  },
 ];
 
 interface AgentFactoryOptions {
@@ -73,8 +73,7 @@ export function createLiveAgents(options: AgentFactoryOptions): Agent[] {
     const AgentClass = provider === "codex" ? CodexCliAgent : ClaudeCliAgent;
     // Only Claude supports tool_use stream-json today — passing this to
     // CodexCliAgent is harmless but ignored there.
-    const onStreamLine =
-      provider === "claude" ? options.onStreamLineFor?.(spec) : undefined;
+    const onStreamLine = provider === "claude" ? options.onStreamLineFor?.(spec) : undefined;
 
     return new AgentClass({
       id: spec.id,
@@ -82,12 +81,12 @@ export function createLiveAgents(options: AgentFactoryOptions): Agent[] {
       provider,
       capability: {
         role: spec.role,
-        specialties: spec.specialties
+        specialties: spec.specialties,
       },
       cwd: options.cwd,
       model,
       invoker,
-      onStreamLine
+      onStreamLine,
     });
   });
 }

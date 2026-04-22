@@ -72,7 +72,6 @@ jobs:
   format-check:
     name: format-check
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -88,4 +87,4 @@ jobs:
           node-version: 22
 
       - name: Prettier check
-        run: pnpm dlx prettier --check 'src/**/*.{ts,tsx}' 'gui/src/**/*.{ts,tsx}' '*.md'
+        run: pnpm dlx prettier --check 'src/**/*.{ts,tsx}' 'test/**/*.{ts,tsx}' 'gui/src/**/*.{ts,tsx}' 'scripts/**/*.{ts,mts}' '*.md' 'docs/**/*.md'

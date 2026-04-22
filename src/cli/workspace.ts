@@ -3,11 +3,7 @@ import { join } from "node:path";
 
 import type { RunIndexEntry } from "../domain/run.js";
 import type { LocalArtifactStore } from "../execution/artifact-store.js";
-import {
-  buildWorkspaceId,
-  getWorkspaceDir,
-  registerWorkspace
-} from "./workspace-registry.js";
+import { buildWorkspaceId, getWorkspaceDir, registerWorkspace } from "./workspace-registry.js";
 
 export interface HarnessWorkspacePaths {
   rootDir: string;
@@ -37,7 +33,7 @@ export async function ensureHarnessWorkspace(
   const paths = getHarnessWorkspacePaths(cwd);
 
   await mkdir(paths.artifactsDir, {
-    recursive: true
+    recursive: true,
   });
 
   const existing = await readHarnessServiceStatus(paths.serviceStatusPath);
@@ -49,17 +45,14 @@ export async function ensureHarnessWorkspace(
     artifactsDir: paths.artifactsDir,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
-    version
+    version,
   };
 
-  await writeFile(
-    paths.serviceStatusPath,
-    JSON.stringify(status, null, 2)
-  );
+  await writeFile(paths.serviceStatusPath, JSON.stringify(status, null, 2));
 
   return {
     paths,
-    status
+    status,
   };
 }
 
@@ -71,13 +64,11 @@ export function getHarnessWorkspacePaths(cwd: string): HarnessWorkspacePaths {
     rootDir,
     artifactsDir: join(rootDir, "artifacts"),
     serviceStatusPath: join(rootDir, "service-status.json"),
-    runsIndexPath: join(rootDir, "artifacts", "runs-index.json")
+    runsIndexPath: join(rootDir, "artifacts", "runs-index.json"),
   };
 }
 
-export async function readHarnessServiceStatus(
-  path: string
-): Promise<HarnessServiceStatus | null> {
+export async function readHarnessServiceStatus(path: string): Promise<HarnessServiceStatus | null> {
   try {
     return JSON.parse(await readFile(path, "utf8")) as HarnessServiceStatus;
   } catch {
@@ -96,12 +87,12 @@ export async function readWorkspaceSummary(
   const paths = getHarnessWorkspacePaths(cwd);
   const [status, recentRuns] = await Promise.all([
     readHarnessServiceStatus(paths.serviceStatusPath),
-    artifactStore.readRunsIndex()
+    artifactStore.readRunsIndex(),
   ]);
 
   return {
     paths,
     status,
-    recentRuns
+    recentRuns,
   };
 }

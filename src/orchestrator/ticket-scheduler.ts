@@ -3,14 +3,8 @@ import { getAgentName } from "../domain/agent-names.js";
 import { roleForWork } from "../domain/agent.js";
 import type { AgentRegistry } from "../agents/registry.js";
 import type { HarnessRun, RunEventType } from "../domain/run.js";
-import type {
-  TicketDefinition,
-  TicketLedgerEntry
-} from "../domain/ticket.js";
-import {
-  getReadyTickets,
-  initializeTicketLedger
-} from "../domain/ticket.js";
+import type { TicketDefinition, TicketLedgerEntry } from "../domain/ticket.js";
+import { getReadyTickets, initializeTicketLedger } from "../domain/ticket.js";
 import type { ArtifactStore } from "../execution/artifact-store.js";
 import type { ChannelStore } from "../channels/channel-store.js";
 import type { AgentExecutor } from "../execution/executor.js";
@@ -20,7 +14,7 @@ import {
   buildRetryContext,
   buildRetryObjective,
   fallbackFailureClassification,
-  isVerificationPlanIssue
+  isVerificationPlanIssue,
 } from "./failure-routing.js";
 
 export type SchedulerDispatch = (
@@ -52,7 +46,7 @@ export interface TicketSchedulerOptions {
 }
 
 const DEFAULT_OPTIONS: Required<Pick<TicketSchedulerOptions, "maxConcurrency">> = {
-  maxConcurrency: 3
+  maxConcurrency: 3,
 };
 
 // Sentinel marker returned by the wake-up channel — distinct from any real
@@ -125,9 +119,7 @@ export class TicketScheduler {
       );
     }
     if (!dispatch && !executor) {
-      throw new Error(
-        "TicketScheduler requires either a dispatch callback or options.executor."
-      );
+      throw new Error("TicketScheduler requires either a dispatch callback or options.executor.");
     }
 
     this.dispatch = dispatch ?? this.buildExecutorDispatch(executor!);
@@ -173,7 +165,7 @@ export class TicketScheduler {
       try {
         handle = await executor.start(ticket, {
           runId: run.id,
-          repoRoot: this.repoRoot
+          repoRoot: this.repoRoot,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -185,7 +177,7 @@ export class TicketScheduler {
           this.recordEvent(run, "TicketFailed", "__executor_start__", {
             runId: run.id,
             ticketId: ticket.id,
-            error: message
+            error: message,
           });
         } catch {
           // recordEvent itself must never break the scheduler loop.
@@ -194,7 +186,7 @@ export class TicketScheduler {
           summary: `executor.start failed: ${message}`,
           evidence: [`executor.start threw: ${message}`],
           proposedCommands: [],
-          blockers: [message]
+          blockers: [message],
         };
       }
 
@@ -211,7 +203,7 @@ export class TicketScheduler {
           this.recordEvent(run, "TicketFailed", "__executor_wait__", {
             runId: run.id,
             ticketId: ticket.id,
-            error: message
+            error: message,
           });
         } catch {
           /* recordEvent itself must never break the loop */
@@ -220,7 +212,7 @@ export class TicketScheduler {
           summary: `executor.wait failed: ${message}`,
           evidence: [`executor.wait threw: ${message}`],
           proposedCommands: [],
-          blockers: [message]
+          blockers: [message],
         };
       }
 
@@ -228,23 +220,20 @@ export class TicketScheduler {
       if (result.stdout) evidence.push(`stdout: ${result.stdout.slice(0, 2000)}`);
       if (result.stderr) evidence.push(`stderr: ${result.stderr.slice(0, 2000)}`);
 
-      const blockers = result.exitCode === 0
-        ? []
-        : [`Executor exited with code ${result.exitCode}`];
+      const blockers =
+        result.exitCode === 0 ? [] : [`Executor exited with code ${result.exitCode}`];
 
       // Prefer the ticket's verificationCommands as the tester proposal —
       // same default used when a tester agent echoes its allowlist. For
       // non-tester work kinds this just gets ignored by verification.
       const proposedCommands =
-        request.kind === "run_checks"
-          ? [...request.verificationCommands]
-          : [];
+        request.kind === "run_checks" ? [...request.verificationCommands] : [];
 
       return {
         summary: result.summary ?? `exit ${result.exitCode}`,
         evidence,
         proposedCommands,
-        blockers
+        blockers,
       };
     };
   }
@@ -315,7 +304,7 @@ export class TicketScheduler {
       console.warn(`[scheduler] tail drain failed: ${message}`);
       try {
         this.recordEvent(run, "TicketFailed", "__scheduler_tail__", {
-          error: message
+          error: message,
         });
       } catch {
         /* recordEvent itself must never break the chain */
@@ -357,9 +346,7 @@ export class TicketScheduler {
 
       this.updateBlockedTickets(run);
 
-      const ready = getReadyTickets(run.ticketLedger).filter(
-        (t) => !executing.has(t.ticketId)
-      );
+      const ready = getReadyTickets(run.ticketLedger).filter((t) => !executing.has(t.ticketId));
       const slotsAvailable = this.options.maxConcurrency - executing.size;
 
       for (const ticket of ready.slice(0, slotsAvailable)) {
@@ -377,14 +364,14 @@ export class TicketScheduler {
           status: "executing",
           assignedAgentId: agentId,
           assignedAgentName: agentDisplayName,
-          startedAt: new Date().toISOString()
+          startedAt: new Date().toISOString(),
         });
 
         this.recordEvent(run, "TicketStarted", ticket.ticketId, {
           ticketId: ticket.ticketId,
           title: ticket.title,
           assignedAgent: agentDisplayName,
-          agentId
+          agentId,
         });
 
         const promise = this.executeTicket(run, ticketDef).then(
@@ -404,10 +391,7 @@ export class TicketScheduler {
       }
 
       const wakePromise = this.makeWakePromise();
-      const completed = await Promise.race<RaceResult>([
-        ...executing.values(),
-        wakePromise
-      ]);
+      const completed = await Promise.race<RaceResult>([...executing.values(), wakePromise]);
 
       if ("wake" in completed && completed.wake) {
         // Wake signal fired — re-scan the ledger for newly appended work.
@@ -420,19 +404,19 @@ export class TicketScheduler {
         this.updateTicketStatus(run, completed.ticketId, {
           status: "completed",
           verification: "passed",
-          completedAt: new Date().toISOString()
+          completedAt: new Date().toISOString(),
         });
         this.recordEvent(run, "TicketCompleted", completed.ticketId, {
-          ticketId: completed.ticketId
+          ticketId: completed.ticketId,
         });
       } else {
         this.updateTicketStatus(run, completed.ticketId, {
           status: "failed",
           verification: "failed_terminal",
-          completedAt: new Date().toISOString()
+          completedAt: new Date().toISOString(),
         });
         this.recordEvent(run, "TicketFailed", completed.ticketId, {
-          ticketId: completed.ticketId
+          ticketId: completed.ticketId,
         });
       }
 
@@ -475,10 +459,7 @@ export class TicketScheduler {
     }
   }
 
-  private async executeTicket(
-    run: HarnessRun,
-    ticket: TicketDefinition
-  ): Promise<boolean> {
+  private async executeTicket(run: HarnessRun, ticket: TicketDefinition): Promise<boolean> {
     let classification: FailureClassification | null = null;
 
     for (let loop = 1; loop <= ticket.retryPolicy.maxTestFixLoops; loop += 1) {
@@ -496,17 +477,17 @@ export class TicketScheduler {
           `Feature request: ${run.featureRequest}`,
           `Ticket: ${ticket.id} - ${ticket.title}`,
           `Verification loop: ${loop} of ${ticket.retryPolicy.maxTestFixLoops}`,
-          ...buildRetryContext(classification)
+          ...buildRetryContext(classification),
         ],
         artifactContext: [],
         attempt: 1,
         maxAttempts: ticket.retryPolicy.maxAgentAttempts,
-        priorEvidence: []
+        priorEvidence: [],
       });
 
       this.updateTicketStatus(run, ticket.id, {
         status: "verifying",
-        verification: "running"
+        verification: "running",
       });
 
       const testerResult = await this.dispatch(run, {
@@ -525,7 +506,7 @@ export class TicketScheduler {
         artifactContext: [],
         attempt: 1,
         maxAttempts: ticket.retryPolicy.maxAgentAttempts,
-        priorEvidence: []
+        priorEvidence: [],
       });
 
       const verificationResult = await this.executeVerificationCommands(
@@ -548,14 +529,14 @@ export class TicketScheduler {
           lastClassification: {
             category: classification.category,
             rationale: classification.rationale,
-            nextAction: classification.nextAction
+            nextAction: classification.nextAction,
           },
-          attempt: loop + 1
+          attempt: loop + 1,
         });
         this.recordEvent(run, "TicketRetried", ticket.id, {
           ticketId: ticket.id,
           loop: String(loop),
-          category: classification.category
+          category: classification.category,
         });
         continue;
       }
@@ -574,29 +555,27 @@ export class TicketScheduler {
       kind: "classify_failure",
       specialty: ticket.specialty,
       title: `${ticket.title} failure classification`,
-      objective:
-        "Classify the failing artifacts. Choose: fix_code, fix_test, or bad_command_plan.",
+      objective: "Classify the failing artifacts. Choose: fix_code, fix_test, or bad_command_plan.",
       acceptanceCriteria: [
         "Use artifact contents to choose the most likely failure category.",
-        "Explain the rationale and the next best retry action."
+        "Explain the rationale and the next best retry action.",
       ],
       allowedCommands: ticket.allowedCommands,
       verificationCommands: ticket.verificationCommands,
       docsToUpdate: [],
-      context: rejectedCommands.length > 0
-        ? [`Rejected commands: ${rejectedCommands.join(", ")}`]
-        : [],
+      context:
+        rejectedCommands.length > 0 ? [`Rejected commands: ${rejectedCommands.join(", ")}`] : [],
       artifactContext: [],
       attempt: 1,
       maxAttempts: ticket.retryPolicy.maxAgentAttempts,
-      priorEvidence: []
+      priorEvidence: [],
     });
 
     return (
       result.failureClassification ??
       fallbackFailureClassification({
         artifactContext: [],
-        rejectedCommands
+        rejectedCommands,
       })
     );
   }
@@ -612,10 +591,7 @@ export class TicketScheduler {
     overridden: boolean;
     substitutedCommands: string[];
   }> {
-    const selection = selectVerificationCommands(
-      proposedCommands,
-      allowlistedCommands
-    );
+    const selection = selectVerificationCommands(proposedCommands, allowlistedCommands);
 
     let success = true;
 
@@ -624,7 +600,7 @@ export class TicketScheduler {
         runId: run.id,
         phaseId: ticketId,
         repoRoot: this.repoRoot,
-        command
+        command,
       });
 
       success = success && entry.result.exitCode === 0;
@@ -650,8 +626,8 @@ export class TicketScheduler {
             ticketId,
             verification: success ? "passed-with-override" : "failed-with-override",
             rejectedCommands: selection.rejected,
-            substitutedCommands
-          }
+            substitutedCommands,
+          },
         })
         .catch((err: unknown) => {
           const message = err instanceof Error ? err.message : String(err);
@@ -665,15 +641,13 @@ export class TicketScheduler {
       success,
       rejected: selection.rejected,
       overridden: selection.overridden,
-      substitutedCommands
+      substitutedCommands,
     };
   }
 
   private updateBlockedTickets(run: HarnessRun): void {
     const completedIds = new Set(
-      run.ticketLedger
-        .filter((t) => t.status === "completed")
-        .map((t) => t.ticketId)
+      run.ticketLedger.filter((t) => t.status === "completed").map((t) => t.ticketId)
     );
 
     for (const entry of run.ticketLedger) {
@@ -721,7 +695,7 @@ export class TicketScheduler {
         artifactContext: [],
         attempt: 1,
         maxAttempts: 1,
-        priorEvidence: []
+        priorEvidence: [],
       });
       return agent.id;
     } catch {
@@ -729,17 +703,14 @@ export class TicketScheduler {
     }
   }
 
-  private findTicketDefinition(
-    run: HarnessRun,
-    ticketId: string
-  ): TicketDefinition | null {
+  private findTicketDefinition(run: HarnessRun, ticketId: string): TicketDefinition | null {
     return run.ticketPlan?.tickets.find((t) => t.id === ticketId) ?? null;
   }
 
   private async persistTicketLedger(run: HarnessRun): Promise<void> {
     run.ticketLedgerPath = await this.artifactStore.saveTicketLedger({
       runId: run.id,
-      ticketLedger: run.ticketLedger
+      ticketLedger: run.ticketLedger,
     });
 
     // Mirror status changes onto the channel's unified ticket board so chat
@@ -762,7 +733,7 @@ export class TicketScheduler {
           this.recordEvent(run, "TicketFailed", "__channel_mirror__", {
             runId: run.id,
             channelId: run.channelId,
-            error: message
+            error: message,
           });
         } catch {
           // recordEvent itself must never break the scheduler loop.

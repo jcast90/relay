@@ -44,9 +44,7 @@ export function CenterPane({
   const [feed, setFeed] = useState<ChannelEntry[]>([]);
   const [tickets, setTickets] = useState<TicketLedgerEntry[]>([]);
   const [decisions, setDecisions] = useState<Decision[]>([]);
-  const [sessionMessages, setSessionMessages] = useState<PersistedChatMessage[]>(
-    [],
-  );
+  const [sessionMessages, setSessionMessages] = useState<PersistedChatMessage[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [stream, setStream] = useState<ActiveStream | null>(null);
 
@@ -89,9 +87,7 @@ export function CenterPane({
       if (event.kind === "done" || event.kind === "error") {
         // Refresh persisted messages so the stored assistant text shows up.
         onRefresh();
-        setStream((current) =>
-          current && current.streamId === event.streamId ? null : current,
-        );
+        setStream((current) => (current && current.streamId === event.streamId ? null : current));
       }
     }).then((u) => (unlisten = u));
     return () => {
@@ -111,22 +107,12 @@ export function CenterPane({
 
   return (
     <div className="panel">
-      <PendingPlanCta
-        channel={channel}
-        refreshTick={refreshTick}
-        onChanged={onRefresh}
-      />
+      <PendingPlanCta channel={channel} refreshTick={refreshTick} onChanged={onRefresh} />
       <div className="tabs">
-        <div
-          className={`tab ${tab === "chat" ? "active" : ""}`}
-          onClick={() => setTab("chat")}
-        >
+        <div className={`tab ${tab === "chat" ? "active" : ""}`} onClick={() => setTab("chat")}>
           Chat
         </div>
-        <div
-          className={`tab ${tab === "board" ? "active" : ""}`}
-          onClick={() => setTab("board")}
-        >
+        <div className={`tab ${tab === "board" ? "active" : ""}`} onClick={() => setTab("board")}>
           Board ({tickets.length})
         </div>
         <div
@@ -230,9 +216,7 @@ function ChatView({
         {stream && (
           <ActivityStreamCard
             stream={stream}
-            onToggleExpanded={() =>
-              onStartStream({ ...stream, expanded: !stream.expanded })
-            }
+            onToggleExpanded={() => onStartStream({ ...stream, expanded: !stream.expanded })}
           />
         )}
       </div>
@@ -265,9 +249,7 @@ function ActivityStreamCard({
   return (
     <div className="feed-entry role-assistant streaming">
       <div className="feed-header">
-        <span className="feed-author">
-          {stream.alias ? `@${stream.alias}` : "assistant"}
-        </span>
+        <span className="feed-author">{stream.alias ? `@${stream.alias}` : "assistant"}</span>
         <span className="stream-status">
           <span className="stream-dot" />
           {stream.accum ? "writing response" : "thinking"}
@@ -293,29 +275,19 @@ function ActivityStreamCard({
                   className={`stream-activity-line ${isNewest ? "newest" : ""}`}
                   title={new Date(entry.ts).toLocaleTimeString()}
                 >
-                  {isNewest && (
-                    <span className="activity-badge">{agentBadge}</span>
-                  )}
+                  {isNewest && <span className="activity-badge">{agentBadge}</span>}
                   <span className="activity-icon">⚙</span>
                   <span className="activity-text">{entry.text}</span>
                 </div>
               );
             })}
             {hiddenCount > 0 && (
-              <button
-                type="button"
-                className="stream-activity-more"
-                onClick={onToggleExpanded}
-              >
+              <button type="button" className="stream-activity-more" onClick={onToggleExpanded}>
                 +{hiddenCount} more
               </button>
             )}
             {stream.expanded && total > ACTIVITY_TOP_N && (
-              <button
-                type="button"
-                className="stream-activity-more"
-                onClick={onToggleExpanded}
-              >
+              <button type="button" className="stream-activity-more" onClick={onToggleExpanded}>
                 collapse
               </button>
             )}
@@ -347,25 +319,18 @@ function SessionMessages({
   streamId: number | null;
   onRewound: () => void;
 }) {
-  const [rewindTarget, setRewindTarget] = useState<PersistedChatMessage | null>(
-    null,
-  );
+  const [rewindTarget, setRewindTarget] = useState<PersistedChatMessage | null>(null);
 
-
-  if (messages.length === 0)
-    return <div className="empty">No messages in this session yet</div>;
+  if (messages.length === 0) return <div className="empty">No messages in this session yet</div>;
   return (
     <>
       {messages.map((m, i) => {
         const rewindKey = m.metadata?.rewindKey;
-        const canRewind =
-          m.role === "user" && !!rewindKey && !streaming;
+        const canRewind = m.role === "user" && !!rewindKey && !streaming;
         return (
           <div key={i} className={`feed-entry role-${m.role}`}>
             <div className="feed-header">
-              <span className="feed-author">
-                {m.agentAlias ? `@${m.agentAlias}` : m.role}
-              </span>
+              <span className="feed-author">{m.agentAlias ? `@${m.agentAlias}` : m.role}</span>
               <span className="feed-header-right">
                 {formatTime(m.timestamp)}
                 {m.role === "user" && rewindKey && (
@@ -443,12 +408,7 @@ function RewindConfirmModal({
           console.warn("[rewind] cancelChatStream failed:", e);
         }
       }
-      await api.rewindApply(
-        channel.channelId,
-        sessionId,
-        rewindKey,
-        target.timestamp,
-      );
+      await api.rewindApply(channel.channelId, sessionId, rewindKey, target.timestamp);
       onDone();
     } catch (e) {
       setError(String(e));
@@ -463,10 +423,9 @@ function RewindConfirmModal({
         <div className="modal-header">Rewind to this turn?</div>
         <div className="modal-body">
           <p>
-            Each repo in this channel will be reset to the commit captured
-            before this message. All messages at or after this turn will be
-            removed from the session, and Claude session IDs will be cleared
-            so the next message starts a fresh conversation.
+            Each repo in this channel will be reset to the commit captured before this message. All
+            messages at or after this turn will be removed from the session, and Claude session IDs
+            will be cleared so the next message starts a fresh conversation.
           </p>
           <div className="rewind-repo-list">
             {channel.repoAssignments.map((r) => (
@@ -477,10 +436,9 @@ function RewindConfirmModal({
             ))}
           </div>
           <p className="rewind-warning">
-            <strong>Warning:</strong> this runs <code>git reset --hard</code>.
-            Any uncommitted changes in these repos will be lost. Shell side
-            effects (API calls, spawned processes, database writes) are{" "}
-            <strong>not</strong> undone.
+            <strong>Warning:</strong> this runs <code>git reset --hard</code>. Any uncommitted
+            changes in these repos will be lost. Shell side effects (API calls, spawned processes,
+            database writes) are <strong>not</strong> undone.
           </p>
           {error && <div className="composer-error">{error}</div>}
         </div>
@@ -488,12 +446,7 @@ function RewindConfirmModal({
           <button type="button" onClick={onClose} disabled={busy}>
             Cancel
           </button>
-          <button
-            type="button"
-            className="primary"
-            onClick={apply}
-            disabled={busy || !rewindKey}
-          >
+          <button type="button" className="primary" onClick={apply} disabled={busy || !rewindKey}>
             {busy ? "Rewinding…" : "Rewind"}
           </button>
         </div>
@@ -548,13 +501,10 @@ function Composer({
       // Parse @alias prefix to route to a repo.
       const aliases = channel.repoAssignments.map((r) => r.alias);
       const { alias, body } = parseAliasPrefix(raw, aliases);
-      const repo = alias
-        ? channel.repoAssignments.find((r) => r.alias === alias)
-        : null;
+      const repo = alias ? channel.repoAssignments.find((r) => r.alias === alias) : null;
       const cwd = repo?.repoPath;
       const aliasKey = alias ?? "general";
-      const claudeSessionId =
-        activeSession?.claudeSessionIds?.[aliasKey] ?? undefined;
+      const claudeSessionId = activeSession?.claudeSessionIds?.[aliasKey] ?? undefined;
 
       let activeId = sessionId;
       if (!activeId) {
@@ -636,11 +586,7 @@ function Composer({
           />
           auto-approve
         </label>
-        <button
-          className="primary"
-          onClick={send}
-          disabled={disabled || !text.trim()}
-        >
+        <button className="primary" onClick={send} disabled={disabled || !text.trim()}>
           {streaming ? "…" : "Send"}
         </button>
       </div>
@@ -650,7 +596,7 @@ function Composer({
 
 function parseAliasPrefix(
   message: string,
-  aliases: string[],
+  aliases: string[]
 ): { alias: string | null; body: string } {
   const match = message.match(/^@([a-zA-Z0-9_-]+)\s+([\s\S]*)$/);
   if (!match) return { alias: null, body: message };
@@ -675,19 +621,14 @@ const BOARD_COLUMNS: Array<{ status: string; label: string }> = [
 function BoardView({ tickets }: { tickets: TicketLedgerEntry[] }) {
   const [selected, setSelected] = useState<TicketLedgerEntry | null>(null);
 
-  if (tickets.length === 0)
-    return <div className="empty">No tickets in this channel</div>;
+  if (tickets.length === 0) return <div className="empty">No tickets in this channel</div>;
 
   const grouped: Record<string, TicketLedgerEntry[]> = {};
   for (const t of tickets) {
-    const key = BOARD_COLUMNS.some((c) => c.status === t.status)
-      ? t.status
-      : "pending";
+    const key = BOARD_COLUMNS.some((c) => c.status === t.status) ? t.status : "pending";
     (grouped[key] ||= []).push(t);
   }
-  const visible = BOARD_COLUMNS.filter(
-    (c) => (grouped[c.status]?.length ?? 0) > 0,
-  );
+  const visible = BOARD_COLUMNS.filter((c) => (grouped[c.status]?.length ?? 0) > 0);
 
   return (
     <>
@@ -713,9 +654,7 @@ function BoardView({ tickets }: { tickets: TicketLedgerEntry[] }) {
                   }}
                 >
                   <div>{t.title}</div>
-                  {t.assignedAlias && (
-                    <div className="ticket-alias-chip">@{t.assignedAlias}</div>
-                  )}
+                  {t.assignedAlias && <div className="ticket-alias-chip">@{t.assignedAlias}</div>}
                   <div className="ticket-meta">
                     {t.specialty} · attempt {t.attempt}
                     {t.assignedAgentName ? ` · ${t.assignedAgentName}` : ""}
@@ -727,11 +666,7 @@ function BoardView({ tickets }: { tickets: TicketLedgerEntry[] }) {
         ))}
       </div>
       {selected && (
-        <TicketDetailModal
-          ticket={selected}
-          tickets={tickets}
-          onClose={() => setSelected(null)}
-        />
+        <TicketDetailModal ticket={selected} tickets={tickets} onClose={() => setSelected(null)} />
       )}
     </>
   );
@@ -756,10 +691,7 @@ function TicketDetailModal({
   });
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div
-        className="modal ticket-modal"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="modal ticket-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">{ticket.title}</div>
         <div className="modal-body">
           <div className="detail-row">
@@ -796,14 +728,11 @@ function TicketDetailModal({
           )}
           {deps.length > 0 && (
             <div className="detail-row detail-row-block">
-              <span className="detail-label">
-                Depends on ({deps.length})
-              </span>
+              <span className="detail-label">Depends on ({deps.length})</span>
               <ul className="dep-list">
                 {deps.map((d) => (
                   <li key={d.id}>
-                    <code>{d.id}</code>{" "}
-                    <span className="dep-status">{d.status}</span>
+                    <code>{d.id}</code> <span className="dep-status">{d.status}</span>
                     <div className="dep-title">{d.title}</div>
                   </li>
                 ))}
@@ -822,8 +751,7 @@ function TicketDetailModal({
 }
 
 function DecisionsView({ decisions }: { decisions: Decision[] }) {
-  if (decisions.length === 0)
-    return <div className="empty">No decisions recorded</div>;
+  if (decisions.length === 0) return <div className="empty">No decisions recorded</div>;
   return (
     <>
       {decisions.map((d) => (
@@ -893,7 +821,7 @@ function PendingPlanCta({
   }, [refreshTick]);
 
   const relevant = plans.filter((p) =>
-    channel ? !p.channelId || p.channelId === channel.channelId : true,
+    channel ? !p.channelId || p.channelId === channel.channelId : true
   );
   if (relevant.length === 0) return null;
 
@@ -922,9 +850,7 @@ function PendingPlanCta({
         <div key={p.runId} className="plan-cta-row">
           <div className="plan-cta-body">
             <strong>Plan awaiting approval</strong>
-            <span className="plan-cta-feature">
-              {p.featureRequest.slice(0, 80)}
-            </span>
+            <span className="plan-cta-feature">{p.featureRequest.slice(0, 80)}</span>
             <span className="plan-cta-meta">
               run {p.runId.slice(0, 12)}… · workspace {p.workspaceId}
             </span>
@@ -938,11 +864,7 @@ function PendingPlanCta({
             >
               {busyRunId === p.runId ? "…" : "Approve"}
             </button>
-            <button
-              type="button"
-              disabled={busyRunId === p.runId}
-              onClick={() => act(p, "reject")}
-            >
+            <button type="button" disabled={busyRunId === p.runId} onClick={() => act(p, "reject")}>
               Reject
             </button>
           </div>

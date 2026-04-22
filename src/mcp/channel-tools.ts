@@ -2,10 +2,7 @@ import { getAgentName } from "../domain/agent-names.js";
 import { ChannelStore } from "../channels/channel-store.js";
 import { resolveBoardTickets } from "../channels/board-resolver.js";
 import { LocalArtifactStore } from "../execution/artifact-store.js";
-import {
-  getGlobalRoot,
-  listRegisteredWorkspaces
-} from "../cli/workspace-registry.js";
+import { getGlobalRoot, listRegisteredWorkspaces } from "../cli/workspace-registry.js";
 import { getHarnessStore } from "../storage/factory.js";
 
 export interface ChannelToolState {
@@ -14,9 +11,17 @@ export interface ChannelToolState {
 }
 
 const ACTIVE_RUN_STATES = new Set([
-  "CLASSIFYING", "DRAFT_PLAN", "PLAN_REVIEW", "AWAITING_APPROVAL",
-  "DESIGN_DOC", "PHASE_READY", "PHASE_EXECUTE", "TEST_FIX_LOOP",
-  "REVIEW_FIX_LOOP", "TICKETS_EXECUTING", "TICKETS_COMPLETE"
+  "CLASSIFYING",
+  "DRAFT_PLAN",
+  "PLAN_REVIEW",
+  "AWAITING_APPROVAL",
+  "DESIGN_DOC",
+  "PHASE_READY",
+  "PHASE_EXECUTE",
+  "TEST_FIX_LOOP",
+  "REVIEW_FIX_LOOP",
+  "TICKETS_EXECUTING",
+  "TICKETS_COMPLETE",
 ]);
 
 export function isChannelTool(name: string): boolean {
@@ -35,22 +40,23 @@ export function getChannelToolDefinitions(): object[] {
         properties: {
           name: { type: "string", description: "Channel name, e.g. #feature-auth" },
           description: { type: "string" },
-          workspaceIds: { type: "array", items: { type: "string" } }
-        }
-      }
+          workspaceIds: { type: "array", items: { type: "string" } },
+        },
+      },
     },
     {
       name: "channel_get",
-      description: "Get channel details including members, pinned refs, recent feed, and active runs.",
+      description:
+        "Get channel details including members, pinned refs, recent feed, and active runs.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
         required: ["channelId"],
         properties: {
           channelId: { type: "string" },
-          feedLimit: { type: "integer", minimum: 1, maximum: 100 }
-        }
-      }
+          feedLimit: { type: "integer", minimum: 1, maximum: 100 },
+        },
+      },
     },
     {
       name: "channel_post",
@@ -62,9 +68,9 @@ export function getChannelToolDefinitions(): object[] {
         properties: {
           channelId: { type: "string" },
           content: { type: "string" },
-          agentId: { type: "string" }
-        }
-      }
+          agentId: { type: "string" },
+        },
+      },
     },
     {
       name: "channel_record_decision",
@@ -80,9 +86,9 @@ export function getChannelToolDefinitions(): object[] {
           rationale: { type: "string" },
           alternatives: { type: "array", items: { type: "string" } },
           runId: { type: "string" },
-          ticketId: { type: "string" }
-        }
-      }
+          ticketId: { type: "string" },
+        },
+      },
     },
     {
       name: "channel_task_board",
@@ -91,8 +97,8 @@ export function getChannelToolDefinitions(): object[] {
         type: "object",
         additionalProperties: false,
         required: ["channelId"],
-        properties: { channelId: { type: "string" } }
-      }
+        properties: { channelId: { type: "string" } },
+      },
     },
     {
       name: "harness_running_tasks",
@@ -100,9 +106,9 @@ export function getChannelToolDefinitions(): object[] {
       inputSchema: {
         type: "object",
         additionalProperties: false,
-        properties: {}
-      }
-    }
+        properties: {},
+      },
+    },
   ];
 }
 
@@ -120,7 +126,7 @@ export async function callChannelTool(
         description: String(args.description ?? ""),
         workspaceIds: Array.isArray(args.workspaceIds)
           ? (args.workspaceIds as string[])
-          : undefined
+          : undefined,
       });
 
     case "channel_get": {
@@ -131,7 +137,7 @@ export async function callChannelTool(
       const [feed, runLinks, decisions] = await Promise.all([
         store.readFeed(channelId, Number(args.feedLimit ?? 20)),
         store.readRunLinks(channelId),
-        store.listDecisions(channelId)
+        store.listDecisions(channelId),
       ]);
 
       const activeMembers = channel.members.filter((m) => m.status === "active");
@@ -141,7 +147,7 @@ export async function callChannelTool(
         activeMembers,
         recentFeed: feed,
         runLinks,
-        recentDecisions: decisions.slice(0, 5)
+        recentDecisions: decisions.slice(0, 5),
       };
     }
 
@@ -153,7 +159,7 @@ export async function callChannelTool(
         fromAgentId: agentId,
         fromDisplayName: displayName,
         content: String(args.content ?? ""),
-        metadata: {}
+        metadata: {},
       });
     }
 
@@ -167,21 +173,21 @@ export async function callChannelTool(
         title: String(args.title ?? ""),
         description: String(args.description ?? ""),
         rationale: String(args.rationale ?? ""),
-        alternatives: Array.isArray(args.alternatives) ? args.alternatives as string[] : [],
+        alternatives: Array.isArray(args.alternatives) ? (args.alternatives as string[]) : [],
         decidedBy: agentId,
         decidedByName: displayName,
-        linkedArtifacts: []
+        linkedArtifacts: [],
       });
     }
 
     case "channel_task_board": {
       const channelId = String(args.channelId ?? "");
-      const board: Record<string, Array<{ ticketId: string; title: string; runId: string | null }>> = {};
+      const board: Record<
+        string,
+        Array<{ ticketId: string; title: string; runId: string | null }>
+      > = {};
 
-      const tickets = await resolveBoardTickets(store, channelId, async (
-        workspaceId,
-        runId
-      ) => {
+      const tickets = await resolveBoardTickets(store, channelId, async (workspaceId, runId) => {
         const artifactStore = buildArtifactStoreForWorkspace(workspaceId);
         return artifactStore.readTicketLedger(runId);
       });
@@ -191,7 +197,7 @@ export async function callChannelTool(
         board[entry.status].push({
           ticketId: entry.ticketId,
           title: entry.title,
-          runId
+          runId,
         });
       }
 
@@ -221,7 +227,7 @@ export async function callChannelTool(
               runId: run.runId,
               state: run.state,
               featureRequest: run.featureRequest,
-              channelId: run.channelId ?? null
+              channelId: run.channelId ?? null,
             });
           }
         }
@@ -237,5 +243,8 @@ export async function callChannelTool(
 
 function buildArtifactStoreForWorkspace(workspaceId: string): LocalArtifactStore {
   const globalRoot = getGlobalRoot();
-  return new LocalArtifactStore(`${globalRoot}/workspaces/${workspaceId}/artifacts`, getHarnessStore());
+  return new LocalArtifactStore(
+    `${globalRoot}/workspaces/${workspaceId}/artifacts`,
+    getHarnessStore()
+  );
 }

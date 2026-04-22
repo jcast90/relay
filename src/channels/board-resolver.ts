@@ -42,7 +42,7 @@ export async function resolveBoardTickets(
   if (channelTickets.length > 0) {
     return channelTickets.map((entry) => ({
       entry,
-      runId: entry.runId ?? null
+      runId: entry.runId ?? null,
     }));
   }
 

@@ -11,27 +11,21 @@ import {
   hasHarnessMcpOptOut,
   isAutoApproveEnabled,
   stripAutoApproveFlags,
-  stripHarnessMcpOptOut
+  stripHarnessMcpOptOut,
 } from "./cli/agent-wrapper.js";
 import { AgentRegistry } from "./agents/registry.js";
 import { launchGui, launchTui, parseGuiFlags } from "./cli/launch-gui-tui.js";
 import { parseRebuildFlags, runRebuild } from "./cli/rebuild.js";
 import { launchInteractiveCommand } from "./cli/launcher.js";
-import {
-  createStreamActivityRenderer,
-  isQuietMode
-} from "./cli/stream-activity-renderer.js";
+import { createStreamActivityRenderer, isQuietMode } from "./cli/stream-activity-renderer.js";
 import { hasOnboarded, parseWelcomeFlags, runWelcome } from "./cli/welcome.js";
 import {
   ensureHarnessWorkspace,
   type HarnessServiceStatus,
   type HarnessWorkspacePaths,
-  readWorkspaceSummary
+  readWorkspaceSummary,
 } from "./cli/workspace.js";
-import {
-  getGlobalRoot,
-  listRegisteredWorkspaces
-} from "./cli/workspace-registry.js";
+import { getGlobalRoot, listRegisteredWorkspaces } from "./cli/workspace-registry.js";
 import { addProjectDir, readConfig, removeProjectDir } from "./cli/config.js";
 import { LocalArtifactStore } from "./execution/artifact-store.js";
 import { getHarnessStore } from "./storage/factory.js";
@@ -44,10 +38,7 @@ import { OrchestratorV2 } from "./orchestrator/orchestrator-v2.js";
 import { ScriptedInvoker } from "./simulation/scripted-invoker.js";
 import { ChannelStore } from "./channels/channel-store.js";
 import { resolveBoardTickets } from "./channels/board-resolver.js";
-import {
-  createPrWatcherFactory,
-  getActiveWatcher
-} from "./cli/pr-watcher-factory.js";
+import { createPrWatcherFactory, getActiveWatcher } from "./cli/pr-watcher-factory.js";
 import type { HarnessPR } from "./integrations/scm.js";
 import { handleCrosslinkCommand } from "./crosslink/cli.js";
 import { startDashboard } from "./tui/dashboard.js";
@@ -91,7 +82,7 @@ export async function main(): Promise<void> {
       cwd,
       args,
       workspace,
-      artifactStore
+      artifactStore,
     });
     return;
   }
@@ -101,7 +92,7 @@ export async function main(): Promise<void> {
       cwd,
       args,
       workspace,
-      artifactStore
+      artifactStore,
     });
     return;
   }
@@ -206,7 +197,12 @@ export async function main(): Promise<void> {
     return;
   }
 
-  if (command === "claude" || command === "codex" || command.startsWith("claude-") || command.startsWith("codex-")) {
+  if (
+    command === "claude" ||
+    command === "codex" ||
+    command.startsWith("claude-") ||
+    command.startsWith("codex-")
+  ) {
     // First-run nudge: print a one-liner pointing at `rly welcome` if the
     // user hasn't done the tour. Non-blocking.
     if (!hasOnboarded()) {
@@ -237,7 +233,7 @@ export async function main(): Promise<void> {
           cliEntrypoint,
           userArgs,
           workspace,
-          autoApprove
+          autoApprove,
         })
       : userArgs;
     const exitCode = await launchInteractiveCommand({
@@ -250,8 +246,8 @@ export async function main(): Promise<void> {
         AGENT_HARNESS_ARTIFACTS_DIR: workspace.paths.artifactsDir,
         AGENT_HARNESS_RUNS_INDEX: workspace.paths.runsIndexPath,
         // Propagate to children (dispatched agents) so they inherit.
-        ...(autoApprove ? { RELAY_AUTO_APPROVE: "1" } : {})
-      }
+        ...(autoApprove ? { RELAY_AUTO_APPROVE: "1" } : {}),
+      },
     });
 
     process.exitCode = exitCode;
@@ -259,11 +255,14 @@ export async function main(): Promise<void> {
   }
 
   const sequential = args.includes("--sequential");
-  const featureRequest = args.filter((a) => !a.startsWith("--")).join(" ").trim();
+  const featureRequest = args
+    .filter((a) => !a.startsWith("--"))
+    .join(" ")
+    .trim();
 
   if (!featureRequest) {
     console.error("Usage: rly run <feature request>");
-    console.error("  Example: rly run \"Add user authentication with OAuth2\"");
+    console.error('  Example: rly run "Add user authentication with OAuth2"');
     process.exitCode = 1;
     return;
   }
@@ -290,17 +289,14 @@ export async function main(): Promise<void> {
           streamRenderers.set(spec.id, renderer);
           return (line: string) => renderer.onLine(line);
         }
-      : undefined
+      : undefined,
   });
 
   for (const agent of agents) {
     registry.register(agent);
   }
 
-  const verificationRunner = new VerificationRunner(
-    new NodeCommandInvoker(),
-    artifactStore
-  );
+  const verificationRunner = new VerificationRunner(new NodeCommandInvoker(), artifactStore);
   let run: Awaited<ReturnType<Orchestrator["run"]>>;
 
   const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -332,7 +328,7 @@ export async function main(): Promise<void> {
       orchestratorV2.attachPoller(
         createPrWatcherFactory({
           channelStore,
-          repoRoot: cwd
+          repoRoot: cwd,
         })
       );
       run = await orchestratorV2.run(featureRequest, runId);
@@ -355,8 +351,8 @@ export async function main(): Promise<void> {
         updatedAt: now,
         completedAt: now,
         phaseLedgerPath: null,
-        artifactsRoot: `${workspace.paths.artifactsDir}/${runId}`
-      }
+        artifactsRoot: `${workspace.paths.artifactsDir}/${runId}`,
+      },
     });
 
     process.exitCode = 1;
@@ -383,9 +379,7 @@ export async function main(): Promise<void> {
 
   for (const item of run.evidence) {
     const name = await getAgentName(item.agentId);
-    console.log(
-      `- [${name}] ${item.phaseId} attempt=${item.attempt} ${item.summary}`
-    );
+    console.log(`- [${name}] ${item.phaseId} attempt=${item.attempt} ${item.summary}`);
   }
 
   console.log("");
@@ -494,7 +488,9 @@ async function printChannels(args: string[] = []): Promise<void> {
     const activeMembers = ch.members.filter((m) => m.status === "active").length;
     console.log(`  ${ch.name} (${ch.channelId})`);
     console.log(`    ${ch.description}`);
-    console.log(`    Status: ${ch.status} | Members: ${activeMembers}/${ch.members.length} | Refs: ${ch.pinnedRefs.length}`);
+    console.log(
+      `    Status: ${ch.status} | Members: ${activeMembers}/${ch.members.length} | Refs: ${ch.pinnedRefs.length}`
+    );
     console.log("");
   }
 }
@@ -525,9 +521,7 @@ async function handleChannelCommand(args: string[]): Promise<void> {
     let primaryWorkspaceId: string | undefined;
     if (primaryArg) {
       if (!repoAssignments || repoAssignments.length === 0) {
-        console.error(
-          `--primary ${primaryArg} requires --repos with at least one entry.`
-        );
+        console.error(`--primary ${primaryArg} requires --repos with at least one entry.`);
         process.exitCode = 1;
         return;
       }
@@ -553,7 +547,7 @@ async function handleChannelCommand(args: string[]): Promise<void> {
       name,
       description,
       repoAssignments,
-      primaryWorkspaceId
+      primaryWorkspaceId,
     });
 
     if (args.includes("--json")) {
@@ -598,10 +592,7 @@ async function handleChannelCommand(args: string[]): Promise<void> {
     const reposArg = parseNamedArg(args, "--repos");
     const primaryArg = parseNamedArg(args, "--primary");
     const patch: Partial<
-      Pick<
-        import("./domain/channel.js").Channel,
-        "repoAssignments" | "primaryWorkspaceId"
-      >
+      Pick<import("./domain/channel.js").Channel, "repoAssignments" | "primaryWorkspaceId">
     > = {};
 
     if (reposArg) {
@@ -621,8 +612,7 @@ async function handleChannelCommand(args: string[]): Promise<void> {
         process.exitCode = 1;
         return;
       }
-      const effectiveAssignments =
-        patch.repoAssignments ?? existing.repoAssignments ?? [];
+      const effectiveAssignments = patch.repoAssignments ?? existing.repoAssignments ?? [];
       const match = effectiveAssignments.find((r) => r.alias === primaryArg);
       if (!match) {
         const known = effectiveAssignments.map((r) => r.alias).join(", ") || "(none)";
@@ -677,12 +667,17 @@ async function handleChannelCommand(args: string[]): Promise<void> {
 
   if (sub === "post") {
     const channelId = args[1];
-    const content = args.slice(2).filter((a) => !a.startsWith("--")).join(" ");
+    const content = args
+      .slice(2)
+      .filter((a) => !a.startsWith("--"))
+      .join(" ");
     const fromName = parseNamedArg(args, "--from") ?? "CLI";
     const entryType = parseNamedArg(args, "--type") ?? "message";
 
     if (!channelId || !content) {
-      console.error("Usage: rly channel post <channelId> <content> [--from <name>] [--type <type>]");
+      console.error(
+        "Usage: rly channel post <channelId> <content> [--from <name>] [--type <type>]"
+      );
       process.exitCode = 1;
       return;
     }
@@ -692,7 +687,7 @@ async function handleChannelCommand(args: string[]): Promise<void> {
       fromAgentId: null,
       fromDisplayName: fromName,
       content,
-      metadata: {}
+      metadata: {},
     });
 
     jsonOut(entry);
@@ -781,7 +776,9 @@ async function handlePrWatchCommand(args: string[]): Promise<void> {
 
   const pr = await resolvePrFromInput(input, watcher.repo, watcher.scm, branchHint);
   if (!pr) {
-    console.error(`Could not resolve PR from "${input}". Provide a full GitHub URL or a PR number.`);
+    console.error(
+      `Could not resolve PR from "${input}". Provide a full GitHub URL or a PR number.`
+    );
     process.exitCode = 1;
     return;
   }
@@ -802,10 +799,12 @@ async function handlePrWatchCommand(args: string[]): Promise<void> {
     ticketId,
     channelId: resolvedChannelId,
     pr,
-    repo: watcher.repo
+    repo: watcher.repo,
   });
 
-  console.log(`Tracking ${watcher.repo.owner}/${watcher.repo.name}#${pr.number} (ticket: ${ticketId})`);
+  console.log(
+    `Tracking ${watcher.repo.owner}/${watcher.repo.name}#${pr.number} (ticket: ${ticketId})`
+  );
 }
 
 /**
@@ -845,7 +844,7 @@ async function handlePrStatusCommand(args: string[] = []): Promise<void> {
         branch: t.pr.branch,
         ci: t.last?.ci ?? null,
         review: t.last?.review ?? null,
-        prState: t.last?.prState ?? null
+        prState: t.last?.prState ?? null,
       }));
   } else {
     const channelStore = new ChannelStore(undefined, getHarnessStore());
@@ -863,7 +862,7 @@ async function handlePrStatusCommand(args: string[] = []): Promise<void> {
           branch: p.branch,
           ci: p.ci,
           review: p.review,
-          prState: p.prState
+          prState: p.prState,
         });
       }
     }
@@ -884,7 +883,9 @@ async function handlePrStatusCommand(args: string[] = []): Promise<void> {
   }
 
   console.log(`Tracked PRs (${rows.length}):`);
-  console.log("  TICKET             PR                                   STATE     CI        REVIEW");
+  console.log(
+    "  TICKET             PR                                   STATE     CI        REVIEW"
+  );
 
   for (const t of rows) {
     const label = `${t.owner}/${t.name}#${t.number}`;
@@ -938,7 +939,7 @@ async function handlePlanDecisionCommand(
       runId,
       decision,
       feedback,
-      artifactStore
+      artifactStore,
     });
     jsonOut({ ok: true, runId, decision, feedback, workspaceId, path });
   } catch (err) {
@@ -955,10 +956,7 @@ async function handlePlanDecisionCommand(
  * plan-approval banner / CTA. A run is "pending" when its `state` is
  * `AWAITING_APPROVAL` and no approval record has been written yet.
  */
-async function handlePendingPlansCommand(
-  args: string[],
-  _cwd: string
-): Promise<void> {
+async function handlePendingPlansCommand(args: string[], _cwd: string): Promise<void> {
   const workspaces = await listRegisteredWorkspaces();
   const pending: Array<{
     runId: string;
@@ -982,7 +980,7 @@ async function handlePendingPlansCommand(
         featureRequest: r.featureRequest,
         channelId: r.channelId,
         state: r.state,
-        updatedAt: r.updatedAt
+        updatedAt: r.updatedAt,
       });
     }
   }
@@ -1000,10 +998,12 @@ async function handlePendingPlansCommand(
   console.log(`Runs awaiting approval (${pending.length}):`);
   for (const p of pending) {
     const channel = p.channelId ? ` channel=${p.channelId}` : "";
-    console.log(`  ${p.runId}  workspace=${p.workspaceId}${channel}  "${p.featureRequest.slice(0, 60)}"`);
+    console.log(
+      `  ${p.runId}  workspace=${p.workspaceId}${channel}  "${p.featureRequest.slice(0, 60)}"`
+    );
   }
   console.log("\nApprove with: rly approve <runId>");
-  console.log("Reject with:  rly reject <runId> [--feedback \"…\"]");
+  console.log('Reject with:  rly reject <runId> [--feedback "…"]');
 }
 
 async function resolveWorkspaceIdForRun(runId: string): Promise<string | null> {
@@ -1032,7 +1032,9 @@ async function resolveWorkspaceIdForRun(runId: string): Promise<string | null> {
 async function resolvePrFromInput(
   input: string,
   repo: { owner: string; name: string },
-  scm: { detectPR: (branch: string, repo: { owner: string; name: string }) => Promise<HarnessPR | null> },
+  scm: {
+    detectPR: (branch: string, repo: { owner: string; name: string }) => Promise<HarnessPR | null>;
+  },
   branchHint?: string
 ): Promise<HarnessPR | null> {
   const trimmed = input.trim();
@@ -1056,7 +1058,7 @@ async function resolvePrFromInput(
     return {
       number,
       url: `https://github.com/${urlMatch[1]}/${urlMatch[2]}/pull/${number}`,
-      branch: branchHint ?? ""
+      branch: branchHint ?? "",
     };
   }
 
@@ -1066,7 +1068,7 @@ async function resolvePrFromInput(
     return {
       number,
       url: `https://github.com/${repo.owner}/${repo.name}/pull/${number}`,
-      branch: branchHint ?? ""
+      branch: branchHint ?? "",
     };
   }
 
@@ -1087,12 +1089,26 @@ async function resolveDefaultChannelId(): Promise<string | null> {
 async function printRunningTasks(args: string[] = []): Promise<void> {
   const workspaces = await listRegisteredWorkspaces();
   const activeStates = new Set([
-    "CLASSIFYING", "DRAFT_PLAN", "PLAN_REVIEW", "AWAITING_APPROVAL",
-    "DESIGN_DOC", "PHASE_READY", "PHASE_EXECUTE", "TEST_FIX_LOOP",
-    "REVIEW_FIX_LOOP", "TICKETS_EXECUTING", "TICKETS_COMPLETE"
+    "CLASSIFYING",
+    "DRAFT_PLAN",
+    "PLAN_REVIEW",
+    "AWAITING_APPROVAL",
+    "DESIGN_DOC",
+    "PHASE_READY",
+    "PHASE_EXECUTE",
+    "TEST_FIX_LOOP",
+    "REVIEW_FIX_LOOP",
+    "TICKETS_EXECUTING",
+    "TICKETS_COMPLETE",
   ]);
 
-  const activeRuns: Array<{ runId: string; state: string; featureRequest: string; workspace: string; channelId: string | null }> = [];
+  const activeRuns: Array<{
+    runId: string;
+    state: string;
+    featureRequest: string;
+    workspace: string;
+    channelId: string | null;
+  }> = [];
 
   for (const ws of workspaces) {
     const wsArtifactStore = new LocalArtifactStore(
@@ -1108,7 +1124,7 @@ async function printRunningTasks(args: string[] = []): Promise<void> {
           state: run.state,
           featureRequest: run.featureRequest,
           workspace: ws.repoPath,
-          channelId: run.channelId ?? null
+          channelId: run.channelId ?? null,
         });
       }
     }
@@ -1151,10 +1167,7 @@ async function printTaskBoard(channelId: string, args: string[] = []): Promise<v
   // Delegates to resolveBoardTickets so CLI + MCP tool + GUI all read the
   // channel board through the same unified-then-fallback policy.
   const board: Record<string, Array<{ ticketId: string; title: string }>> = {};
-  const resolved = await resolveBoardTickets(store, channelId, async (
-    workspaceId,
-    runId
-  ) => {
+  const resolved = await resolveBoardTickets(store, channelId, async (workspaceId, runId) => {
     const wsStore = new LocalArtifactStore(
       `${getGlobalRoot()}/workspaces/${workspaceId}/artifacts`,
       getHarnessStore()
@@ -1386,7 +1399,9 @@ async function handleSessionCommand(args: string[]): Promise<void> {
     const sid = parseNamedArg(args, "--sid");
 
     if (!channelId || !sessionId || !alias || !sid) {
-      console.error("Usage: rly session update-claude-sid --channel <id> --session <id> --alias <name> --sid <claude_sid>");
+      console.error(
+        "Usage: rly session update-claude-sid --channel <id> --session <id> --alias <name> --sid <claude_sid>"
+      );
       process.exitCode = 1;
       return;
     }
@@ -1405,7 +1420,9 @@ async function handleSessionCommand(args: string[]): Promise<void> {
     const content = extractPositionals(args).slice(1).join(" ");
 
     if (!channelId || !sessionId || !content) {
-      console.error("Usage: rly session append --channel <id> --session <id> --role <role> [--alias <name>] [--metadata <json>] <content>");
+      console.error(
+        "Usage: rly session append --channel <id> --session <id> --role <role> [--alias <name>] [--metadata <json>] <content>"
+      );
       process.exitCode = 1;
       return;
     }
@@ -1423,7 +1440,9 @@ async function handleSessionCommand(args: string[]): Promise<void> {
           throw new Error("--metadata must be a JSON object of string values");
         }
       } catch (err) {
-        console.error(`Invalid --metadata JSON: ${err instanceof Error ? err.message : String(err)}`);
+        console.error(
+          `Invalid --metadata JSON: ${err instanceof Error ? err.message : String(err)}`
+        );
         process.exitCode = 1;
         return;
       }
@@ -1434,7 +1453,7 @@ async function handleSessionCommand(args: string[]): Promise<void> {
       content,
       timestamp: new Date().toISOString(),
       agentAlias: alias,
-      ...(metadata ? { metadata } : {})
+      ...(metadata ? { metadata } : {}),
     });
 
     jsonOut({ ok: true });
@@ -1458,7 +1477,7 @@ async function handleSessionCommand(args: string[]): Promise<void> {
       role,
       content,
       timestamp: new Date().toISOString(),
-      agentAlias: alias
+      agentAlias: alias,
     });
 
     jsonOut({ ok: true });
@@ -1497,15 +1516,16 @@ async function handleSessionCommand(args: string[]): Promise<void> {
     // orphaned); deleteSession still scrubs the on-disk JSONL + index.
     const channelStoreForDelete = new ChannelStore(undefined, getHarnessStore());
     const channelForDelete = await channelStoreForDelete.getChannel(channelId);
-    const repoPaths =
-      channelForDelete?.repoAssignments?.map((r) => r.repoPath) ?? [];
+    const repoPaths = channelForDelete?.repoAssignments?.map((r) => r.repoPath) ?? [];
 
     await store.deleteSession(channelId, sessionId, { repoPaths });
     jsonOut({ ok: true, deleted: sessionId });
     return;
   }
 
-  console.error("Usage: rly session <create|list|get|delete|update-claude-sid|append|update-last|messages>");
+  console.error(
+    "Usage: rly session <create|list|get|delete|update-claude-sid|append|update-last|messages>"
+  );
   process.exitCode = 1;
 }
 
@@ -1522,7 +1542,9 @@ async function handleChatCommand(
     const alias = parseNamedArg(args, "--alias");
 
     if (!channelId) {
-      console.error("Usage: rly chat system-prompt --channel <id> [--repo <path>] [--alias <name>]");
+      console.error(
+        "Usage: rly chat system-prompt --channel <id> [--repo <path>] [--alias <name>]"
+      );
       process.exitCode = 1;
       return;
     }
@@ -1573,7 +1595,9 @@ async function handleChatCommand(
     const key = parseNamedArg(args, "--key");
     const messageTimestamp = parseNamedArg(args, "--message-timestamp");
     if (!channelId || !sessionId || !key || !messageTimestamp) {
-      console.error("Usage: rly chat rewind-apply --channel <id> --session <id> --key <ref-key> --message-timestamp <iso8601>");
+      console.error(
+        "Usage: rly chat rewind-apply --channel <id> --session <id> --key <ref-key> --message-timestamp <iso8601>"
+      );
       process.exitCode = 1;
       return;
     }
@@ -1587,7 +1611,9 @@ async function handleChatCommand(
     return;
   }
 
-  console.error("Usage: rly chat <system-prompt|resolve-refs|mcp-config|rewind|rewind-snapshot|rewind-apply>");
+  console.error(
+    "Usage: rly chat <system-prompt|resolve-refs|mcp-config|rewind|rewind-snapshot|rewind-apply>"
+  );
   process.exitCode = 1;
 }
 
@@ -1661,9 +1687,7 @@ async function handleChatRewindCommand(args: string[]): Promise<void> {
       console.log("Rewindable user messages (most recent last):");
       for (let i = 0; i < recent.length; i += 1) {
         const c = recent[i];
-        const preview = c.message.content
-          .replace(/\s+/g, " ")
-          .slice(0, 60);
+        const preview = c.message.content.replace(/\s+/g, " ").slice(0, 60);
         console.log(`  [${i + 1}] ${c.message.timestamp}  ${preview}`);
       }
       const raw = (await rl.question("Pick a number (or Enter to cancel): ")).trim();
@@ -1683,9 +1707,7 @@ async function handleChatRewindCommand(args: string[]): Promise<void> {
       rl.close();
     }
   } else {
-    console.error(
-      "Specify --to <messageTimestamp> or --interactive. Recent candidates:"
-    );
+    console.error("Specify --to <messageTimestamp> or --interactive. Recent candidates:");
     for (const c of candidates.slice(-10)) {
       const preview = c.message.content.replace(/\s+/g, " ").slice(0, 60);
       console.error(`  ${c.message.timestamp}  ${preview}`);
@@ -1706,20 +1728,15 @@ async function handleChatRewindCommand(args: string[]): Promise<void> {
   // the message, but fresh snapshots ensure refs exist even if the original
   // ones were GC'd). The GUI path skips re-snapshotting; we follow suit
   // and only apply.
-  const result = await rewindApply(
-    channelId,
-    sessionId,
-    key,
-    chosen.message.timestamp
-  );
+  const result = await rewindApply(channelId, sessionId, key, chosen.message.timestamp);
   jsonOut({
     ok: true,
     target: {
       timestamp: chosen.message.timestamp,
       rewindKey: key,
-      preview: chosen.message.content.slice(0, 120)
+      preview: chosen.message.content.slice(0, 120),
     },
-    ...result
+    ...result,
   });
 }
 
@@ -1754,10 +1771,7 @@ async function printRunsIndex(
   }
 }
 
-async function printStatus(
-  artifactStore: LocalArtifactStore,
-  cwd: string
-): Promise<void> {
+async function printStatus(artifactStore: LocalArtifactStore, cwd: string): Promise<void> {
   const summary = await readWorkspaceSummary(artifactStore, cwd);
 
   console.log(`Workspace: ${cwd}`);
@@ -1811,12 +1825,10 @@ async function inspectMcp(input: {
     const claudeConfigPath = await ensureClaudeMcpConfig({
       cwd: input.cwd,
       cliEntrypoint,
-      paths: input.workspace.paths
+      paths: input.workspace.paths,
     });
     console.log(`Claude MCP config: ${claudeConfigPath}`);
-    console.log(
-      `Codex MCP server: relay -> ${cliEntrypoint} mcp-server --workspace ${input.cwd}`
-    );
+    console.log(`Codex MCP server: relay -> ${cliEntrypoint} mcp-server --workspace ${input.cwd}`);
     console.log("");
   }
 
@@ -1832,15 +1844,15 @@ async function inspectMcp(input: {
             workspace: input.workspace,
             // `mcp list` is a probe, no approvals needed and no spawning of
             // long-running agents. Skip auto-approve propagation here.
-            autoApprove: false
+            autoApprove: false,
           })
         : ["mcp", "list"],
       cwd: input.cwd,
       env: {
         AGENT_HARNESS_HOME: input.workspace.paths.rootDir,
         AGENT_HARNESS_ARTIFACTS_DIR: input.workspace.paths.artifactsDir,
-        AGENT_HARNESS_RUNS_INDEX: input.workspace.paths.runsIndexPath
-      }
+        AGENT_HARNESS_RUNS_INDEX: input.workspace.paths.runsIndexPath,
+      },
     });
 
     console.log(`${capitalize(candidate)} MCP servers:`);
@@ -1907,9 +1919,7 @@ async function printUpStatus(input: {
 
 async function readPackageVersion(): Promise<string> {
   const packageJsonPath = new URL("../package.json", import.meta.url);
-  const packageJson = JSON.parse(
-    await readFile(packageJsonPath, "utf8")
-  ) as { version?: string };
+  const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as { version?: string };
 
   return packageJson.version ?? "0.0.0";
 }
@@ -1920,16 +1930,28 @@ function resolveCliEntrypoint(): string {
 
 async function handleServeCommand(cwd: string, args: string[]): Promise<void> {
   if (args.includes("--help") || args.includes("-h")) {
-    console.log("Usage: rly serve [--port <n>] [--host <host>] [--token <token>] [--workspace <id>]");
+    console.log(
+      "Usage: rly serve [--port <n>] [--host <host>] [--token <token>] [--workspace <id>]"
+    );
     console.log("");
     console.log("Starts an HTTP/SSE MCP server exposing Relay's tool surface.");
     console.log("");
     console.log("Options:");
-    console.log("  --port <n>                         TCP port to bind (env: RELAY_PORT, default: 7420)");
-    console.log("  --host <host>                      Host/interface (default: 127.0.0.1 / loopback only)");
-    console.log("  --token <token>                    Require Authorization: Bearer <token> (env: RELAY_TOKEN)");
-    console.log("  --workspace <id>                   Workspace id (required unless the current repo is registered via `rly up`)");
-    console.log("  --allow-unauthenticated-remote     Opt-in: allow non-loopback --host without --token (DANGEROUS)");
+    console.log(
+      "  --port <n>                         TCP port to bind (env: RELAY_PORT, default: 7420)"
+    );
+    console.log(
+      "  --host <host>                      Host/interface (default: 127.0.0.1 / loopback only)"
+    );
+    console.log(
+      "  --token <token>                    Require Authorization: Bearer <token> (env: RELAY_TOKEN)"
+    );
+    console.log(
+      "  --workspace <id>                   Workspace id (required unless the current repo is registered via `rly up`)"
+    );
+    console.log(
+      "  --allow-unauthenticated-remote     Opt-in: allow non-loopback --host without --token (DANGEROUS)"
+    );
     console.log("");
     console.log("For multi-host deployments pass BOTH --host 0.0.0.0 AND --token explicitly.");
     return;
@@ -2073,9 +2095,9 @@ async function buildWrappedAgentLaunchArgs(input: {
       mcpConfigPath: await ensureClaudeMcpConfig({
         cwd: input.cwd,
         cliEntrypoint: input.cliEntrypoint,
-        paths: input.workspace.paths
+        paths: input.workspace.paths,
       }),
-      autoApprove: input.autoApprove
+      autoApprove: input.autoApprove,
     });
   }
 
@@ -2083,7 +2105,7 @@ async function buildWrappedAgentLaunchArgs(input: {
     userArgs: input.userArgs,
     cwd: input.cwd,
     cliEntrypoint: input.cliEntrypoint,
-    autoApprove: input.autoApprove
+    autoApprove: input.autoApprove,
   });
 }
 

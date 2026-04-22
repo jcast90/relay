@@ -20,7 +20,7 @@ You can expect an acknowledgement within **72 hours**. Please do not open a publ
 
 - Vulnerabilities in Claude Code, Codex, or the `@aoagents/*` packages — please report those to their respective maintainers.
 - Issues in your own code that Relay dispatches agents to operate on. Relay doesn't protect you from yourself when running with `RELAY_AUTO_APPROVE=1`; that's by design.
-- Social-engineering a user into running a malicious issue URL / prompt. Prompt injection surfaces inside the agent's own trust boundary; see *Known-and-accepted risks* below.
+- Social-engineering a user into running a malicious issue URL / prompt. Prompt injection surfaces inside the agent's own trust boundary; see _Known-and-accepted risks_ below.
 
 ## Known-and-accepted risks
 

@@ -1,15 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import pg from "pg";
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it
-} from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { migrate } from "../../src/storage/migrations/runner.js";
 import { PostgresHarnessStore } from "../../src/storage/postgres-store.js";
@@ -97,17 +89,17 @@ maybeDescribe(`PostgresHarnessStore (integration, ${TEST_URL ?? skipReason})`, (
     await store.putDoc<Widget>(ns, "beta-2", {
       id: "beta-2",
       label: "b2",
-      count: 0
+      count: 0,
     });
     await store.putDoc<Widget>(ns, "alpha-1", {
       id: "alpha-1",
       label: "a1",
-      count: 0
+      count: 0,
     });
     await store.putDoc<Widget>(ns, "alpha-2", {
       id: "alpha-2",
       label: "a2",
-      count: 0
+      count: 0,
     });
 
     const all = await store.listDocs<Widget>(ns);
@@ -125,22 +117,22 @@ maybeDescribe(`PostgresHarnessStore (integration, ${TEST_URL ?? skipReason})`, (
     await store.putDoc<Widget>(ns, "alpha_b1", {
       id: "alpha_b1",
       label: "u",
-      count: 0
+      count: 0,
     });
     await store.putDoc<Widget>(ns, "alphaXb1", {
       id: "alphaXb1",
       label: "x",
-      count: 0
+      count: 0,
     });
     await store.putDoc<Widget>(ns, "pct%tag", {
       id: "pct%tag",
       label: "p",
-      count: 0
+      count: 0,
     });
     await store.putDoc<Widget>(ns, "pctZtag", {
       id: "pctZtag",
       label: "z",
-      count: 0
+      count: 0,
     });
 
     const underscoreMatches = await store.listDocs<Widget>(ns, "alpha_");
@@ -169,20 +161,18 @@ maybeDescribe(`PostgresHarnessStore (integration, ${TEST_URL ?? skipReason})`, (
     expect(all.map((e) => e.id)).toEqual(["a", "b", "c", "d"]);
 
     const tail = await store.readLog<{ id: string; v: number }>(ns, "r1", {
-      limit: 2
+      limit: 2,
     });
     expect(tail.map((e) => e.id)).toEqual(["c", "d"]);
 
     const afterB = await store.readLog<{ id: string; v: number }>(ns, "r1", {
-      after: "b"
+      after: "b",
     });
     expect(afterB.map((e) => e.id)).toEqual(["c", "d"]);
 
-    const unknownCursor = await store.readLog<{ id: string; v: number }>(
-      ns,
-      "r1",
-      { after: "does-not-exist" }
-    );
+    const unknownCursor = await store.readLog<{ id: string; v: number }>(ns, "r1", {
+      after: "does-not-exist",
+    });
     expect(unknownCursor).toEqual([]);
   });
 
@@ -198,13 +188,13 @@ maybeDescribe(`PostgresHarnessStore (integration, ${TEST_URL ?? skipReason})`, (
     for (let i = 0; i < 256; i++) bytes[i] = i;
 
     const ref = await store.putBlob(ns, "bin-1", bytes, {
-      contentType: "application/octet-stream"
+      contentType: "application/octet-stream",
     });
     expect(ref).toMatchObject({
       ns,
       id: "bin-1",
       size: 256,
-      contentType: "application/octet-stream"
+      contentType: "application/octet-stream",
     });
 
     const loaded = await store.getBlob(ref);
@@ -219,7 +209,7 @@ maybeDescribe(`PostgresHarnessStore (integration, ${TEST_URL ?? skipReason})`, (
     const manual: BlobRef = {
       ns,
       id: "txt-1",
-      size: payload.byteLength
+      size: payload.byteLength,
     };
     const loaded = await store.getBlob(manual);
     expect(new TextDecoder().decode(loaded)).toBe("hello postgres");
@@ -246,7 +236,7 @@ maybeDescribe(`PostgresHarnessStore (integration, ${TEST_URL ?? skipReason})`, (
     for (let i = 0; i < 50; i++) {
       ops.push(
         store.mutate<{ count: number }>(ns, "fresh-ctr", (prev) => ({
-          count: (prev?.count ?? 0) + 1
+          count: (prev?.count ?? 0) + 1,
         }))
       );
     }
@@ -261,7 +251,7 @@ maybeDescribe(`PostgresHarnessStore (integration, ${TEST_URL ?? skipReason})`, (
     await store.putDoc<Widget>(ns, "ctr", {
       id: "ctr",
       label: "counter",
-      count: 0
+      count: 0,
     });
 
     const ops: Promise<Widget>[] = [];
@@ -270,7 +260,7 @@ maybeDescribe(`PostgresHarnessStore (integration, ${TEST_URL ?? skipReason})`, (
         store.mutate<Widget>(ns, "ctr", (prev) => ({
           id: "ctr",
           label: "counter",
-          count: (prev?.count ?? 0) + 1
+          count: (prev?.count ?? 0) + 1,
         }))
       );
     }
@@ -283,13 +273,11 @@ maybeDescribe(`PostgresHarnessStore (integration, ${TEST_URL ?? skipReason})`, (
   it("watch yields a ChangeEvent when putDoc writes to the watched key", async () => {
     if (!TEST_URL) return;
     const watcherStore = new PostgresHarnessStore({
-      connectionString: TEST_URL
+      connectionString: TEST_URL,
     });
     try {
       const events: ChangeEvent[] = [];
-      const iterator = watcherStore
-        .watch(ns, "watched")
-        [Symbol.asyncIterator]();
+      const iterator = watcherStore.watch(ns, "watched")[Symbol.asyncIterator]();
       const nextEvent = iterator.next();
 
       // Small delay so the LISTEN is registered before we trigger the write.
@@ -298,16 +286,12 @@ maybeDescribe(`PostgresHarnessStore (integration, ${TEST_URL ?? skipReason})`, (
       await store.putDoc<Widget>(ns, "watched", {
         id: "watched",
         label: "hi",
-        count: 1
+        count: 1,
       });
 
-      const result = await Promise.race<
-        IteratorResult<ChangeEvent> | "timeout"
-      >([
+      const result = await Promise.race<IteratorResult<ChangeEvent> | "timeout">([
         nextEvent,
-        new Promise<"timeout">((resolve) =>
-          setTimeout(() => resolve("timeout"), 3000)
-        )
+        new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 3000)),
       ]);
 
       expect(result).not.toBe("timeout");
@@ -323,24 +307,18 @@ maybeDescribe(`PostgresHarnessStore (integration, ${TEST_URL ?? skipReason})`, (
   it("watch cleans up on iterator.return()", async () => {
     if (!TEST_URL) return;
     const watcherStore = new PostgresHarnessStore({
-      connectionString: TEST_URL
+      connectionString: TEST_URL,
     });
     try {
-      const iterator = watcherStore
-        .watch(ns, "watched-cleanup")
-        [Symbol.asyncIterator]();
+      const iterator = watcherStore.watch(ns, "watched-cleanup")[Symbol.asyncIterator]();
       // Prime the subscription and then close immediately.
       const firstNext = iterator.next();
       await new Promise((resolve) => setTimeout(resolve, 50));
       await iterator.return?.();
       // Calling .return again is safe, and the pending .next() resolves done.
-      const resolved = await Promise.race<
-        IteratorResult<ChangeEvent> | "timeout"
-      >([
+      const resolved = await Promise.race<IteratorResult<ChangeEvent> | "timeout">([
         firstNext,
-        new Promise<"timeout">((resolve) =>
-          setTimeout(() => resolve("timeout"), 1000)
-        )
+        new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 1000)),
       ]);
       if (resolved !== "timeout") expect(resolved.done).toBe(true);
     } finally {

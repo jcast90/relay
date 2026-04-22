@@ -6,7 +6,7 @@ import {
   linearizeTickets,
   parseTicketPlan,
   validateTicketDag,
-  type TicketPlan
+  type TicketPlan,
 } from "../domain/ticket.js";
 
 export async function decomposePlanToTickets(input: {
@@ -26,7 +26,7 @@ export async function decomposePlanToTickets(input: {
       "Each ticket must have clear acceptance criteria and verification commands.",
       "Tickets that can run in parallel should NOT depend on each other.",
       "Tickets that need sequential execution must declare dependsOn edges.",
-      "The dependency graph must be a DAG (no cycles)."
+      "The dependency graph must be a DAG (no cycles).",
     ],
     allowedCommands: [],
     verificationCommands: [],
@@ -36,14 +36,15 @@ export async function decomposePlanToTickets(input: {
       `Classification tier: ${input.classification.tier}`,
       `Estimated ticket count: ${input.classification.estimatedTicketCount}`,
       `Plan phases: ${input.plan.phases.map((p) => `${p.id}: ${p.title}`).join(", ")}`,
-      ...input.plan.phases.map((p) =>
-        `Phase ${p.id} (${p.specialty}): ${p.goal} [commands: ${p.verificationCommands.join(", ")}]`
-      )
+      ...input.plan.phases.map(
+        (p) =>
+          `Phase ${p.id} (${p.specialty}): ${p.goal} [commands: ${p.verificationCommands.join(", ")}]`
+      ),
     ],
     artifactContext: [],
     attempt: 1,
     maxAttempts: 2,
-    priorEvidence: []
+    priorEvidence: [],
   });
 
   if (result.ticketPlan) {
@@ -62,7 +63,7 @@ function validateAndFixTicketPlan(plan: TicketPlan): TicketPlan {
 
   return {
     ...plan,
-    tickets: linearizeTickets(plan.tickets)
+    tickets: linearizeTickets(plan.tickets),
   };
 }
 
@@ -80,7 +81,7 @@ export function buildTicketPlanFromPhases(
     verificationCommands: phase.verificationCommands,
     docsToUpdate: phase.docsToUpdate,
     dependsOn: index > 0 ? [`ticket_${String(index).padStart(2, "0")}`] : [],
-    retryPolicy: phase.retryPolicy
+    retryPolicy: phase.retryPolicy,
   }));
 
   return parseTicketPlan({
@@ -89,6 +90,6 @@ export function buildTicketPlanFromPhases(
     classification,
     tickets,
     finalVerification: plan.finalVerification,
-    docsToUpdate: plan.docsToUpdate
+    docsToUpdate: plan.docsToUpdate,
   });
 }

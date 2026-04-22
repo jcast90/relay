@@ -20,7 +20,7 @@ function collectRepoContext(repoPath: string): string {
       return execFileSync("git", ["-C", repoPath, ...args], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
-        timeout: 2000
+        timeout: 2000,
       }).trim();
     } catch {
       return null;
@@ -71,11 +71,7 @@ export function readAgentsMdSummary(repoPath: string, limit = 40): string | null
     const path = join(repoPath, name);
     if (!existsSync(path)) continue;
     try {
-      const head = readFileSync(path, "utf8")
-        .split("\n")
-        .slice(0, limit)
-        .join("\n")
-        .trimEnd();
+      const head = readFileSync(path, "utf8").split("\n").slice(0, limit).join("\n").trimEnd();
       return head.length > 0 ? head : null;
     } catch {
       return null;
@@ -129,9 +125,7 @@ export async function buildSystemPrompt(input: {
     // default unprefixed chat continues to speak from the primary repo.
     const isAssociated = Boolean(
       input.alias &&
-        assignments.some(
-          (r) => r.alias === input.alias && r.workspaceId !== primary.workspaceId
-        )
+      assignments.some((r) => r.alias === input.alias && r.workspaceId !== primary.workspaceId)
     );
 
     if (isAssociated) {
@@ -151,8 +145,7 @@ export async function buildSystemPrompt(input: {
       const selfCtx = collectRepoContext(self.repoPath);
       if (selfCtx) {
         parts.push(
-          "\nYour repo context (read at session start — may be stale after long runs):\n" +
-            selfCtx
+          "\nYour repo context (read at session start — may be stale after long runs):\n" + selfCtx
         );
       }
 
@@ -194,7 +187,7 @@ export async function buildSystemPrompt(input: {
         const blocks: string[] = [
           `\n### Associated repos`,
           `These repos are attached to the channel but you do NOT work in them directly. ` +
-            `An associated agent is (or can be) attached to each one.`
+            `An associated agent is (or can be) attached to each one.`,
         ];
         for (const r of associated) {
           const aName = r.repoPath.split("/").pop() ?? r.repoPath;
@@ -255,26 +248,26 @@ export async function buildSystemPrompt(input: {
 
   parts.push(
     `\n\n## Shared Ticket Board & Decisions\n\n` +
-    `Ticket board: \`${ticketsPath}\`\n` +
-    `Decisions dir: \`${decisionsDir}/\`\n\n` +
-    `IMPORTANT: When asked about tickets, always READ \`${ticketsPath}\` first. ` +
-    `Do not guess or say tickets don't exist without checking the file.\n\n` +
-    `This file is the unified board shared by chat and orchestrator runs. ` +
-    `When creating tickets, write to \`${ticketsPath}\` as JSON: ` +
-    `\`{"updatedAt": "<ISO-8601>", "tickets": [<TicketLedgerEntry>...]}\`. ` +
-    `Each ticket must use the full TicketLedgerEntry shape: ` +
-    `\`{"ticketId": "T-1", "title": "...", "specialty": "general"|"ui"|"business_logic"|"api_crud"|"devops"|"testing", ` +
-    `"status": "pending"|"blocked"|"ready"|"executing"|"verifying"|"retry"|"completed"|"failed", ` +
-    `"dependsOn": [], "assignedAgentId": null, "assignedAgentName": null, "crosslinkSessionId": null, ` +
-    `"verification": "pending"|"running"|"passed"|"failed_recoverable"|"failed_terminal", ` +
-    `"lastClassification": null, "chosenNextAction": null, "attempt": 0, ` +
-    `"startedAt": null, "completedAt": null, "updatedAt": "<ISO-8601>", "runId": null}\`.\n\n` +
-    `Set \`runId\` to null for chat-created tickets; the orchestrator fills it for run-decomposed tickets. ` +
-    `When starting a ticket set \`status\` to \`executing\` and \`startedAt\` to now; ` +
-    `when done set \`completed\`/\`failed\` and populate \`completedAt\`. ` +
-    `Always read-modify-write the whole file and refresh \`updatedAt\` on every write.\n\n` +
-    `Decisions: write as JSON files in \`${decisionsDir}/\` with ` +
-    `decisionId, title, description, rationale, alternatives, decidedByName, createdAt.`
+      `Ticket board: \`${ticketsPath}\`\n` +
+      `Decisions dir: \`${decisionsDir}/\`\n\n` +
+      `IMPORTANT: When asked about tickets, always READ \`${ticketsPath}\` first. ` +
+      `Do not guess or say tickets don't exist without checking the file.\n\n` +
+      `This file is the unified board shared by chat and orchestrator runs. ` +
+      `When creating tickets, write to \`${ticketsPath}\` as JSON: ` +
+      `\`{"updatedAt": "<ISO-8601>", "tickets": [<TicketLedgerEntry>...]}\`. ` +
+      `Each ticket must use the full TicketLedgerEntry shape: ` +
+      `\`{"ticketId": "T-1", "title": "...", "specialty": "general"|"ui"|"business_logic"|"api_crud"|"devops"|"testing", ` +
+      `"status": "pending"|"blocked"|"ready"|"executing"|"verifying"|"retry"|"completed"|"failed", ` +
+      `"dependsOn": [], "assignedAgentId": null, "assignedAgentName": null, "crosslinkSessionId": null, ` +
+      `"verification": "pending"|"running"|"passed"|"failed_recoverable"|"failed_terminal", ` +
+      `"lastClassification": null, "chosenNextAction": null, "attempt": 0, ` +
+      `"startedAt": null, "completedAt": null, "updatedAt": "<ISO-8601>", "runId": null}\`.\n\n` +
+      `Set \`runId\` to null for chat-created tickets; the orchestrator fills it for run-decomposed tickets. ` +
+      `When starting a ticket set \`status\` to \`executing\` and \`startedAt\` to now; ` +
+      `when done set \`completed\`/\`failed\` and populate \`completedAt\`. ` +
+      `Always read-modify-write the whole file and refresh \`updatedAt\` on every write.\n\n` +
+      `Decisions: write as JSON files in \`${decisionsDir}/\` with ` +
+      `decisionId, title, description, rationale, alternatives, decidedByName, createdAt.`
   );
 
   return parts.join("\n");
@@ -296,9 +289,7 @@ export async function resolveChannelRefs(input: {
       continue;
     }
 
-    const refName = word
-      .slice(1)
-      .replace(/[.,;:!?]+$/, "");
+    const refName = word.slice(1).replace(/[.,;:!?]+$/, "");
 
     if (!refName || seen.has(refName)) {
       continue;
@@ -307,8 +298,7 @@ export async function resolveChannelRefs(input: {
     const refLower = refName.toLowerCase();
     const channel = channels.find(
       (ch) =>
-        ch.name.toLowerCase() === refLower ||
-        ch.name.toLowerCase().replace(/ /g, "-") === refLower
+        ch.name.toLowerCase() === refLower || ch.name.toLowerCase().replace(/ /g, "-") === refLower
     );
 
     if (!channel) {
@@ -351,9 +341,8 @@ export async function resolveChannelRefs(input: {
       if (existsSync(ticketsPath)) {
         try {
           const ticketContent = readFileSync(ticketsPath, "utf8");
-          const truncated = ticketContent.length > 2000
-            ? ticketContent.slice(0, 2000) + "..."
-            : ticketContent;
+          const truncated =
+            ticketContent.length > 2000 ? ticketContent.slice(0, 2000) + "..." : ticketContent;
 
           contextBlocks.push(
             `\n## Tickets from #${channel.name}\n\`\`\`json\n${truncated}\n\`\`\`\n`
@@ -365,9 +354,8 @@ export async function resolveChannelRefs(input: {
     }
   }
 
-  const resolved = contextBlocks.length > 0
-    ? `${input.message}\n${contextBlocks.join("\n")}`
-    : input.message;
+  const resolved =
+    contextBlocks.length > 0 ? `${input.message}\n${contextBlocks.join("\n")}` : input.message;
 
   return { resolved, refs };
 }

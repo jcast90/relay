@@ -7,15 +7,12 @@ import { describe, expect, it } from "vitest";
 import { NodeCommandInvoker } from "../../src/agents/command-invoker.js";
 import { createLiveAgents } from "../../src/agents/factory.js";
 import { AgentRegistry } from "../../src/agents/registry.js";
-import type {
-  AgentResult,
-  WorkRequest
-} from "../../src/domain/agent.js";
+import type { AgentResult, WorkRequest } from "../../src/domain/agent.js";
 import type { HarnessRun, RunEventType } from "../../src/domain/run.js";
 import {
   initializeTicketLedger,
   parseTicketPlan,
-  type TicketDefinition
+  type TicketDefinition,
 } from "../../src/domain/ticket.js";
 import { ChannelStore } from "../../src/channels/channel-store.js";
 import { LocalArtifactStore } from "../../src/execution/artifact-store.js";
@@ -37,7 +34,7 @@ function ticket(id: string, title = `Ticket ${id}`): TicketDefinition {
     verificationCommands: [],
     docsToUpdate: [],
     dependsOn: [],
-    retryPolicy: { ...RETRY_POLICY }
+    retryPolicy: { ...RETRY_POLICY },
   };
 }
 
@@ -48,7 +45,7 @@ function buildRun(repoRoot: string, tickets: TicketDefinition[]): HarnessRun {
     task: {
       title: "Test run",
       featureRequest: "Test feature",
-      repoRoot
+      repoRoot,
     },
     classification: {
       tier: "feature_small",
@@ -56,11 +53,11 @@ function buildRun(repoRoot: string, tickets: TicketDefinition[]): HarnessRun {
       suggestedSpecialties: ["general"],
       estimatedTicketCount: tickets.length,
       needsDesignDoc: false,
-      needsUserApproval: false
+      needsUserApproval: false,
     },
     tickets,
     finalVerification: { commands: [] },
-    docsToUpdate: []
+    docsToUpdate: [],
   });
 
   return {
@@ -81,7 +78,7 @@ function buildRun(repoRoot: string, tickets: TicketDefinition[]): HarnessRun {
     phaseLedgerPath: null,
     ticketLedger: initializeTicketLedger(tickets),
     ticketLedgerPath: null,
-    runIndexPath: null
+    runIndexPath: null,
   };
 }
 
@@ -92,10 +89,7 @@ interface RecordedEvent {
 }
 
 interface BuildSchedulerOptions {
-  dispatchOverride?: (
-    run: HarnessRun,
-    req: Omit<WorkRequest, "runId">
-  ) => Promise<AgentResult>;
+  dispatchOverride?: (run: HarnessRun, req: Omit<WorkRequest, "runId">) => Promise<AgentResult>;
   onRecordEvent?: (event: RecordedEvent) => void;
   channelStore?: ChannelStore;
 }
@@ -105,14 +99,11 @@ interface BuildSchedulerOptions {
  * commands are proposed, so the built-in verification pass sees an empty
  * command list and trivially succeeds.
  */
-async function buildScheduler(
-  repoRoot: string,
-  options: BuildSchedulerOptions = {}
-) {
+async function buildScheduler(repoRoot: string, options: BuildSchedulerOptions = {}) {
   const registry = new AgentRegistry();
   for (const agent of createLiveAgents({
     cwd: repoRoot,
-    invoker: new ScriptedInvoker(repoRoot)
+    invoker: new ScriptedInvoker(repoRoot),
   })) {
     registry.register(agent);
   }
@@ -121,10 +112,7 @@ async function buildScheduler(
     join(repoRoot, "artifacts"),
     new FileHarnessStore(join(repoRoot, "__hs__"))
   );
-  const verificationRunner = new VerificationRunner(
-    new NodeCommandInvoker(),
-    artifactStore
-  );
+  const verificationRunner = new VerificationRunner(new NodeCommandInvoker(), artifactStore);
 
   const dispatched: WorkRequest[] = [];
   const events: RecordedEvent[] = [];
@@ -138,15 +126,12 @@ async function buildScheduler(
       summary: `ok:${req.kind}`,
       evidence: [],
       proposedCommands: [],
-      blockers: []
+      blockers: [],
     };
   };
 
   const dispatch = options.dispatchOverride
-    ? async (
-        run: HarnessRun,
-        req: Omit<WorkRequest, "runId">
-      ): Promise<AgentResult> => {
+    ? async (run: HarnessRun, req: Omit<WorkRequest, "runId">): Promise<AgentResult> => {
         dispatched.push({ runId: "run-test", ...req });
         return options.dispatchOverride!(run, req);
       }
@@ -194,10 +179,7 @@ describe("TicketScheduler.enqueue", () => {
       expect(ids).toEqual(["t_initial", "t_followup"]);
 
       // And in the ticket plan so snapshots see it.
-      expect(run.ticketPlan!.tickets.map((t) => t.id)).toEqual([
-        "t_initial",
-        "t_followup"
-      ]);
+      expect(run.ticketPlan!.tickets.map((t) => t.id)).toEqual(["t_initial", "t_followup"]);
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }
@@ -268,7 +250,7 @@ describe("TicketScheduler.enqueue", () => {
           if (ev.type === "TicketStarted" && ev.phaseId === "t_poison") {
             throw new Error("boom: synthetic drain failure");
           }
-        }
+        },
       });
 
       // Pre-seed the run via executeAll so the scheduler is idle when the
@@ -296,17 +278,11 @@ describe("TicketScheduler.enqueue", () => {
       // sentinel phaseId, or a console.warn with the scheduler prefix. The
       // production code emits both, but we accept either so the test doesn't
       // pin a specific implementation detail beyond visibility.
-      const tailEvent = events.find(
-        (e) => e.phaseId === "__scheduler_tail__"
-      );
-      const tailWarn = warnCalls.find((w) =>
-        w.includes("[scheduler] tail drain failed")
-      );
+      const tailEvent = events.find((e) => e.phaseId === "__scheduler_tail__");
+      const tailWarn = warnCalls.find((w) => w.includes("[scheduler] tail drain failed"));
       expect(tailEvent || tailWarn).toBeTruthy();
       if (tailEvent) {
-        expect(tailEvent.details.error).toContain(
-          "boom: synthetic drain failure"
-        );
+        expect(tailEvent.details.error).toContain("boom: synthetic drain failure");
       }
       if (tailWarn) {
         expect(tailWarn).toContain("boom: synthetic drain failure");
@@ -369,7 +345,7 @@ describe("TicketScheduler channel board mirror", () => {
       const channelStore = new ChannelStore(join(tmp, "channels"));
       const channel = await channelStore.createChannel({
         name: "#mirror",
-        description: "mirror test"
+        description: "mirror test",
       });
 
       const run = buildRun(tmp, [ticket("t_a"), ticket("t_b")]);
@@ -401,7 +377,7 @@ describe("TicketScheduler channel board mirror", () => {
       const channelStore = new ChannelStore(join(tmp, "channels"));
       const channel = await channelStore.createChannel({
         name: "#mirror-fail",
-        description: "mirror failure test"
+        description: "mirror failure test",
       });
       channelStore.upsertChannelTickets = async () => {
         throw new Error("simulated mirror failure");
@@ -420,9 +396,7 @@ describe("TicketScheduler channel board mirror", () => {
       const mirrorWarn = warnCalls.find((w) =>
         w.includes("[scheduler] channel board mirror failed")
       );
-      const mirrorEvent = events.find(
-        (e) => e.phaseId === "__channel_mirror__"
-      );
+      const mirrorEvent = events.find((e) => e.phaseId === "__channel_mirror__");
       expect(mirrorWarn || mirrorEvent).toBeTruthy();
     } finally {
       console.warn = originalWarn;
@@ -436,7 +410,7 @@ describe("TicketScheduler channel board mirror", () => {
       const channelStore = new ChannelStore(join(tmp, "channels"));
       const channel = await channelStore.createChannel({
         name: "#concurrent",
-        description: "concurrency test"
+        description: "concurrency test",
       });
 
       // Two disjoint upserts fired at once. If upsert read-modified-wrote
@@ -447,7 +421,7 @@ describe("TicketScheduler channel board mirror", () => {
 
       await Promise.all([
         channelStore.upsertChannelTickets(channel.channelId, [a]),
-        channelStore.upsertChannelTickets(channel.channelId, [b])
+        channelStore.upsertChannelTickets(channel.channelId, [b]),
       ]);
 
       const board = await channelStore.readChannelTickets(channel.channelId);

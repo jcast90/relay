@@ -25,13 +25,7 @@ export interface ExecutionResult {
   stderr: string;
 }
 
-export type ExecutionEventKind =
-  | "start"
-  | "stdout"
-  | "stderr"
-  | "tool_use"
-  | "heartbeat"
-  | "exit";
+export type ExecutionEventKind = "start" | "stdout" | "stderr" | "tool_use" | "heartbeat" | "exit";
 
 export interface ExecutionEvent {
   kind: ExecutionEventKind;

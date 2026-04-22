@@ -26,12 +26,12 @@ describe("phase ledger persistence", () => {
             lastClassification: {
               category: "fix_test",
               rationale: "The failure is isolated to verification setup.",
-              nextAction: "Repair the tests before changing product logic."
+              nextAction: "Repair the tests before changing product logic.",
             },
             chosenNextAction: "Repair the tests before changing product logic.",
-            updatedAt: "2026-03-30T00:00:00.000Z"
-          }
-        ]
+            updatedAt: "2026-03-30T00:00:00.000Z",
+          },
+        ],
       });
 
       expect(path).toContain("phase-ledger.json");
@@ -51,11 +51,11 @@ describe("phase ledger persistence", () => {
     } finally {
       await rm(artifactRoot, {
         recursive: true,
-        force: true
+        force: true,
       });
       await rm(storeRoot, {
         recursive: true,
-        force: true
+        force: true,
       });
     }
   });

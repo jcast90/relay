@@ -46,17 +46,11 @@ const ENV_VAR: Record<TrackerKind, string> = {
  *    is fundamentally async.
  */
 export function createTracker(kind: TrackerKind): Tracker;
+export function createTracker(kind: TrackerKind, opts: { token?: undefined }): Tracker;
+export function createTracker(kind: TrackerKind, opts: { token: string }): Promise<Tracker>;
 export function createTracker(
   kind: TrackerKind,
-  opts: { token?: undefined },
-): Tracker;
-export function createTracker(
-  kind: TrackerKind,
-  opts: { token: string },
-): Promise<Tracker>;
-export function createTracker(
-  kind: TrackerKind,
-  opts: { token?: string } = {},
+  opts: { token?: string } = {}
 ): Tracker | Promise<Tracker> {
   const build = (): Tracker =>
     kind === "github" ? githubTracker.create() : linearTracker.create();
@@ -75,11 +69,10 @@ export function createTracker(
 export async function resolveIssue(
   tracker: Tracker,
   identifier: string,
-  project: ProjectConfig,
+  project: ProjectConfig
 ): Promise<HarnessIssue> {
   const issue = await tracker.getIssue(identifier, project);
-  const branchName =
-    issue.branchName ?? tracker.branchName(identifier, project);
+  const branchName = issue.branchName ?? tracker.branchName(identifier, project);
   return {
     id: issue.id,
     title: issue.title,
@@ -91,7 +84,8 @@ export async function resolveIssue(
 }
 
 // GitHub issue URL: https://github.com/<owner>/<repo>/issues/<number>
-const GITHUB_ISSUE_URL = /^https?:\/\/(?:www\.)?github\.com\/[^/]+\/[^/]+\/issues\/\d+(?:[/?#].*)?$/i;
+const GITHUB_ISSUE_URL =
+  /^https?:\/\/(?:www\.)?github\.com\/[^/]+\/[^/]+\/issues\/\d+(?:[/?#].*)?$/i;
 // Linear issue URL: https://linear.app/<workspace>/issue/ABC-123(/...)
 const LINEAR_URL = /^https?:\/\/(?:www\.)?linear\.app\/[^/]+\/issue\/[A-Z][A-Z0-9]*-\d+/i;
 // Bare Linear identifier: ABC-123

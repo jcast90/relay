@@ -3,11 +3,7 @@ import { appendFile, mkdir, readFile, rename, rm, unlink, writeFile } from "node
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import {
-  buildSessionId,
-  type ChatSession,
-  type PersistedChatMessage
-} from "../domain/session.js";
+import { buildSessionId, type ChatSession, type PersistedChatMessage } from "../domain/session.js";
 import { buildHarnessStore } from "../storage/factory.js";
 import { STORE_NS } from "../storage/namespaces.js";
 import type { HarnessStore } from "../storage/store.js";
@@ -86,16 +82,10 @@ export class SessionStore {
    * the Rust/GUI reader expects the path layout documented on
    * `SessionLockRecord`. Only coordination primitives migrate.
    */
-  constructor(
-    channelsDir?: string,
-    store?: HarnessStore,
-    gitExec?: SessionStoreGitExec
-  ) {
+  constructor(channelsDir?: string, store?: HarnessStore, gitExec?: SessionStoreGitExec) {
     this.channelsDir = channelsDir ?? join(getRelayDir(), "channels");
     this.store = store ?? buildHarnessStore();
-    this.gitExec =
-      gitExec ??
-      (async (args, opts) => execFileAsync("git", args, { cwd: opts.cwd }));
+    this.gitExec = gitExec ?? (async (args, opts) => execFileAsync("git", args, { cwd: opts.cwd }));
   }
 
   private sessionsDir(channelId: string): string {
@@ -118,7 +108,7 @@ export class SessionStore {
       createdAt: now,
       updatedAt: now,
       messageCount: 0,
-      claudeSessionIds: {}
+      claudeSessionIds: {},
     };
 
     await mkdir(this.sessionsDir(channelId), { recursive: true });
@@ -160,9 +150,7 @@ export class SessionStore {
       return sessions;
     } catch (err) {
       throw new Error(
-        `Corrupt sessions index at ${path}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+        `Corrupt sessions index at ${path}: ${err instanceof Error ? err.message : String(err)}`,
         { cause: err }
       );
     }
@@ -182,11 +170,7 @@ export class SessionStore {
     }
 
     await this.writeSessions(channelId, sessions);
-    await this.touchLockRecord(
-      channelId,
-      session.sessionId,
-      session.messageCount
-    );
+    await this.touchLockRecord(channelId, session.sessionId, session.messageCount);
   }
 
   async updateClaudeSessionId(
@@ -249,10 +233,7 @@ export class SessionStore {
     // swallow + warn so a coordination-store hiccup doesn't look like a
     // failed session deletion to the caller.
     try {
-      await this.store.deleteDoc(
-        STORE_NS.session,
-        lockRecordId(channelId, sessionId)
-      );
+      await this.store.deleteDoc(STORE_NS.session, lockRecordId(channelId, sessionId));
     } catch (err) {
       console.warn(
         `[session-store] coordination-record delete failed (channelId=${channelId}, sessionId=${sessionId}): ${
@@ -271,11 +252,13 @@ export class SessionStore {
       const prefix = `refs/harness-rewind/${sessionId}/`;
       let refs: string[] = [];
       try {
-        const { stdout } = await this.gitExec(
-          ["for-each-ref", "--format=%(refname)", prefix],
-          { cwd: repoPath }
-        );
-        refs = stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+        const { stdout } = await this.gitExec(["for-each-ref", "--format=%(refname)", prefix], {
+          cwd: repoPath,
+        });
+        refs = stdout
+          .split("\n")
+          .map((l) => l.trim())
+          .filter(Boolean);
       } catch (err) {
         console.warn(
           `[session-store] for-each-ref failed in ${repoPath} while pruning rewind refs for session ${sessionId}: ${
@@ -379,7 +362,10 @@ export class SessionStore {
       }
       throw err;
     }
-    const lines = content.trimEnd().split("\n").filter((l) => l.length > 0);
+    const lines = content
+      .trimEnd()
+      .split("\n")
+      .filter((l) => l.length > 0);
     const kept: string[] = [];
     let removed = 0;
     for (const line of lines) {
@@ -419,10 +405,7 @@ export class SessionStore {
    * the next message after a rollback starts a fresh Claude conversation
    * (Claude can't itself be rewound server-side).
    */
-  async clearClaudeSessionIds(
-    channelId: string,
-    sessionId: string
-  ): Promise<ChatSession | null> {
+  async clearClaudeSessionIds(channelId: string, sessionId: string): Promise<ChatSession | null> {
     const session = await this.getSession(channelId, sessionId);
     if (!session) return null;
     session.claudeSessionIds = {};
@@ -440,7 +423,10 @@ export class SessionStore {
 
     try {
       const content = await readFile(path, "utf8");
-      const lines = content.trimEnd().split("\n").filter((l) => l.length > 0);
+      const lines = content
+        .trimEnd()
+        .split("\n")
+        .filter((l) => l.length > 0);
       const messages: PersistedChatMessage[] = [];
 
       // Note on line numbering: `slice(-limit)` means the loop index is the
@@ -519,7 +505,7 @@ export class SessionStore {
         lockRecordId(channelId, sessionId),
         () => ({
           updatedAt: new Date().toISOString(),
-          messageCount
+          messageCount,
         })
       );
     } catch (err) {

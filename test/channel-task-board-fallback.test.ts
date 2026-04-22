@@ -9,10 +9,7 @@ import { callChannelTool, type ChannelToolState } from "../src/mcp/channel-tools
 import { initializeTicketLedger } from "../src/domain/ticket.js";
 import type { TicketDefinition, TicketLedgerEntry } from "../src/domain/ticket.js";
 
-function makeTicket(
-  id: string,
-  overrides: Partial<TicketDefinition> = {}
-): TicketDefinition {
+function makeTicket(id: string, overrides: Partial<TicketDefinition> = {}): TicketDefinition {
   return {
     id,
     title: `Ticket ${id}`,
@@ -24,16 +21,13 @@ function makeTicket(
     docsToUpdate: [],
     dependsOn: [],
     retryPolicy: { maxAgentAttempts: 1, maxTestFixLoops: 1 },
-    ...overrides
+    ...overrides,
   };
 }
 
 interface BoardResult {
   channelId: string;
-  board: Record<
-    string,
-    Array<{ ticketId: string; title: string; runId: string | null }>
-  >;
+  board: Record<string, Array<{ ticketId: string; title: string; runId: string | null }>>;
 }
 
 describe("channel_task_board MCP tool — unified + fallback", () => {
@@ -42,7 +36,7 @@ describe("channel_task_board MCP tool — unified + fallback", () => {
     const channelStore = new ChannelStore(dir);
     const channel = await channelStore.createChannel({
       name: "#empty",
-      description: ""
+      description: "",
     });
 
     try {
@@ -65,14 +59,14 @@ describe("channel_task_board MCP tool — unified + fallback", () => {
     const channelStore = new ChannelStore(dir);
     const channel = await channelStore.createChannel({
       name: "#populated",
-      description: ""
+      description: "",
     });
 
     try {
       // Populate the channel file with a mix of chat (runId=null) + orchestrator (runId set).
       const ledger: TicketLedgerEntry[] = [
         ...initializeTicketLedger([makeTicket("T-chat")], null),
-        ...initializeTicketLedger([makeTicket("T-run")], "run-alpha")
+        ...initializeTicketLedger([makeTicket("T-run")], "run-alpha"),
       ];
       await channelStore.writeChannelTickets(channel.channelId, ledger);
 
@@ -80,11 +74,7 @@ describe("channel_task_board MCP tool — unified + fallback", () => {
       // if the fallback ever activates, we'd see a crash or missing ticket.
       // The unified-read path must ignore the run link entirely when the
       // channel file is non-empty.
-      await channelStore.linkRun(
-        channel.channelId,
-        "ghost-run",
-        "ghost-workspace"
-      );
+      await channelStore.linkRun(channel.channelId, "ghost-run", "ghost-workspace");
 
       const state: ChannelToolState = { sessionId: null, channelStore };
       const result = (await callChannelTool(
@@ -111,7 +101,7 @@ describe("channel_task_board MCP tool — unified + fallback", () => {
     const channelStore = new ChannelStore(dir);
     const channel = await channelStore.createChannel({
       name: "#corrupt",
-      description: ""
+      description: "",
     });
 
     try {
@@ -124,11 +114,7 @@ describe("channel_task_board MCP tool — unified + fallback", () => {
 
       const state: ChannelToolState = { sessionId: null, channelStore };
       await expect(
-        callChannelTool(
-          "channel_task_board",
-          { channelId: channel.channelId },
-          state
-        )
+        callChannelTool("channel_task_board", { channelId: channel.channelId }, state)
       ).rejects.toThrow(/Corrupt channel ticket board/);
     } finally {
       await rm(dir, { recursive: true, force: true });

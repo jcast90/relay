@@ -132,14 +132,14 @@ Relay's classifier picks it up, plans the work, and either executes or asks for 
 
 ### Complexity tiers
 
-| Tier | Behavior |
-|---|---|
-| `trivial` | Heuristic match (typo, rename, lint) — single ticket, skip planning |
-| `bugfix` | Heuristic match — debug-first flow |
-| `feature_small` | LLM classification — lightweight plan, no approval |
-| `feature_large` | Full plan + **user approval required** via MCP |
-| `architectural` | Design-doc phase → plan → approval |
-| `multi_repo` | Like `feature_large` + crosslink coordination across repos |
+| Tier            | Behavior                                                            |
+| --------------- | ------------------------------------------------------------------- |
+| `trivial`       | Heuristic match (typo, rename, lint) — single ticket, skip planning |
+| `bugfix`        | Heuristic match — debug-first flow                                  |
+| `feature_small` | LLM classification — lightweight plan, no approval                  |
+| `feature_large` | Full plan + **user approval required** via MCP                      |
+| `architectural` | Design-doc phase → plan → approval                                  |
+| `multi_repo`    | Like `feature_large` + crosslink coordination across repos          |
 
 ## Key concepts
 
@@ -240,41 +240,41 @@ Right pane shows repo assignments (with `PRIMARY` badge), pinned refs, and — w
 
 ## CLI reference
 
-| Command | What it does |
-|---|---|
-| `rly welcome` | 6-step interactive tour (pass `--reset` to replay) |
-| `rly up` | Register the current repo in the global workspace |
-| `rly status` | Workspace paths + recent runs |
-| `rly list-runs` | Recent persisted runs across workspaces |
-| `rly list-workspaces` | All registered workspaces |
-| `rly claude` | Launch Claude with Relay MCP attached |
-| `rly codex` | Launch Codex with Relay MCP attached |
-| `rly channels` | List channels (most-recently-active first) |
-| `rly channel create <name> [--repos alias:wsId:path,...] [--primary <alias>]` | Create a channel |
-| `rly channel update <id> [--repos ...] [--primary <alias>]` | Update repos / primary |
-| `rly channel archive <id>` | Archive a channel |
-| `rly channel <id>` | Show channel details + recent feed |
-| `rly channel feed <id> [--limit N]` | Raw feed entries |
-| `rly channel post <id> <content> [--from <name>] [--type <type>]` | Post to the feed |
-| `rly running` | Active tasks across every workspace |
-| `rly board <channelId>` | Kanban view of the ticket board |
-| `rly decisions <channelId>` | Decision history |
-| `rly pr-watch <url-or-#> [--branch <b>] [--ticket <id>] [--channel <id>]` | Manually track a PR |
-| `rly pr-status [--channel <id>] [--json]` | List tracked PRs with CI + review state (reads the on-disk mirror when no orchestrator is running) |
-| `rly approve <runId>` | Approve a pending plan (same code path as `harness_approve_plan` MCP tool) |
-| `rly reject <runId> [--feedback "…"]` | Reject a pending plan |
-| `rly pending-plans [--json]` | List runs awaiting plan-approval decisions |
-| `rly chat rewind --channel <id> --session <id> [--to <iso> \| --interactive]` | Roll repos + session transcript back to a rewindable user turn |
-| `rly crosslink status` | Active cross-session chatter |
-| `rly tui` | Terminal dashboard (auto-builds on first run) |
-| `rly gui [--dev] [--rebuild]` | Desktop dashboard |
-| `rly rebuild [--all] [--dist] [--tui] [--gui] [--skip-install]` | Rebuild artifacts (runs `pnpm install` first unless skipped) |
-| `rly doctor` | Diagnostics: paths, MCP wiring, token presence |
-| `rly session <create\|list\|get\|delete\|...>` | Session-transcript management |
-| `rly chat <system-prompt\|resolve-refs\|mcp-config>` | Chat plumbing used by the TUI/GUI |
-| `rly config <add-project-dir\|remove-project-dir>` | Global config |
-| `rly mcp-server --workspace <path>` | Run the MCP server (invoked by Claude/Codex automatically) |
-| `rly inspect-mcp` | Show the live MCP tool catalogue |
+| Command                                                                       | What it does                                                                                       |
+| ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `rly welcome`                                                                 | 6-step interactive tour (pass `--reset` to replay)                                                 |
+| `rly up`                                                                      | Register the current repo in the global workspace                                                  |
+| `rly status`                                                                  | Workspace paths + recent runs                                                                      |
+| `rly list-runs`                                                               | Recent persisted runs across workspaces                                                            |
+| `rly list-workspaces`                                                         | All registered workspaces                                                                          |
+| `rly claude`                                                                  | Launch Claude with Relay MCP attached                                                              |
+| `rly codex`                                                                   | Launch Codex with Relay MCP attached                                                               |
+| `rly channels`                                                                | List channels (most-recently-active first)                                                         |
+| `rly channel create <name> [--repos alias:wsId:path,...] [--primary <alias>]` | Create a channel                                                                                   |
+| `rly channel update <id> [--repos ...] [--primary <alias>]`                   | Update repos / primary                                                                             |
+| `rly channel archive <id>`                                                    | Archive a channel                                                                                  |
+| `rly channel <id>`                                                            | Show channel details + recent feed                                                                 |
+| `rly channel feed <id> [--limit N]`                                           | Raw feed entries                                                                                   |
+| `rly channel post <id> <content> [--from <name>] [--type <type>]`             | Post to the feed                                                                                   |
+| `rly running`                                                                 | Active tasks across every workspace                                                                |
+| `rly board <channelId>`                                                       | Kanban view of the ticket board                                                                    |
+| `rly decisions <channelId>`                                                   | Decision history                                                                                   |
+| `rly pr-watch <url-or-#> [--branch <b>] [--ticket <id>] [--channel <id>]`     | Manually track a PR                                                                                |
+| `rly pr-status [--channel <id>] [--json]`                                     | List tracked PRs with CI + review state (reads the on-disk mirror when no orchestrator is running) |
+| `rly approve <runId>`                                                         | Approve a pending plan (same code path as `harness_approve_plan` MCP tool)                         |
+| `rly reject <runId> [--feedback "…"]`                                         | Reject a pending plan                                                                              |
+| `rly pending-plans [--json]`                                                  | List runs awaiting plan-approval decisions                                                         |
+| `rly chat rewind --channel <id> --session <id> [--to <iso> \| --interactive]` | Roll repos + session transcript back to a rewindable user turn                                     |
+| `rly crosslink status`                                                        | Active cross-session chatter                                                                       |
+| `rly tui`                                                                     | Terminal dashboard (auto-builds on first run)                                                      |
+| `rly gui [--dev] [--rebuild]`                                                 | Desktop dashboard                                                                                  |
+| `rly rebuild [--all] [--dist] [--tui] [--gui] [--skip-install]`               | Rebuild artifacts (runs `pnpm install` first unless skipped)                                       |
+| `rly doctor`                                                                  | Diagnostics: paths, MCP wiring, token presence                                                     |
+| `rly session <create\|list\|get\|delete\|...>`                                | Session-transcript management                                                                      |
+| `rly chat <system-prompt\|resolve-refs\|mcp-config>`                          | Chat plumbing used by the TUI/GUI                                                                  |
+| `rly config <add-project-dir\|remove-project-dir>`                            | Global config                                                                                      |
+| `rly mcp-server --workspace <path>`                                           | Run the MCP server (invoked by Claude/Codex automatically)                                         |
+| `rly inspect-mcp`                                                             | Show the live MCP tool catalogue                                                                   |
 
 The legacy `agent-harness <cmd>` alias is accepted for all commands so existing scripts keep working.
 
@@ -349,17 +349,17 @@ Verification commands run through an `Executor` abstraction (`src/execution/exec
 
 ### Environment flags
 
-| Var / flag | Effect |
-|---|---|
-| `HARNESS_LIVE=1` | Use real Claude/Codex adapters instead of the scripted demo |
-| `RELAY_AUTO_APPROVE=1` / `--auto-approve` / `--yolo` | Unattended mode — no permission prompts. Required for multi-hour runs |
-| `RELAY_USE_DIST=1` | Run pre-built `dist/cli.js` instead of live source via `tsx`. Marginally faster startup; stale until `rly rebuild` |
-| `GITHUB_TOKEN` | GitHub issues + PR watcher |
-| `LINEAR_API_KEY` (or `COMPOSIO_API_KEY`) | Linear issues |
-| `CLAUDE_BIN` | Override the `claude` binary path (default: `claude` on `$PATH`) |
-| `RELAY_QUIET=1` / `--quiet` / `--silent` | Suppress inline tool-use activity during `rly run` |
-| `--sequential` | Use the v1 sequential orchestrator instead of v2 ticket-based |
-| `--no-harness-mcp` | Launch Claude/Codex without attaching the Relay MCP server |
+| Var / flag                                           | Effect                                                                                                             |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `HARNESS_LIVE=1`                                     | Use real Claude/Codex adapters instead of the scripted demo                                                        |
+| `RELAY_AUTO_APPROVE=1` / `--auto-approve` / `--yolo` | Unattended mode — no permission prompts. Required for multi-hour runs                                              |
+| `RELAY_USE_DIST=1`                                   | Run pre-built `dist/cli.js` instead of live source via `tsx`. Marginally faster startup; stale until `rly rebuild` |
+| `GITHUB_TOKEN`                                       | GitHub issues + PR watcher                                                                                         |
+| `LINEAR_API_KEY` (or `COMPOSIO_API_KEY`)             | Linear issues                                                                                                      |
+| `CLAUDE_BIN`                                         | Override the `claude` binary path (default: `claude` on `$PATH`)                                                   |
+| `RELAY_QUIET=1` / `--quiet` / `--silent`             | Suppress inline tool-use activity during `rly run`                                                                 |
+| `--sequential`                                       | Use the v1 sequential orchestrator instead of v2 ticket-based                                                      |
+| `--no-harness-mcp`                                   | Launch Claude/Codex without attaching the Relay MCP server                                                         |
 
 ### File layout
 
@@ -438,12 +438,12 @@ cargo check --workspace       # all three Rust crates
 
 Per-area quick loops:
 
-| What | Loop |
-|---|---|
-| Edit TS source, see CLI change | Just save — `rly` reads `src/` live via `tsx` (no rebuild) |
-| Edit Rust TUI | `rly rebuild --tui` |
-| Edit Tauri GUI | `rly gui --dev` (hot reload) |
-| After `git pull` pulled new deps | `rly rebuild` (runs `pnpm install` first) |
+| What                             | Loop                                                       |
+| -------------------------------- | ---------------------------------------------------------- |
+| Edit TS source, see CLI change   | Just save — `rly` reads `src/` live via `tsx` (no rebuild) |
+| Edit Rust TUI                    | `rly rebuild --tui`                                        |
+| Edit Tauri GUI                   | `rly gui --dev` (hot reload)                               |
+| After `git pull` pulled new deps | `rly rebuild` (runs `pnpm install` first)                  |
 
 ### Testing conventions
 

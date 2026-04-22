@@ -27,9 +27,7 @@ export async function readConfig(): Promise<HarnessGlobalConfig> {
   try {
     const raw = JSON.parse(await readFile(configPath(), "utf8")) as Partial<HarnessGlobalConfig>;
     return {
-      projectDirs: Array.isArray(raw.projectDirs)
-        ? raw.projectDirs.map(expandHome)
-        : []
+      projectDirs: Array.isArray(raw.projectDirs) ? raw.projectDirs.map(expandHome) : [],
     };
   } catch {
     return { projectDirs: [] };

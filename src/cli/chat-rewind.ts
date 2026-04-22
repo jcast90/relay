@@ -54,14 +54,8 @@ export interface RewindApplyResult {
  */
 export interface RewindDeps {
   channelStore: Pick<ChannelStore, "getChannel">;
-  sessionStore: Pick<
-    SessionStore,
-    "truncateBeforeTimestamp" | "clearClaudeSessionIds"
-  >;
-  gitExec: (
-    args: string[],
-    opts: { cwd: string }
-  ) => Promise<{ stdout: string; stderr: string }>;
+  sessionStore: Pick<SessionStore, "truncateBeforeTimestamp" | "clearClaudeSessionIds">;
+  gitExec: (args: string[], opts: { cwd: string }) => Promise<{ stdout: string; stderr: string }>;
   /** Injectable clock for deterministic test keys. Defaults to `Date.now`. */
   now?: () => number;
 }
@@ -70,7 +64,7 @@ export function defaultRewindDeps(): RewindDeps {
   return {
     channelStore: new ChannelStore(undefined, getHarnessStore()),
     sessionStore: new SessionStore(),
-    gitExec: async (args, opts) => execFileAsync("git", args, { cwd: opts.cwd })
+    gitExec: async (args, opts) => execFileAsync("git", args, { cwd: opts.cwd }),
   };
 }
 
@@ -99,22 +93,20 @@ export async function rewindSnapshot(
   for (const assignment of repos) {
     const refName = rewindRefName(sessionId, key);
     const { stdout: shaOut } = await deps.gitExec(["rev-parse", "HEAD"], {
-      cwd: assignment.repoPath
+      cwd: assignment.repoPath,
     });
     const sha = shaOut.trim();
     if (!sha) {
-      throw new Error(
-        `git rev-parse HEAD produced empty output in ${assignment.repoPath}`
-      );
+      throw new Error(`git rev-parse HEAD produced empty output in ${assignment.repoPath}`);
     }
     await deps.gitExec(["update-ref", refName, sha], {
-      cwd: assignment.repoPath
+      cwd: assignment.repoPath,
     });
     snapshots.push({
       alias: assignment.alias,
       repoPath: assignment.repoPath,
       sha,
-      ref: refName
+      ref: refName,
     });
   }
   return { key, snapshots };
@@ -149,10 +141,9 @@ export async function rewindApply(
   for (const assignment of repos) {
     let sha: string;
     try {
-      const { stdout } = await deps.gitExec(
-        ["rev-parse", "--verify", `${refName}^{commit}`],
-        { cwd: assignment.repoPath }
-      );
+      const { stdout } = await deps.gitExec(["rev-parse", "--verify", `${refName}^{commit}`], {
+        cwd: assignment.repoPath,
+      });
       sha = stdout.trim();
     } catch (err) {
       throw new Error(
@@ -170,7 +161,7 @@ export async function rewindApply(
     let porcelain: string;
     try {
       const { stdout } = await deps.gitExec(["status", "--porcelain"], {
-        cwd: assignment.repoPath
+        cwd: assignment.repoPath,
       });
       porcelain = stdout;
     } catch (err) {
@@ -196,7 +187,7 @@ export async function rewindApply(
     reset.push({
       alias: assignment.alias,
       repoPath: assignment.repoPath,
-      sha
+      sha,
     });
   }
 
@@ -209,10 +200,7 @@ export async function rewindApply(
     sessionId,
     messageTimestamp
   );
-  const cleared = await deps.sessionStore.clearClaudeSessionIds(
-    channelId,
-    sessionId
-  );
+  const cleared = await deps.sessionStore.clearClaudeSessionIds(channelId, sessionId);
 
   return { reset, removedMessages, clearedClaudeSessions: cleared !== null };
 }
