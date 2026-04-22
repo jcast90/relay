@@ -6,6 +6,7 @@ export {
   type ApprovalStatus,
   type ApprovalsQueueOptions,
   type CreateTicketPayload,
+  type EnqueueAutoApprovedInput,
   type EnqueueInput,
   type ListOptions,
   type MergePrPayload,

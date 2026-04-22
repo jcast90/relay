@@ -102,6 +102,13 @@ export interface ApprovalRecord {
   decidedAt?: string;
   /** Free-form operator feedback supplied on `reject()`. */
   feedback?: string;
+  /** Marker set when the record bypassed human review. Today the only value
+   * is `"god-mode"`: the record was auto-approved by
+   * {@link "./trust-gate".decide} because the session runs in
+   * `--trust god` with `RELAY_AL7_GOD_AUTOMERGE=1`. Present so the AL-8
+   * review UI can flag auto-approvals visually and so audit tooling can
+   * distinguish "an operator explicitly approved" from "god mode ran". */
+  autoApprovedBy?: "god-mode";
 }
 
 /** Input to {@link ApprovalsQueue.enqueue}. The queue owns `id`, `createdAt`,
@@ -110,6 +117,21 @@ export interface EnqueueInput {
   sessionId: string;
   kind: ApprovalKind;
   payload: MergePrPayload | CreateTicketPayload;
+}
+
+/**
+ * Input to {@link ApprovalsQueue.enqueueAutoApproved}. Separate from
+ * {@link EnqueueInput} because the caller is `trust-gate.decide`'s god-mode
+ * branch — there is no human in the loop, so we write the record in a
+ * terminal `approved` state with an `autoApprovedBy` marker instead of
+ * letting it sit `pending`.
+ */
+export interface EnqueueAutoApprovedInput {
+  sessionId: string;
+  kind: ApprovalKind;
+  payload: MergePrPayload | CreateTicketPayload;
+  /** Who / what auto-approved. Today only `"god-mode"` is defined. */
+  autoApprovedBy: "god-mode";
 }
 
 /** Filter options for {@link ApprovalsQueue.list}. */
@@ -130,27 +152,70 @@ export interface ApprovalsQueueOptions {
 }
 
 /**
+ * Regex guarding every public queue method that takes a `sessionId`. The
+ * session id is spliced directly into a filesystem path
+ * (`~/.relay/approvals/<sessionId>/queue.jsonl`), so we reject anything
+ * that would let a caller escape `rootDir` (`../`, absolute paths, null
+ * bytes, or any character that could be interpreted as a path separator
+ * on the platforms we support). The generator in
+ * `src/orchestrator/autonomous-loop.ts` only produces UUID-shaped ids, so
+ * this is conservative by design.
+ */
+const VALID_SESSION_ID = /^[A-Za-z0-9_-]+$/;
+
+function assertValidSessionId(sessionId: string): void {
+  if (typeof sessionId !== "string" || !VALID_SESSION_ID.test(sessionId)) {
+    throw new Error(
+      `approvals queue: invalid sessionId ${JSON.stringify(sessionId)}; ` +
+        `expected /^[A-Za-z0-9_-]+$/`
+    );
+  }
+}
+
+/**
  * File-backed approvals queue. One queue file per autonomous session lives
  * at `~/.relay/approvals/<sessionId>/queue.jsonl`.
  *
  * Concurrency model:
- *   - `enqueue` appends one line (atomic on POSIX for a single <PIPE_BUF
- *     write). Multiple `enqueue` calls from the same process never
- *     interleave bytes.
+ *   - `enqueue` appends one line. Within a single process, sequential
+ *     awaits serialize naturally and a single `appendFile` call with a
+ *     small line is effectively best-effort atomic on a local filesystem.
+ *     The original POSIX-`O_APPEND` guarantee applies to pipes up to
+ *     `PIPE_BUF`, not regular files on every filesystem we care about
+ *     (network mounts, Windows, some FUSE overlays) — two CLI / TUI / GUI
+ *     appenders CAN interleave bytes on those. The recovery path is in
+ *     `list`: unparseable (torn / interleaved) lines are skipped, so a
+ *     cross-process interleave at worst loses the malformed record, not
+ *     the whole file. Callers that need stronger guarantees against a
+ *     known-busy session should call {@link ApprovalsQueue.compact}
+ *     during quiescent windows to collapse the JSONL to a canonical form.
  *   - `approve` / `reject` append a *new* record with the same `id` and
  *     an updated `status` / `decidedAt` / `feedback`. `list` collapses to
- *     the newest entry per id. This makes every mutation a single atomic
- *     append — no read-modify-write races — at the cost of a log that
- *     grows linearly with decision count. For AL-7's scale (human-rate
+ *     the newest entry per id. This makes every mutation a single append —
+ *     no read-modify-write races — at the cost of a log that grows
+ *     linearly with decision count. For AL-7's scale (human-rate
  *     approvals, tens per session) this is cheap and the simplicity is
  *     worth more than compaction.
- *   - Crashes mid-write leave at worst a truncated trailing line, which
- *     `list` tolerates by skipping unparseable lines with a warning.
+ *   - Crashes mid-write leave at worst a truncated or interleaved line,
+ *     which `list` tolerates by skipping unparseable records. Two valid
+ *     records with a torn record between them are both recovered; the
+ *     half-record is silently dropped (see the "torn-write between two
+ *     valid records" test in `test/approvals/queue.test.ts`).
+ *
+ * Trade-off: we deliberately did NOT adopt `proper-lockfile` or a
+ * hand-rolled advisory lock here. The skip-unparseable recovery covers
+ * the realistic failure modes (same-process sequential-await serializes
+ * already; cross-process interleaving only corrupts the interleaved
+ * record, not its neighbours), and introducing a lockfile dep for this
+ * one writer would create its own failure modes (stale locks blocking a
+ * session after a crashed CLI / TUI process). If a future AL-8 surface
+ * starts writing high-frequency batched state from multiple processes,
+ * revisit this.
  *
  * The queue file is append-only in the file-system sense (no in-place
  * mutation), matching the repo-wide convention from
  * `channel-store.postEntry` / `feed.jsonl`. Callers must NOT rewrite the
- * file; they must go through `enqueue` / `approve` / `reject`.
+ * file; they must go through `enqueue` / `approve` / `reject` / `compact`.
  */
 export class ApprovalsQueue {
   private readonly rootDir: string;
@@ -166,8 +231,13 @@ export class ApprovalsQueue {
   /**
    * Compute the queue-file path for a session. Exposed primarily for tests
    * and the AL-8 CLI — internal callers go through the other methods.
+   *
+   * The `sessionId` is validated against {@link VALID_SESSION_ID} before the
+   * path is built, so a caller that hand-crafts a `../` string can't escape
+   * `rootDir`.
    */
   queuePath(sessionId: string): string {
+    assertValidSessionId(sessionId);
     return join(this.rootDir, "approvals", sessionId, "queue.jsonl");
   }
 
@@ -177,6 +247,7 @@ export class ApprovalsQueue {
    * decision entry without a second read of the queue file.
    */
   async enqueue(input: EnqueueInput): Promise<ApprovalRecord> {
+    assertValidSessionId(input.sessionId);
     const record: ApprovalRecord = {
       id: this.idFactory(),
       sessionId: input.sessionId,
@@ -188,10 +259,42 @@ export class ApprovalsQueue {
 
     const path = this.queuePath(input.sessionId);
     await mkdir(join(this.rootDir, "approvals", input.sessionId), { recursive: true });
-    // `appendFile` with a single <PIPE_BUF line is atomic on POSIX — no
-    // interleave with concurrent appenders from the same process. Matches
-    // the pattern from `src/budget/token-tracker.ts` and
-    // `src/channels/channel-store.ts`.
+    // Single-line append. Sequential awaits inside a single process
+    // serialize naturally; cross-process interleaving is tolerated by
+    // `list()`'s skip-unparseable recovery path. See the class docstring
+    // for the concurrency trade-off.
+    await appendFile(path, JSON.stringify(record) + "\n", "utf8");
+    return record;
+  }
+
+  /**
+   * Append a record that is born in a terminal `approved` state with an
+   * `autoApprovedBy` marker. Used by {@link "./trust-gate".decide}'s
+   * god-mode execute path so every god-mode execution still leaves a
+   * persistent audit trail — without this, a stale
+   * `RELAY_AL7_GOD_AUTOMERGE=1` would merge PRs with no queue evidence.
+   *
+   * `createdAt` and `decidedAt` are stamped identically (both from
+   * `clock()` at call time): the record was created + decided in the same
+   * instant by the gate. `feedback` is intentionally left absent — god-mode
+   * approvals have no operator-supplied reason.
+   */
+  async enqueueAutoApproved(input: EnqueueAutoApprovedInput): Promise<ApprovalRecord> {
+    assertValidSessionId(input.sessionId);
+    const stamp = new Date(this.clock()).toISOString();
+    const record: ApprovalRecord = {
+      id: this.idFactory(),
+      sessionId: input.sessionId,
+      kind: input.kind,
+      payload: input.payload,
+      createdAt: stamp,
+      status: "approved",
+      decidedAt: stamp,
+      autoApprovedBy: input.autoApprovedBy,
+    };
+
+    const path = this.queuePath(input.sessionId);
+    await mkdir(join(this.rootDir, "approvals", input.sessionId), { recursive: true });
     await appendFile(path, JSON.stringify(record) + "\n", "utf8");
     return record;
   }
@@ -305,10 +408,22 @@ export class ApprovalsQueue {
    * exposed so operators / AL-8 can compact a long-running session's
    * queue offline without touching live state.
    *
-   * Write is atomic (tmp + rename) so a crash mid-compact leaves the
-   * original file intact.
+   * Write is file-level atomic (tmp + rename) so a crash mid-compact
+   * leaves the original file intact.
+   *
+   * Concurrency caveat: `compact` does a read-then-rename. A concurrent
+   * `enqueue` / `approve` / `reject` that lands AFTER {@link list} has
+   * read but BEFORE `rename` overwrites the file will be silently
+   * dropped. This class deliberately does not take a file lock (see the
+   * class-level concurrency docstring). Callers MUST only compact during
+   * quiescent windows — the intended call site is session shutdown (all
+   * writers stopped) or an explicit AL-8 "compact" CLI command the
+   * operator runs against an idle session. Do NOT call `compact` from
+   * inside a live driver loop while other agents may still be queuing
+   * approvals.
    */
   async compact(sessionId: string): Promise<number> {
+    assertValidSessionId(sessionId);
     const records = await this.list(sessionId);
     const path = this.queuePath(sessionId);
     await mkdir(join(this.rootDir, "approvals", sessionId), { recursive: true });

@@ -256,11 +256,35 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
   // land their driver hooks, each of their ack-requiring outputs must be
   // threaded through `decide({trust: opts.trust, ...})` from
   // `src/approvals/trust-gate.ts`. Under `supervised` the decision writes
-  // a record to `~/.relay/approvals/<sessionId>/queue.jsonl`; under `god`
-  // with `RELAY_AL7_GOD_AUTOMERGE=1` it returns `{kind: "execute"}` and
-  // the caller performs the merge / ticket write directly. AL-7 itself
-  // only produces + consumes the queue file; AL-8 owns the approve / reject
-  // CLI surface.
+  // a pending record to `~/.relay/approvals/<sessionId>/queue.jsonl`;
+  // under `god` with `RELAY_AL7_GOD_AUTOMERGE=1` it writes an auto-approved
+  // record (tagged `autoApprovedBy: "god-mode"`) AND returns
+  // `{kind: "execute", auditRecordId, record}` so the caller performs the
+  // merge / ticket write directly while the audit trail is already on
+  // disk. AL-7 itself only produces + consumes the queue file; AL-8 owns
+  // the approve / reject CLI surface.
+  //
+  // Concrete instantiation hint for AL-5 / AL-6 implementers — construct
+  // the queue once at the start of the driver loop and thread the same
+  // instance into every `decide()` call:
+  //
+  //   import { ApprovalsQueue, decide } from "../approvals/index.js";
+  //   import { getRelayDir } from "../cli/paths.js";
+  //
+  //   const approvalsQueue = opts.approvalsQueue
+  //     ?? new ApprovalsQueue({ rootDir: getRelayDir() });
+  //
+  //   // at PR-review-complete:
+  //   const outcome = await decide({
+  //     sessionId,
+  //     trust: opts.trust,
+  //     queue: approvalsQueue,
+  //     action: { kind: "merge-pr", payload: { prUrl, reviewSummary } },
+  //   });
+  //   if (outcome.kind === "execute") { /* perform the merge */ }
+  //
+  // The `opts.approvalsQueue` fallback exists so the AL-4 driver test can
+  // inject a tmp-dir-backed queue without touching `~/.relay/`.
   //
   // TODO(AL-5): at PR-review-complete, call `decide({..., action: {kind:
   //   "merge-pr", payload: {prUrl, reviewSummary}}})` and branch on the

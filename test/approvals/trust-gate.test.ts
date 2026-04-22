@@ -112,7 +112,7 @@ describe("trust-gate.decide", () => {
       expect(list).toHaveLength(1);
     });
 
-    it("executes when RELAY_AL7_GOD_AUTOMERGE=1", async () => {
+    it("executes when RELAY_AL7_GOD_AUTOMERGE=1 and writes an auto-approved audit record", async () => {
       const result = await decide({
         sessionId: "sess-1",
         trust: "god",
@@ -125,12 +125,23 @@ describe("trust-gate.decide", () => {
       });
 
       expect(result.kind).toBe("execute");
-      // Execute branch performs NO side effects; queue stays empty.
+      if (result.kind !== "execute") throw new Error("unreachable");
+      // Execute branch writes an audit record so god-mode executions are
+      // not invisible — the record is born approved + tagged "god-mode".
+      expect(result.auditRecordId).toBe("id-1");
+      expect(result.record.status).toBe("approved");
+      expect(result.record.autoApprovedBy).toBe("god-mode");
+      expect(result.record.decidedAt).toBe("2026-01-01T00:00:00.000Z");
+
       const list = await queue.list("sess-1");
-      expect(list).toEqual([]);
+      expect(list).toHaveLength(1);
+      expect(list[0]!.id).toBe(result.auditRecordId);
+      expect(list[0]!.status).toBe("approved");
+      expect(list[0]!.autoApprovedBy).toBe("god-mode");
+      expect(list[0]!.kind).toBe("merge-pr");
     });
 
-    it("executes for create-ticket actions too", async () => {
+    it("executes for create-ticket actions too and also writes an audit record", async () => {
       const result = await decide({
         sessionId: "sess-1",
         trust: "god",
@@ -142,6 +153,12 @@ describe("trust-gate.decide", () => {
         },
       });
       expect(result.kind).toBe("execute");
+      if (result.kind !== "execute") throw new Error("unreachable");
+      expect(result.record.autoApprovedBy).toBe("god-mode");
+      expect(result.record.kind).toBe("create-ticket");
+      const list = await queue.list("sess-1");
+      expect(list).toHaveLength(1);
+      expect(list[0]!.autoApprovedBy).toBe("god-mode");
     });
 
     it("treats typos / empty strings as off, not on", async () => {
@@ -201,6 +218,14 @@ describe("isGodAutomergeEnabled", () => {
     }
   });
 
+  it("trims surrounding whitespace before matching true-ish values", () => {
+    // Env files / shell quirks sometimes leave padding on `RELAY_AL7_GOD_AUTOMERGE=" 1 "`.
+    // The parser trims before comparing, so these must still parse as true.
+    for (const v of [" 1 ", "\ttrue\n", "  yes", "on\r\n", " TRUE\t"]) {
+      expect(isGodAutomergeEnabled({ [RELAY_AL7_GOD_AUTOMERGE]: v })).toBe(true);
+    }
+  });
+
   it("treats anything else (including unset / empty / typos) as false", () => {
     expect(isGodAutomergeEnabled({})).toBe(false);
     expect(isGodAutomergeEnabled({ [RELAY_AL7_GOD_AUTOMERGE]: "" })).toBe(false);
@@ -208,5 +233,8 @@ describe("isGodAutomergeEnabled", () => {
     expect(isGodAutomergeEnabled({ [RELAY_AL7_GOD_AUTOMERGE]: "false" })).toBe(false);
     expect(isGodAutomergeEnabled({ [RELAY_AL7_GOD_AUTOMERGE]: "no" })).toBe(false);
     expect(isGodAutomergeEnabled({ [RELAY_AL7_GOD_AUTOMERGE]: "enabled?" })).toBe(false);
+    // Whitespace around a false-ish value stays false.
+    expect(isGodAutomergeEnabled({ [RELAY_AL7_GOD_AUTOMERGE]: "  " })).toBe(false);
+    expect(isGodAutomergeEnabled({ [RELAY_AL7_GOD_AUTOMERGE]: "\t0\n" })).toBe(false);
   });
 });

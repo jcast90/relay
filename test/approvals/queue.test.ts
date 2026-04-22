@@ -183,6 +183,48 @@ describe("ApprovalsQueue", () => {
       expect(records).toHaveLength(1);
       expect(records[0]!.status).toBe("pending");
     });
+
+    it("recovers both neighbours when a torn record sits BETWEEN two valid ones", async () => {
+      // The realistic cross-process failure mode: appender A writes valid1,
+      // appender B crashes mid-write (no trailing newline), appender C then
+      // writes valid2 on a new line. The skip-unparseable path must recover
+      // valid1 + valid2 and silently drop the half-record in the middle.
+      const queue = makeQueue();
+      const rec1 = await queue.enqueue({
+        sessionId: "s",
+        kind: "merge-pr",
+        payload: { prUrl: "u1" },
+      });
+      const rec2 = await queue.enqueue({
+        sessionId: "s",
+        kind: "create-ticket",
+        payload: { title: "t2", body: "b2" },
+      });
+
+      // Splice a half-written record between the two valid lines, no
+      // trailing newline on the half-record itself — mimicking a crash
+      // after the appender started the line but before flush.
+      const path = join(root, "approvals", "s", "queue.jsonl");
+      const raw = await readFile(path, "utf8");
+      const lines = raw.split("\n").filter((l) => l.length > 0);
+      expect(lines).toHaveLength(2);
+      const corrupted = `${lines[0]}\n{"id":"half-record","session`;
+      const { writeFile } = await import("node:fs/promises");
+      await writeFile(path, `${corrupted}\n${lines[1]}\n`, "utf8");
+
+      const records = await queue.list("s");
+      expect(records).toHaveLength(2);
+      const ids = records.map((r) => r.id).sort();
+      expect(ids).toEqual([rec1.id, rec2.id].sort());
+      // The half-record is silently skipped — it's not surfaced as an
+      // error and it doesn't shadow either neighbour.
+      expect(
+        records.find((r) => r.payload && "prUrl" in r.payload && r.payload.prUrl === "u1")
+      ).toBeDefined();
+      expect(
+        records.find((r) => r.payload && "title" in r.payload && r.payload.title === "t2")
+      ).toBeDefined();
+    });
   });
 
   describe("approve / reject state transitions", () => {
@@ -259,6 +301,112 @@ describe("ApprovalsQueue", () => {
       });
       await queue.reject("s", rec.id, "nope");
       await expect(queue.approve("s", rec.id)).rejects.toThrow(/already rejected/);
+    });
+  });
+
+  describe("sessionId validation (path-traversal guard)", () => {
+    // The sessionId is spliced directly into a filesystem path, so every
+    // public entry point has to reject values that could escape rootDir.
+    // We test the surface rather than the regex: if a future tightening
+    // adds new invalid characters, these assertions still pass.
+    const BAD_IDS = ["../escape", "..", "a/b", "a\\b", "abc def", "", ".", "-/-", "\u0000", "a\nb"];
+
+    it("enqueue rejects traversal / path-separator ids", async () => {
+      const queue = makeQueue();
+      for (const bad of BAD_IDS) {
+        await expect(
+          queue.enqueue({ sessionId: bad, kind: "merge-pr", payload: { prUrl: "u" } })
+        ).rejects.toThrow(/invalid sessionId/);
+      }
+    });
+
+    it("enqueueAutoApproved rejects traversal / path-separator ids", async () => {
+      const queue = makeQueue();
+      for (const bad of BAD_IDS) {
+        await expect(
+          queue.enqueueAutoApproved({
+            sessionId: bad,
+            kind: "merge-pr",
+            payload: { prUrl: "u" },
+            autoApprovedBy: "god-mode",
+          })
+        ).rejects.toThrow(/invalid sessionId/);
+      }
+    });
+
+    it("list rejects traversal / path-separator ids", async () => {
+      const queue = makeQueue();
+      for (const bad of BAD_IDS) {
+        await expect(queue.list(bad)).rejects.toThrow(/invalid sessionId/);
+      }
+    });
+
+    it("approve / reject reject traversal / path-separator ids", async () => {
+      const queue = makeQueue();
+      for (const bad of BAD_IDS) {
+        await expect(queue.approve(bad, "any")).rejects.toThrow(/invalid sessionId/);
+        await expect(queue.reject(bad, "any")).rejects.toThrow(/invalid sessionId/);
+      }
+    });
+
+    it("compact rejects traversal / path-separator ids", async () => {
+      const queue = makeQueue();
+      for (const bad of BAD_IDS) {
+        await expect(queue.compact(bad)).rejects.toThrow(/invalid sessionId/);
+      }
+    });
+
+    it("queuePath rejects traversal / path-separator ids", () => {
+      const queue = makeQueue();
+      for (const bad of BAD_IDS) {
+        expect(() => queue.queuePath(bad)).toThrow(/invalid sessionId/);
+      }
+    });
+
+    it("accepts plain UUID-shaped ids and typical test fixture ids", () => {
+      const queue = makeQueue();
+      for (const good of [
+        "sess-1",
+        "sess_1",
+        "0af84ca0-1234-5678-9abc-def012345678",
+        "abc",
+        "ABC123",
+      ]) {
+        expect(() => queue.queuePath(good)).not.toThrow();
+      }
+    });
+  });
+
+  describe("enqueueAutoApproved", () => {
+    it("writes a terminal approved record tagged autoApprovedBy", async () => {
+      const queue = makeQueue();
+      const record = await queue.enqueueAutoApproved({
+        sessionId: "sess-1",
+        kind: "merge-pr",
+        payload: { prUrl: "https://github.com/foo/bar/pull/99" },
+        autoApprovedBy: "god-mode",
+      });
+
+      expect(record.status).toBe("approved");
+      expect(record.autoApprovedBy).toBe("god-mode");
+      expect(record.createdAt).toBe("2026-01-01T00:00:00.000Z");
+      expect(record.decidedAt).toBe("2026-01-01T00:00:00.000Z");
+
+      const list = await queue.list("sess-1");
+      expect(list).toHaveLength(1);
+      expect(list[0]!).toEqual(record);
+    });
+
+    it("subsequent approve / reject on an auto-approved record is rejected as terminal", async () => {
+      const queue = makeQueue();
+      const rec = await queue.enqueueAutoApproved({
+        sessionId: "sess-1",
+        kind: "create-ticket",
+        payload: { title: "t", body: "b" },
+        autoApprovedBy: "god-mode",
+      });
+      await expect(queue.approve("sess-1", rec.id)).rejects.toThrow(/already approved/);
+      await expect(queue.reject("sess-1", rec.id)).rejects.toThrow(/already approved/);
     });
   });
 

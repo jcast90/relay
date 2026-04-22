@@ -50,9 +50,14 @@ export type Action =
 /**
  * Result of {@link decide}. Two shapes:
  *
- *  - `{kind: "execute"}` — caller runs the action immediately (god mode +
- *    `RELAY_AL7_GOD_AUTOMERGE` on). The gate performs no side effect; it
- *    only authorises the caller to do so.
+ *  - `{kind: "execute", auditRecordId, record}` — caller runs the action
+ *    immediately (god mode + `RELAY_AL7_GOD_AUTOMERGE` on). The gate has
+ *    already written an auto-approved audit record to the session's queue
+ *    with `autoApprovedBy: "god-mode"`, so every god-mode execution
+ *    leaves a persistent trail even if the caller never re-reads it.
+ *    `auditRecordId` is the id of that record so the caller can correlate
+ *    the executed action (merge URL, created ticket id) back to the audit
+ *    entry in the feed.
  *  - `{kind: "enqueue", approvalId, record}` — caller must NOT execute.
  *    The gate has already written a pending record to the approvals queue
  *    for `sessionId`; AL-8's CLI surface (or a future human review UI)
@@ -61,7 +66,7 @@ export type Action =
  *    can find it.
  */
 export type Decision =
-  | { kind: "execute" }
+  | { kind: "execute"; auditRecordId: string; record: ApprovalRecord }
   | { kind: "enqueue"; approvalId: string; record: ApprovalRecord };
 
 /**
@@ -88,28 +93,40 @@ export interface DecideInput {
  *
  * Decision matrix:
  *
- *   | trust mode  | RELAY_AL7_GOD_AUTOMERGE | result                 |
- *   |-------------|-------------------------|------------------------|
- *   | supervised  | (any)                   | enqueue                |
- *   | god         | off                     | enqueue (safety fall-back) |
- *   | god         | on                      | execute                |
+ *   | trust mode  | RELAY_AL7_GOD_AUTOMERGE | result                          |
+ *   |-------------|-------------------------|---------------------------------|
+ *   | supervised  | (any)                   | enqueue (pending)               |
+ *   | god         | off                     | enqueue (pending, safety fall-back) |
+ *   | god         | on                      | execute (+ auto-approved audit record) |
  *
  * Supervised NEVER auto-merges / auto-tickets under any env setting —
  * that's the whole point of the mode. The env flag only unlocks god mode's
  * fast path; flipping the flag without the `--trust god` CLI switch is a
  * no-op.
  *
- * Side effects: on the enqueue branch this function writes one record to
- * the session's queue file via `queue.enqueue`. On the execute branch it
- * performs NO side effects — the caller is responsible for executing the
- * action (merging the PR / writing the ticket).
+ * Side effects:
+ *   - enqueue branch: writes one pending record to the session's queue
+ *     file via `queue.enqueue`.
+ *   - execute branch: writes one auto-approved audit record to the same
+ *     queue via `queue.enqueueAutoApproved` (status `"approved"`,
+ *     `autoApprovedBy: "god-mode"`, `decidedAt` stamped by the queue's
+ *     clock). The caller still owns the actual side effect (merge / ticket
+ *     write); the audit record is the durable trail that the side effect
+ *     was authorised, so a stale `RELAY_AL7_GOD_AUTOMERGE=1` can never
+ *     merge a PR with zero persistent evidence.
  */
 export async function decide(input: DecideInput): Promise<Decision> {
   const env = input.env ?? process.env;
   const automergeEnabled = isGodAutomergeEnabled(env);
 
   if (input.trust === "god" && automergeEnabled) {
-    return { kind: "execute" };
+    const record = await input.queue.enqueueAutoApproved({
+      sessionId: input.sessionId,
+      kind: input.action.kind,
+      payload: input.action.payload,
+      autoApprovedBy: "god-mode",
+    });
+    return { kind: "execute", auditRecordId: record.id, record };
   }
 
   // Supervised or god-with-flag-off: enqueue.
