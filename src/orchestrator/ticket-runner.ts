@@ -139,6 +139,19 @@ export class TicketRunner {
   private draining = false;
   private drainPromise: Promise<void> | null = null;
   private stopped = false;
+  /**
+   * AL-4 steady-state hook. When flipped true, the drain loop stops
+   * pulling new tickets off the admin's pending queue — the current
+   * in-flight worker (if any) completes normally, then the drain loop
+   * exits. Unlike {@link stop}, this does NOT signal the running
+   * worker; it only refuses to start additional workers.
+   *
+   * Set via {@link stopAcceptingNew}. Kept separate from `stopped` so
+   * the distinction between "abort the in-flight worker" (kill path)
+   * and "let the in-flight worker finish but start no new ones"
+   * (wind-down path) is explicit in the flow control.
+   */
+  private notAcceptingNew = false;
 
   constructor(options: TicketRunnerOptions) {
     this.admin = options.admin;
@@ -256,6 +269,21 @@ export class TicketRunner {
   }
 
   /**
+   * AL-4 steady-state wind-down signal. After this call, the drain loop
+   * stops pulling new tickets off the admin's pending queue — any
+   * currently-executing worker runs to completion (PR open / failure /
+   * exit), but no additional workers are spawned. Idempotent.
+   *
+   * This is the "let in-flight workers complete, don't start new ones"
+   * semantic the autonomous-loop driver needs when the lifecycle
+   * transitions to `winding_down` (e.g. 85% budget threshold). Distinct
+   * from {@link stop} which signals SIGTERM to running workers.
+   */
+  stopAcceptingNew(): void {
+    this.notAcceptingNew = true;
+  }
+
+  /**
    * Stop the runner. After this call, {@link drain} is a no-op and any
    * in-flight workers are signalled SIGTERM. Does NOT destroy worktrees
    * — operator inspection of failed workers (AC4) takes precedence over
@@ -312,6 +340,13 @@ export class TicketRunner {
       // eslint-disable-next-line no-constant-condition
       while (true) {
         if (this.stopped) return;
+        // AL-4 wind-down: when the driver flipped `notAcceptingNew`
+        // after a lifecycle `winding_down` transition, the currently
+        // running ticket finishes (this check only fires BEFORE the
+        // next pull) but no more queued tickets get pulled. The admin's
+        // pending queue is left intact so a future session can pick
+        // them up if the operator resumes.
+        if (this.notAcceptingNew) return;
         const ticket = this.admin.takeNextPendingTicket();
         if (!ticket) return;
         try {

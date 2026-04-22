@@ -1,31 +1,24 @@
 /**
- * AL-14 + AL-4 — autonomous-loop drain wiring integration tests.
+ * AL-4 — steady-state autonomous-loop driver integration tests.
  *
- * Covers the end-to-end plumbing that `startAutonomousSession` does when
- * both `RELAY_REPO_ADMIN_POOL_ENABLED` and `RELAY_AL14_WORKER_DRAIN` are
- * on. Specifically the pieces that aren't exercised by the `TicketRunner`
- * unit tests (one admin, one fake) or the `RepoAdminPool` tests (no
- * router, no runner, no worker-spawn mock):
+ * Exercises the full-drain path gated by `RELAY_REPO_ADMIN_POOL_ENABLED +
+ * RELAY_AL14_WORKER_DRAIN`. Scope (mirrors the AL-4 acceptance criteria):
  *
- *   - Two repoAssignments → two admins boot. Both admins get their own
- *     `TicketRunner`.
- *   - Each admin's pending queue drains in parallel — the `Promise.all`
- *     invariant is observable: both admins' first tickets are in-flight
- *     simultaneously, neither blocking the other.
- *   - Each admin drains its own queue sequentially (per-admin FIFO).
- *   - On exit, the lifecycle transitions through `winding_down → done`
- *     with reason `done` once the AL-4 driver sees the board drained.
- *   - The top-level `stop("autonomous-loop-exit")` fires on every
- *     exit path so a test that injects a failing spawn still tears down
- *     cleanly, and a single admin's drain failure does NOT wedge the
- *     other admin — the healthy admin still completes its ticket.
+ *   - Three tickets across two repos route to the matching admins,
+ *     workers spawn, and the driver exits `done / "done"` once every
+ *     ticket lands in a terminal state (`verifying` counts for AL-4 —
+ *     PR-merge cleanup is AL-5's follow-up).
+ *   - 85% token-budget threshold flips the lifecycle to `winding_down`
+ *     mid-drain; the driver lets in-flight tickets complete, refuses to
+ *     dispatch any new tickets, and exits `done / "budget-winding-down"`.
+ *   - A wall-clock watchdog that fires mid-ticket pushes the lifecycle
+ *     to `killed`; the driver exits `killed / "wall-clock-exceeded"` and
+ *     the in-flight worker receives its graceful stop signal.
  *
- * The test uses the `startAutonomousSession`'s `testOverrides` seam to
- * inject a fake `RepoAdminProcessSpawner` (so the AL-12 pool boots
- * cleanly without a real Claude binary) and a fake `WorkerSpawner` (so
- * worker drain is deterministic), plus a sub-millisecond `pollIntervalMs`
- * so the steady-state loop tightens on async progress. No real
- * subprocess, no real git, no real `claude` CLI.
+ * Scripted fakes: see `autonomous-loop-drain.test.ts` for the shared
+ * shape. The fakes are duplicated rather than imported to keep each
+ * integration test hermetic — a refactor of one shouldn't quietly change
+ * the behaviour tests rely on.
  */
 
 import { mkdtemp, readFile, rm } from "node:fs/promises";
@@ -57,10 +50,8 @@ import type {
 } from "../../src/orchestrator/worker-spawner.js";
 import { FileHarnessStore } from "../../src/storage/file-store.js";
 
-/**
- * Fake AL-12 repo-admin child. No-op on all streams; `emitExit` is only
- * invoked when the pool is tearing down.
- */
+// --- fakes (deliberately duplicated from autonomous-loop-drain.test.ts) --
+
 type StdListener = (chunk: string) => void;
 type ExitListener = (code: number | null, signal: NodeJS.Signals | null) => void;
 type ErrorListener = (err: Error) => void;
@@ -71,31 +62,27 @@ interface FakeAdminChild extends SpawnedProcess {
 }
 
 function makeFakeAdminChild(args: RepoAdminSpawnArgs): FakeAdminChild {
-  const stdoutListeners: StdListener[] = [];
-  const stderrListeners: StdListener[] = [];
   const exitListeners: ExitListener[] = [];
-  const errorListeners: ErrorListener[] = [];
   return {
-    pid: 30_000 + Math.floor(Math.random() * 1000),
+    pid: 40_000 + Math.floor(Math.random() * 1000),
     spawnArgs: args,
-    onStdout(l) {
-      stdoutListeners.push(l);
+    onStdout(_l: StdListener) {
+      /* noop */
     },
-    onStderr(l) {
-      stderrListeners.push(l);
+    onStderr(_l: StdListener) {
+      /* noop */
     },
-    onExit(l) {
+    onExit(l: ExitListener) {
       exitListeners.push(l);
     },
-    onError(l) {
-      errorListeners.push(l);
+    onError(_l: ErrorListener) {
+      /* noop */
     },
     kill() {
-      // Emit expected exit so the pool's stop() awaits resolve cleanly.
       for (const l of exitListeners) l(0, "SIGTERM");
       return true;
     },
-    emitExit(code, signal = null) {
+    emitExit(code: number | null, signal: NodeJS.Signals | null = null) {
       for (const l of exitListeners) l(code, signal);
     },
   };
@@ -112,11 +99,6 @@ class FakeAdminSpawner implements RepoAdminProcessSpawner {
   }
 }
 
-/**
- * Fake worker handle driven by the test. Identical in shape to the one
- * used by `ticket-runner.test.ts`, reproduced here so these tests stay
- * hermetic (no shared-fixture coupling).
- */
 class FakeWorkerHandle implements WorkerHandle {
   readonly ticketId: string;
   readonly sessionId: string;
@@ -187,24 +169,10 @@ class FakeWorkerHandle implements WorkerHandle {
   }
 }
 
-/**
- * Programmable worker-spawner. Exposes the spawned handles per alias so
- * the test can assert on parallel invariants ("both admins' first ticket
- * spawned before either finished"). `onSpawn` callbacks let the test
- * observe the exact moment a spawn lands so parallel assertions don't
- * race.
- */
 class FakeWorkerSpawner {
   readonly spawnedByAlias = new Map<string, FakeWorkerHandle[]>();
   readonly destroyed: SandboxRef[] = [];
   private counter = 0;
-  private onSpawnListeners: Array<
-    (args: { alias: string; ticketId: string; handle: FakeWorkerHandle }) => void
-  > = [];
-
-  onSpawn(cb: (args: { alias: string; ticketId: string; handle: FakeWorkerHandle }) => void): void {
-    this.onSpawnListeners.push(cb);
-  }
 
   spawn = vi.fn(
     async (opts: {
@@ -237,7 +205,6 @@ class FakeWorkerSpawner {
       const list = this.spawnedByAlias.get(alias) ?? [];
       list.push(handle);
       this.spawnedByAlias.set(alias, list);
-      for (const cb of this.onSpawnListeners) cb({ alias, ticketId, handle });
       return { handle, worktreePath, sandboxRef };
     }
   );
@@ -249,14 +216,15 @@ class FakeWorkerSpawner {
   handles(alias: string): FakeWorkerHandle[] {
     return this.spawnedByAlias.get(alias) ?? [];
   }
+
+  totalSpawned(): number {
+    let n = 0;
+    for (const list of this.spawnedByAlias.values()) n += list.length;
+    return n;
+  }
 }
 
-/**
- * Spin until `pred()` returns truthy. Tests that assert on async
- * interleavings call this in preference to polling sleep so the failure
- * mode on a stuck async op is a clean timeout rather than a flaky pass.
- */
-async function waitUntil(pred: () => boolean, timeoutMs = 2000): Promise<void> {
+async function waitUntil(pred: () => boolean, timeoutMs = 3000): Promise<void> {
   const start = Date.now();
   while (!pred()) {
     if (Date.now() - start > timeoutMs) {
@@ -288,13 +256,12 @@ function makeTicket(id: string, alias: string): TicketLedgerEntry {
   };
 }
 
-/**
- * Seed the on-disk channel with two repo assignments + two tickets per
- * admin. Tickets carry `assignedAlias` so the router deterministically
- * dispatches them to their matching admin.
- */
-async function buildFixture() {
-  const root = await mkdtemp(join(tmpdir(), "al-14-drain-"));
+interface FixtureOpts {
+  tickets: TicketLedgerEntry[];
+}
+
+async function buildFixture(opts: FixtureOpts) {
+  const root = await mkdtemp(join(tmpdir(), "al-4-steady-"));
   const channelsDir = join(root, "channels");
   const harnessStore = new FileHarnessStore(join(root, "__hs__"));
   const channelStore = new ChannelStore(channelsDir, harnessStore);
@@ -304,30 +271,17 @@ async function buildFixture() {
     { alias: "backend", workspaceId: "ws-backend", repoPath: "/tmp/fake-backend" },
   ];
   const persisted = await channelStore.createChannel({
-    name: "al-14-drain",
-    description: "al-14 drain integration test",
+    name: "al-4-steady",
+    description: "al-4 steady-state integration test",
     workspaceIds: ["ws-frontend", "ws-backend"],
     repoAssignments: assignments,
   });
-  const channel: Channel = {
-    ...persisted,
-    repoAssignments: assignments,
-    fullAccess: false,
-  };
+  const channel: Channel = { ...persisted, repoAssignments: assignments, fullAccess: false };
 
-  const tickets: TicketLedgerEntry[] = [
-    makeTicket("fe-1", "frontend"),
-    makeTicket("fe-2", "frontend"),
-    makeTicket("be-1", "backend"),
-    makeTicket("be-2", "backend"),
-  ];
-  await channelStore.writeChannelTickets(channel.channelId, tickets);
+  await channelStore.writeChannelTickets(channel.channelId, opts.tickets);
 
-  const sessionId = `auto-${Date.now()}`;
+  const sessionId = `auto-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
   const lifecycle = new SessionLifecycle(sessionId, { rootDir: root });
-  // Matches the real CLI flow: start in planning, advance to dispatching
-  // before handoff. SessionLifecycle initializes in `planning`, so the
-  // only transition we need to mirror is `planning → dispatching`.
   await lifecycle.transition("dispatching", "autonomous-session-started");
   const tracker = new TokenTracker(sessionId, 100_000, { rootDir: root });
 
@@ -354,7 +308,7 @@ async function buildFixture() {
   };
 }
 
-describe("startAutonomousSession — AL-14 drain wiring", () => {
+describe("AL-4 steady-state driver", () => {
   let cleanupFns: Array<() => Promise<void>> = [];
   let originalPoolFlag: string | undefined;
   let originalDrainFlag: string | undefined;
@@ -375,11 +329,18 @@ describe("startAutonomousSession — AL-14 drain wiring", () => {
     else process.env[RELAY_AL14_WORKER_DRAIN] = originalDrainFlag;
   });
 
-  it("drains both admins in parallel, each serializes internally, and exits done", async () => {
-    const fx = await buildFixture();
+  it("drains 3 tickets across 2 repos, routes through winding_down → done", async () => {
+    // AC: 3 tickets on board → routes, waits for all 3 to reach terminal
+    // state, exits `done` with reason `done`.
+    const fx = await buildFixture({
+      tickets: [
+        makeTicket("fe-1", "frontend"),
+        makeTicket("be-1", "backend"),
+        makeTicket("be-2", "backend"),
+      ],
+    });
     cleanupFns.push(fx.cleanup);
 
-    // Suppress info console noise from the loop — we only want warnings.
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     cleanupFns.push(async () => {
@@ -387,8 +348,6 @@ describe("startAutonomousSession — AL-14 drain wiring", () => {
       warnSpy.mockRestore();
     });
 
-    // Fire the autonomous driver. It bootstraps pool, routes tickets,
-    // then starts parallel drains.
     const driverP = startAutonomousSession({
       sessionId: fx.sessionId,
       channel: fx.channel,
@@ -405,83 +364,80 @@ describe("startAutonomousSession — AL-14 drain wiring", () => {
       },
     });
 
-    // PARALLEL INVARIANT: both admins must have spawned their FIRST
-    // ticket before EITHER has completed. If the drains were serialized
-    // at the pool level, we'd see one admin's spawn only.
+    // Parallel spawn: one admin per alias, each has its first ticket
+    // in flight before the other completes.
     await waitUntil(
       () =>
         fx.workerSpawner.handles("frontend").length >= 1 &&
         fx.workerSpawner.handles("backend").length >= 1
     );
-    expect(fx.workerSpawner.handles("frontend")).toHaveLength(1);
-    expect(fx.workerSpawner.handles("backend")).toHaveLength(1);
-    // Per-admin FIFO invariant: the first spawn for each admin is the
-    // first ticket assigned to it.
+
+    // fe-1 is the only frontend ticket; be-1 must be first on backend
+    // (FIFO within an admin's queue).
     expect(fx.workerSpawner.handles("frontend")[0].ticketId).toBe("fe-1");
     expect(fx.workerSpawner.handles("backend")[0].ticketId).toBe("be-1");
 
-    // SERIALIZATION INVARIANT: neither admin has spawned its second
-    // ticket — their first hasn't exited yet.
-    expect(fx.workerSpawner.handles("frontend")).toHaveLength(1);
-    expect(fx.workerSpawner.handles("backend")).toHaveLength(1);
-
-    // Complete fe-1 and be-1 so each admin progresses to its second
-    // ticket (fe-2 / be-2 respectively). PR URLs are distinct so the
-    // verifying-state mirror on the board doesn't collide.
+    // Complete frontend's one ticket and backend's first ticket.
     fx.workerSpawner
       .handles("frontend")[0]
-      .fire({ exitCode: 0, prUrl: "https://github.com/o/r/pull/1" });
+      .fire({ exitCode: 0, prUrl: "https://github.com/o/r/pull/fe1" });
     fx.workerSpawner
       .handles("backend")[0]
-      .fire({ exitCode: 0, prUrl: "https://github.com/o/r/pull/2" });
+      .fire({ exitCode: 0, prUrl: "https://github.com/o/r/pull/be1" });
 
-    await waitUntil(
-      () =>
-        fx.workerSpawner.handles("frontend").length >= 2 &&
-        fx.workerSpawner.handles("backend").length >= 2
-    );
-    expect(fx.workerSpawner.handles("frontend")[1].ticketId).toBe("fe-2");
+    // backend rolls to be-2.
+    await waitUntil(() => fx.workerSpawner.handles("backend").length >= 2);
     expect(fx.workerSpawner.handles("backend")[1].ticketId).toBe("be-2");
-
-    // Complete the second ticket on each admin.
-    fx.workerSpawner
-      .handles("frontend")[1]
-      .fire({ exitCode: 0, prUrl: "https://github.com/o/r/pull/3" });
     fx.workerSpawner
       .handles("backend")[1]
-      .fire({ exitCode: 0, prUrl: "https://github.com/o/r/pull/4" });
+      .fire({ exitCode: 0, prUrl: "https://github.com/o/r/pull/be2" });
 
     await driverP;
 
-    // LIFECYCLE INVARIANT: AL-4 drives board → drained → `done` via the
-    // mandatory `winding_down` waypoint. Final state is `done` with
-    // reason `done`; the penultimate transition is `dispatching →
-    // winding_down` (reason also `done`).
+    // Exactly 3 spawns — one per ticket, no retries.
+    expect(fx.workerSpawner.totalSpawned()).toBe(3);
+
+    // Lifecycle final state: `done` via `winding_down`. Two successive
+    // transitions from `dispatching` — the only legal path to `done`.
     const lcRaw = await readFile(join(fx.root, "sessions", fx.sessionId, "lifecycle.json"), "utf8");
     const lc = JSON.parse(lcRaw);
     expect(lc.state).toBe("done");
-    const final = lc.transitions[lc.transitions.length - 1];
+    const transitions = lc.transitions as Array<{ from: string; to: string; reason?: string }>;
+    const final = transitions[transitions.length - 1];
     expect(final.from).toBe("winding_down");
     expect(final.to).toBe("done");
     expect(final.reason).toBe("done");
+    // And the penultimate (from dispatching → winding_down).
+    const prior = transitions[transitions.length - 2];
+    expect(prior.from).toBe("dispatching");
+    expect(prior.to).toBe("winding_down");
 
-    // TICKET-STATE INVARIANT: each ticket that drove a spawn was
-    // mirrored through upsertChannelTickets. All four move to
-    // `verifying` (worker exited 0 with PR URL).
+    // All tickets reached `verifying` (PR open) — AL-4 treats verifying
+    // as terminal for driver exit (AL-5 / pr-watcher moves them to
+    // `completed` on merge).
     const board = await fx.channelStore.readChannelTickets(fx.channel.channelId);
     const byId = Object.fromEntries(board.map((t) => [t.ticketId, t]));
     expect(byId["fe-1"].status).toBe("verifying");
-    expect(byId["fe-2"].status).toBe("verifying");
     expect(byId["be-1"].status).toBe("verifying");
     expect(byId["be-2"].status).toBe("verifying");
+  }, 15_000);
 
-    // SPAWN-COUNT INVARIANT: exactly one spawn per ticket (no retries,
-    // no duplicates).
-    expect(fx.workerSpawner.spawn).toHaveBeenCalledTimes(4);
-  }, 10_000);
-
-  it("one admin's drain failure does NOT wedge the other admin's drain", async () => {
-    const fx = await buildFixture();
+  it("85% token threshold flips winding_down; in-flight completes; no new dispatches; exits done/budget-winding-down", async () => {
+    // AC: 85% token threshold flips winding_down mid-drain. The in-
+    // flight ticket completes, but no new ticket is routed after the
+    // flip. Driver exits `done / "budget-winding-down"`.
+    //
+    // Layout: two backend tickets so backend still has be-2 queued
+    // when the threshold fires during be-1. After the flip, be-2 must
+    // NOT spawn (driver refuses new dispatches; backend admin's queue
+    // would have it as pending, but the router never sent it there).
+    const fx = await buildFixture({
+      tickets: [
+        makeTicket("be-1", "backend"),
+        makeTicket("be-2", "backend"),
+        makeTicket("fe-1", "frontend"), // another ready ticket that MUST not be routed after wind-down
+      ],
+    });
     cleanupFns.push(fx.cleanup);
 
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -490,18 +446,6 @@ describe("startAutonomousSession — AL-14 drain wiring", () => {
       logSpy.mockRestore();
       warnSpy.mockRestore();
     });
-
-    // Make the very first spawn for alias "frontend" throw. The runner
-    // catches spawn failures and marks the ticket failed — that's the
-    // "drain error path" the review calls out. The key assertion is
-    // that "backend" still makes forward progress.
-    const origSpawn = fx.workerSpawner.spawn;
-    fx.workerSpawner.spawn = vi.fn(async (opts) => {
-      if (opts.repoAssignment.alias === "frontend" && opts.ticket.ticketId === "fe-1") {
-        throw new Error("synthetic spawn failure for fe-1");
-      }
-      return origSpawn.call(fx.workerSpawner, opts);
-    }) as typeof fx.workerSpawner.spawn;
 
     const driverP = startAutonomousSession({
       sessionId: fx.sessionId,
@@ -519,55 +463,63 @@ describe("startAutonomousSession — AL-14 drain wiring", () => {
       },
     });
 
-    // Backend's first ticket must spawn independently of frontend's
-    // failure. This is the key "parallel drains are isolated"
-    // invariant: one admin throwing doesn't lock out the other.
-    await waitUntil(() => fx.workerSpawner.handles("backend").length >= 1);
-    // Complete be-1 → be-2 chain.
-    fx.workerSpawner
-      .handles("backend")[0]
-      .fire({ exitCode: 0, prUrl: "https://github.com/o/r/pull/b1" });
-    await waitUntil(() => fx.workerSpawner.handles("backend").length >= 2);
-    fx.workerSpawner
-      .handles("backend")[1]
-      .fire({ exitCode: 0, prUrl: "https://github.com/o/r/pull/b2" });
+    // Wait for both admins' first ticket in-flight.
+    await waitUntil(
+      () =>
+        fx.workerSpawner.handles("backend").length >= 1 &&
+        fx.workerSpawner.handles("frontend").length >= 1
+    );
+    const beFirst = fx.workerSpawner.handles("backend")[0];
+    const feFirst = fx.workerSpawner.handles("frontend")[0];
+    expect(beFirst.ticketId).toBe("be-1");
+    expect(feFirst.ticketId).toBe("fe-1");
 
-    // Frontend: fe-1 failed synthetically, so drain moves to fe-2.
-    // fe-2 spawns via the original spawner and we finish it normally.
-    await waitUntil(() => fx.workerSpawner.handles("frontend").length >= 1);
-    expect(fx.workerSpawner.handles("frontend")[0].ticketId).toBe("fe-2");
-    fx.workerSpawner
-      .handles("frontend")[0]
-      .fire({ exitCode: 0, prUrl: "https://github.com/o/r/pull/f2" });
+    // Fire the 85% threshold manually: transition the lifecycle
+    // directly. AL-2 wires the tracker → lifecycle bus in production;
+    // the test shortcuts that so it doesn't have to game token counts
+    // to land exactly on the 85% boundary.
+    await fx.lifecycle.transition("winding_down", "token-budget-85pct");
+
+    // Complete both in-flight tickets AFTER the flip. They represent
+    // "work already dispatched before wind-down started" and must be
+    // allowed to finish.
+    beFirst.fire({ exitCode: 0, prUrl: "https://github.com/o/r/pull/be1" });
+    feFirst.fire({ exitCode: 0, prUrl: "https://github.com/o/r/pull/fe1" });
 
     await driverP;
 
-    // Terminal lifecycle still reaches `done` — the synthetic failure
-    // did not abort the autonomous loop, it just routed one ticket into
-    // the `failed` bucket. AL-4 treats `failed` as terminal for drain
-    // purposes so the board still counts as drained.
+    // Critically: be-2 was still `ready` on the board when the wind-down
+    // landed, but the driver refused to route it after that point. The
+    // fake spawner records every `spawn()` call, so checking total
+    // spawn count is the cleanest way to assert "no new work landed".
+    expect(fx.workerSpawner.totalSpawned()).toBe(2);
+    // be-2 stayed `ready` (the router never touched it). fe-1 is
+    // `verifying` (worker completed with PR URL). Same for be-1.
+    const board = await fx.channelStore.readChannelTickets(fx.channel.channelId);
+    const byId = Object.fromEntries(board.map((t) => [t.ticketId, t]));
+    expect(byId["be-1"].status).toBe("verifying");
+    expect(byId["fe-1"].status).toBe("verifying");
+    expect(byId["be-2"].status).toBe("ready");
+
+    // Lifecycle final state: `done` with reason `budget-winding-down`.
     const lcRaw = await readFile(join(fx.root, "sessions", fx.sessionId, "lifecycle.json"), "utf8");
     const lc = JSON.parse(lcRaw);
     expect(lc.state).toBe("done");
-    const finalT = lc.transitions[lc.transitions.length - 1];
-    expect(finalT.to).toBe("done");
-    expect(finalT.reason).toBe("done");
+    const transitions = lc.transitions as Array<{ from: string; to: string; reason?: string }>;
+    const final = transitions[transitions.length - 1];
+    expect(final.from).toBe("winding_down");
+    expect(final.to).toBe("done");
+    expect(final.reason).toBe("budget-winding-down");
+  }, 15_000);
 
-    // TICKET-STATE INVARIANTS:
-    //  - fe-1 is `failed` (spawn threw → runner.markTicketFailed)
-    //  - fe-2 / be-1 / be-2 are `verifying` (clean drains)
-    const board = await fx.channelStore.readChannelTickets(fx.channel.channelId);
-    const byId = Object.fromEntries(board.map((t) => [t.ticketId, t]));
-    expect(byId["fe-1"].status).toBe("failed");
-    expect(byId["fe-1"].lastClassification?.category).toBe("fix_code");
-    expect(byId["fe-2"].status).toBe("verifying");
-    expect(byId["be-1"].status).toBe("verifying");
-    expect(byId["be-2"].status).toBe("verifying");
-  }, 10_000);
-
-  it("drain-disabled mode (pool flag on, drain flag off) routes but does not spawn workers", async () => {
-    process.env[RELAY_AL14_WORKER_DRAIN] = "0";
-    const fx = await buildFixture();
+  it("wall-clock kill mid-ticket: driver exits killed/wall-clock-exceeded and in-flight worker gets graceful stop", async () => {
+    // AC: a wall-clock kill while a worker is mid-ticket exits the
+    // driver cleanly. The in-flight worker's `stop()` is invoked (the
+    // graceful-shutdown signal). The lifecycle file records reason
+    // `wall-clock-exceeded`.
+    const fx = await buildFixture({
+      tickets: [makeTicket("be-1", "backend"), makeTicket("fe-1", "frontend")],
+    });
     cleanupFns.push(fx.cleanup);
 
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -577,7 +529,7 @@ describe("startAutonomousSession — AL-14 drain wiring", () => {
       warnSpy.mockRestore();
     });
 
-    await startAutonomousSession({
+    const driverP = startAutonomousSession({
       sessionId: fx.sessionId,
       channel: fx.channel,
       tracker: fx.tracker,
@@ -589,16 +541,38 @@ describe("startAutonomousSession — AL-14 drain wiring", () => {
         repoAdminSpawner: fx.adminSpawner,
         workerSpawner: fx.workerSpawner as unknown as WorkerSpawner,
         rootDir: fx.root,
+        pollIntervalMs: 2,
       },
     });
 
-    // No worker spawns — drain was gated off.
-    expect(fx.workerSpawner.spawn).not.toHaveBeenCalled();
+    await waitUntil(
+      () =>
+        fx.workerSpawner.handles("backend").length >= 1 &&
+        fx.workerSpawner.handles("frontend").length >= 1
+    );
+    const beFirst = fx.workerSpawner.handles("backend")[0];
+    const feFirst = fx.workerSpawner.handles("frontend")[0];
 
-    // Lifecycle reaches killed with reason `al-14-pending` (pool on, drain off).
+    // Fire the wall-clock kill — same state transition AL-2 would
+    // produce when the watchdog elapses (`dispatching → killed` with
+    // reason `wall-clock-exceeded`).
+    await fx.lifecycle.transition("killed", "wall-clock-exceeded");
+
+    // The driver should resolve promptly — kill is an abort, not a
+    // graceful wait-for-drain. The worker handles' `stop` fires via the
+    // top-level cleanup path (`runner.stop("autonomous-loop-exit")`),
+    // which propagates SIGTERM-equivalent into each handle.
+    await driverP;
+
+    expect(beFirst.stop).toHaveBeenCalled();
+    expect(feFirst.stop).toHaveBeenCalled();
+
     const lcRaw = await readFile(join(fx.root, "sessions", fx.sessionId, "lifecycle.json"), "utf8");
     const lc = JSON.parse(lcRaw);
     expect(lc.state).toBe("killed");
-    expect(lc.transitions[lc.transitions.length - 1].reason).toBe("al-14-pending");
-  });
+    const transitions = lc.transitions as Array<{ from: string; to: string; reason?: string }>;
+    const final = transitions[transitions.length - 1];
+    expect(final.to).toBe("killed");
+    expect(final.reason).toBe("wall-clock-exceeded");
+  }, 15_000);
 });
