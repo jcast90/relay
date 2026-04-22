@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { api, subscribeChatEvents, type ChatEvent } from "../api";
 import type {
   Channel,
@@ -32,6 +34,23 @@ type ActiveStream = {
 
 const ACTIVITY_STACK_MAX = 20;
 const ACTIVITY_TOP_N = 3;
+
+// Renders message text as Github-flavored markdown. Links open in a new tab so
+// they don't navigate the Tauri webview away from the app shell.
+function MessageMarkdown({ text }: { text: string }) {
+  return (
+    <div className="md">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: (props) => <a {...props} target="_blank" rel="noreferrer noopener" />,
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+}
 
 export function CenterPane({
   channel,
@@ -299,7 +318,11 @@ function ActivityStreamCard({
           </div>
         )}
       </div>
-      {stream.accum && <div className="feed-content">{stream.accum}</div>}
+      {stream.accum && (
+        <div className="feed-content">
+          <MessageMarkdown text={stream.accum} />
+        </div>
+      )}
     </div>
   );
 }
@@ -350,7 +373,9 @@ function SessionMessages({
                 )}
               </span>
             </div>
-            <div className="feed-content">{m.content}</div>
+            <div className="feed-content">
+              <MessageMarkdown text={m.content} />
+            </div>
           </div>
         );
       })}
@@ -465,7 +490,9 @@ function FeedView({ entries }: { entries: ChannelEntry[] }) {
             <span className="feed-author">{e.fromDisplayName ?? e.type}</span>
             <span>{formatTime(e.createdAt)}</span>
           </div>
-          <div className="feed-content">{e.content}</div>
+          <div className="feed-content">
+            <MessageMarkdown text={e.content} />
+          </div>
         </div>
       ))}
     </>
@@ -491,6 +518,59 @@ function Composer({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [autoApprove, setAutoApprove] = useState(true);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [mention, setMention] = useState<{ start: number; query: string; index: number } | null>(
+    null
+  );
+
+  const aliases = channel.repoAssignments.map((r) => r.alias);
+  // Token being typed is a mention when it starts with `@` and sits at the
+  // beginning of the text or is preceded by whitespace — matches how the
+  // backend parses routing prefixes.
+  const detectMention = (value: string, caret: number) => {
+    const before = value.slice(0, caret);
+    const match = before.match(/(?:^|\s)@([a-zA-Z0-9_-]*)$/);
+    if (!match) return null;
+    const start = caret - match[1].length - 1;
+    return { start, query: match[1] };
+  };
+  const filteredAliases = mention
+    ? aliases.filter((a) => a.toLowerCase().startsWith(mention.query.toLowerCase()))
+    : [];
+
+  const applyMention = (alias: string) => {
+    if (!mention) return;
+    const ta = textareaRef.current;
+    const caret = ta?.selectionStart ?? text.length;
+    const before = text.slice(0, mention.start);
+    const after = text.slice(caret);
+    const insertion = `@${alias} `;
+    const next = before + insertion + after;
+    setText(next);
+    setMention(null);
+    const nextCaret = before.length + insertion.length;
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(nextCaret, nextCaret);
+    });
+  };
+
+  const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    setText(value);
+    const next = detectMention(value, e.target.selectionStart ?? value.length);
+    setMention(next ? { ...next, index: 0 } : null);
+  };
+
+  const handleSelect = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+    const el = e.currentTarget;
+    const next = detectMention(el.value, el.selectionStart ?? el.value.length);
+    setMention((prev) =>
+      next ? { ...next, index: prev && prev.start === next.start ? prev.index : 0 } : null
+    );
+  };
 
   const send = async () => {
     const raw = text.trim();
@@ -499,7 +579,6 @@ function Composer({
     setError(null);
     try {
       // Parse @alias prefix to route to a repo.
-      const aliases = channel.repoAssignments.map((r) => r.alias);
       const { alias, body } = parseAliasPrefix(raw, aliases);
       const repo = alias ? channel.repoAssignments.find((r) => r.alias === alias) : null;
       const cwd = repo?.repoPath;
@@ -554,6 +633,31 @@ function Composer({
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mention && filteredAliases.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setMention({ ...mention, index: (mention.index + 1) % filteredAliases.length });
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setMention({
+          ...mention,
+          index: (mention.index - 1 + filteredAliases.length) % filteredAliases.length,
+        });
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        applyMention(filteredAliases[mention.index]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setMention(null);
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       send();
@@ -561,22 +665,36 @@ function Composer({
   };
 
   const disabled = busy || streaming;
+  const showMentions = !!mention && filteredAliases.length > 0;
 
   return (
     <div className="composer">
       {error && <div className="composer-error">{error}</div>}
-      <textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={onKeyDown}
-        placeholder={
-          channel.repoAssignments.length > 0
-            ? "Use @alias to target a repo · Enter to send · Shift+Enter newline"
-            : "Type a message · Enter to send · Shift+Enter newline"
-        }
-        rows={2}
-        disabled={disabled}
-      />
+      <div className="composer-input-wrap">
+        {showMentions && (
+          <MentionPopover
+            channel={channel}
+            aliases={filteredAliases}
+            index={mention!.index}
+            onPick={applyMention}
+          />
+        )}
+        <textarea
+          ref={textareaRef}
+          value={text}
+          onChange={handleTextChange}
+          onKeyDown={onKeyDown}
+          onSelect={handleSelect}
+          onBlur={() => setTimeout(() => setMention(null), 120)}
+          placeholder={
+            channel.repoAssignments.length > 0
+              ? "Use @alias to target a repo · Enter to send · Shift+Enter newline"
+              : "Type a message · Enter to send · Shift+Enter newline"
+          }
+          rows={2}
+          disabled={disabled}
+        />
+      </div>
       <div className="composer-controls">
         <label className="auto-approve" title="Pass --dangerously-skip-permissions to claude">
           <input
@@ -590,6 +708,43 @@ function Composer({
           {streaming ? "…" : "Send"}
         </button>
       </div>
+    </div>
+  );
+}
+
+function MentionPopover({
+  channel,
+  aliases,
+  index,
+  onPick,
+}: {
+  channel: Channel;
+  aliases: string[];
+  index: number;
+  onPick: (alias: string) => void;
+}) {
+  return (
+    <div className="mention-popover" role="listbox">
+      {aliases.map((a, i) => {
+        const repo = channel.repoAssignments.find((r) => r.alias === a);
+        return (
+          <button
+            key={a}
+            type="button"
+            role="option"
+            aria-selected={i === index}
+            className={`mention-option ${i === index ? "active" : ""}`}
+            // Use onMouseDown so the pick fires before textarea blur clears it.
+            onMouseDown={(e) => {
+              e.preventDefault();
+              onPick(a);
+            }}
+          >
+            <span className="mention-alias">@{a}</span>
+            {repo?.repoPath && <span className="mention-path">{repo.repoPath}</span>}
+          </button>
+        );
+      })}
     </div>
   );
 }
