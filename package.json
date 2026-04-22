@@ -39,7 +39,7 @@
     "test": "vitest run",
     "test:gui": "cd gui && pnpm install --frozen-lockfile && pnpm test",
     "changeset": "changeset",
-    "changeset-version": "changeset version && node scripts/sync-versions.mjs",
+    "changeset-version": "changeset version && node scripts/sync-versions.mjs && cargo check --workspace",
     "changeset-publish": "pnpm build && changeset publish",
     "format": "prettier --write \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx}\" \"gui/src/**/*.{ts,tsx}\" \"scripts/**/*.{ts,mts}\" \"*.md\" \"docs/**/*.md\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx}\" \"gui/src/**/*.{ts,tsx}\" \"scripts/**/*.{ts,mts}\" \"*.md\" \"docs/**/*.md\""
