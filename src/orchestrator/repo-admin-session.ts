@@ -464,6 +464,26 @@ export class RepoAdminSession {
   }
 
   /**
+   * AL-14 consumer API: pop the head of the pending queue FIFO-style.
+   * Returns `null` when the queue is empty. Called by the ticket runner's
+   * drain loop once per iteration; the returned ticket is NOT re-enqueued
+   * on failure — the runner owns marking it `failed` on the channel board
+   * (AC4), and a retry requires a fresh route through AL-13.
+   *
+   * Throws when the session is `stopped` so a stale reference can't drain
+   * a dead admin. Mirrors the guard on {@link dispatchTicket}.
+   */
+  takeNextPendingTicket(): TicketLedgerEntry | null {
+    if (this._state === "stopped") {
+      throw new Error(
+        `RepoAdminSession(${this.alias}): cannot takeNextPendingTicket after stop(); ` +
+          `route through a fresh session.`
+      );
+    }
+    return this.pendingDispatches.shift() ?? null;
+  }
+
+  /**
    * Subscribe to session events. Returns an unsubscribe function. The pool
    * always subscribes; other callers may (e.g. the TUI for live liveness
    * readouts).

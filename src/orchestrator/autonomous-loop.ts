@@ -4,6 +4,8 @@ import type { Channel, RepoAssignment } from "../domain/channel.js";
 import { ChannelStore } from "../channels/channel-store.js";
 import { RepoAdminPool, isRepoAdminPoolEnabled } from "./repo-admin-pool.js";
 import { TicketRouter } from "./ticket-router.js";
+import { TicketRunner } from "./ticket-runner.js";
+import { WorkerSpawner } from "./worker-spawner.js";
 
 /**
  * Options handed to {@link startAutonomousSession} by the CLI entrypoint
@@ -40,23 +42,33 @@ export interface StartAutonomousSessionOptions {
 }
 
 /**
- * Autonomous-loop driver entrypoint. AL-14 will replace the body with the
- * real scheduler + dispatcher loop. At AL-13 the loop:
+ * Autonomous-loop driver entrypoint. At AL-14 the loop:
  *
  *   1. When {@link RELAY_REPO_ADMIN_POOL_ENABLED} is on:
  *      - Boots the repo-admin pool (AL-12).
  *      - Reads the channel's ticket board and routes each ready ticket
  *        through {@link TicketRouter} so the matching repo-admin queues
- *        it. Worker spawning + execution is AL-14's scope; AL-13 only
- *        marks intent.
+ *        it (AL-13).
+ *      - For each admin, drains its pending queue via {@link TicketRunner}:
+ *        spawn a worker in a per-ticket worktree, monitor until the
+ *        worker exits, and mark the ticket `verifying` (PR opened) /
+ *        `failed` (AC4) on the board. Serialized inside each admin;
+ *        parallel across admins.
  *      - Transitions the lifecycle to `killed` with reason
- *        `"al-14-pending"` (dispatch without execution is still a stub,
- *        but the routing stage is real — so the reason shifts).
+ *        `"al-16-pending"`. AL-14 owns spawn + drain; inter-admin
+ *        coordination + the steady-state driver loop are still pending.
  *   2. When the flag is off: preserves the pre-AL-13 behaviour — no pool,
  *      no routing, lifecycle transitions to `killed / al-13-pending`.
  *   3. Tears down pool + lifecycle + tracker. Errors during teardown are
  *      logged and swallowed: a cosmetic shutdown failure must not turn a
  *      successful handoff into a non-zero CLI exit.
+ *
+ * PR-merge cleanup (AC3) is NOT driven here — the runner exposes
+ * {@link TicketRunner.handlePrMerged}; the autonomous-loop's steady-
+ * state driver (AL-4) will plumb PR-poller merge events into that hook
+ * once the loop runs long enough to observe them. AL-14's single-pass
+ * autonomous stub intentionally exits before any PR can merge, so the
+ * hook is dormant here.
  */
 export async function startAutonomousSession(opts: StartAutonomousSessionOptions): Promise<void> {
   const { sessionId, lifecycle, tracker, channel, allowedRepos } = opts;
@@ -77,8 +89,8 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
     );
   } else {
     console.log(
-      `[autonomous-loop] routing channel tickets through repo-admin pool — ` +
-        `Session ${sessionId} will mark killed with reason "al-14-pending" once routed.`
+      `[autonomous-loop] routing channel tickets + draining repo-admin queues — ` +
+        `Session ${sessionId} will mark killed with reason "al-16-pending" once drained.`
     );
   }
 
@@ -104,14 +116,15 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
   }
 
   // AL-13: drain the channel's ticket board through the router exactly
-  // once. The scheduler drains its run ledger on a loop; this autonomous
-  // stub doesn't spin — AL-14 adds the steady-state loop (poll for new
-  // tickets, watch worker completions, spawn replacements, etc.). The
-  // single pass here is enough to satisfy AL-13's "boots pool, routes
-  // tickets to admins (who queue them), exits cleanly" scope.
-  let terminalReason: "al-13-pending" | "al-14-pending" = "al-13-pending";
+  // once. AL-14 adds a second pass that drains each admin's queue via
+  // TicketRunner — spawn a worker per ticket, wait for it to open a PR
+  // (or fail), then exit. The autonomous-loop's steady-state driver
+  // (AL-4) will replace this single-pass shape; AL-14 just proves the
+  // end-to-end plumbing.
+  let terminalReason: "al-13-pending" | "al-16-pending" = "al-13-pending";
   if (pool) {
-    terminalReason = "al-14-pending";
+    terminalReason = "al-16-pending";
+    const runners: TicketRunner[] = [];
     try {
       const channelStore = new ChannelStore();
       const router = new TicketRouter({ pool, channel, channelStore });
@@ -135,11 +148,58 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
           );
         }
       }
+
+      // AL-14: drain each admin's pending queue in parallel. Each admin
+      // serializes internally (one worker at a time in its repo); two
+      // different admins DO run in parallel. The drain promise resolves
+      // once every admin's queue is empty AND every in-flight worker has
+      // exited.
+      const spawner = new WorkerSpawner();
+      const admins = pool.listSessions();
+      for (const admin of admins) {
+        const assignment = channel.repoAssignments?.find((a) => a.alias === admin.alias);
+        if (!assignment) continue;
+        runners.push(
+          new TicketRunner({
+            admin,
+            repoAssignment: assignment,
+            channel,
+            channelStore,
+            spawner,
+          })
+        );
+      }
+      await Promise.all(
+        runners.map((r) =>
+          r.drain().catch((err) => {
+            console.warn(
+              `[autonomous-loop] ticket runner drain failed: ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            );
+          })
+        )
+      );
     } catch (err) {
       console.warn(
         `[autonomous-loop] ticket routing pass failed: ${
           err instanceof Error ? err.message : String(err)
         }`
+      );
+    } finally {
+      // Ensure any in-flight worker is signalled before we unwind. Safe
+      // to call even if drain() already finished — stop() is idempotent
+      // and only hits still-running workers.
+      await Promise.all(
+        runners.map((r) =>
+          r.stop("autonomous-loop-exit").catch((err) => {
+            console.warn(
+              `[autonomous-loop] runner stop failed: ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            );
+          })
+        )
       );
     }
   }
