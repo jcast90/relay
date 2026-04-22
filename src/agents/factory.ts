@@ -63,9 +63,10 @@ interface AgentFactoryOptions {
   /**
    * Per-channel "full access" opt-in (AL-0). Threaded through to every
    * constructed agent so `--dangerously-skip-permissions` (Claude) /
-   * `--full-auto` (Codex) gets passed without requiring callers to set
-   * `RELAY_AUTO_APPROVE`. Callers resolving per-channel state (e.g.
-   * `dispatch()`) read `channel.fullAccess` once and forward it here.
+   * `--sandbox workspace-write --ask-for-approval never` (Codex) gets passed
+   * without requiring callers to set `RELAY_AUTO_APPROVE`. Callers resolving
+   * per-channel state (e.g. `dispatch()`) read `channel.fullAccess` once and
+   * forward it here.
    */
   fullAccess?: boolean;
 }

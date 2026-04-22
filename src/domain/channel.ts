@@ -76,11 +76,12 @@ export interface Channel {
   /**
    * Per-channel opt-in for unattended agent runs. When `true`, subprocesses
    * Relay spawns on behalf of this channel are launched with
-   * `--dangerously-skip-permissions` (Claude) / `--full-auto` (Codex) so they
-   * don't prompt for permission on every tool call. Scoped per-channel —
-   * toggling this on one channel never affects another channel, even when
-   * both assign the same repo. Optional for back-compat with older channel
-   * files: a missing field is treated as `false` at every read site.
+   * `--dangerously-skip-permissions` (Claude) / `--sandbox workspace-write
+   * --ask-for-approval never` (Codex) so they don't prompt for permission on
+   * every tool call. Scoped per-channel — toggling this on one channel never
+   * affects another channel, even when both assign the same repo. Optional
+   * for back-compat with older channel files: a missing field is treated as
+   * `false` at every read site.
    */
   fullAccess?: boolean;
   createdAt: string;

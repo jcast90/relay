@@ -384,7 +384,7 @@ rly claude
 Under the hood:
 
 - Claude launches with `--dangerously-skip-permissions`
-- Codex launches with `--full-auto` + workspace-write sandbox + `--ask-for-approval never`
+- Codex launches with `--sandbox workspace-write` + `--ask-for-approval never`
 - Internal scheduler-dispatched agents inherit via `RELAY_AUTO_APPROVE` propagated in the child env
 
 One-off: `rly claude --yolo` or `rly claude --auto-approve`.

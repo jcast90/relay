@@ -192,6 +192,14 @@ function ChannelHeader({ channel, onRefresh }: { channel: Channel; onRefresh: ()
   const toggle = async () => {
     if (busy) return;
     const next = !current;
+    // Confirm before flipping — full-access silences every permission prompt
+    // for every future subprocess this channel spawns, which is strictly
+    // more impactful than a normal archive. Matches the conversational tone
+    // of Sidebar's archive confirm() (`Archive #foo?`).
+    const prompt = next
+      ? `Enable full access for #${channel.name}? All subprocesses spawned from this channel will run without permission prompts until this is turned off.`
+      : `Disable full access for #${channel.name}? Permission prompts will return for new subprocesses.`;
+    if (!confirm(prompt)) return;
     setBusy(true);
     setError(null);
     try {
@@ -213,12 +221,12 @@ function ChannelHeader({ channel, onRefresh }: { channel: Channel; onRefresh: ()
       <span className="channel-header-name">{channel.name}</span>
       <label
         className="auto-approve"
-        title="Run dispatched agents with --dangerously-skip-permissions / --full-auto for this channel only. Scoped per-channel; other channels are unaffected."
+        title="Runs dispatched agents with workspace-write sandbox and no approval prompts for this channel only. Scoped per-channel; other channels are unaffected."
       >
         <input type="checkbox" checked={current} disabled={busy} onChange={toggle} />
         Full access
       </label>
-      {error && <span className="composer-error">{error}</span>}
+      {error && <span className="channel-header-error">{error}</span>}
     </div>
   );
 }

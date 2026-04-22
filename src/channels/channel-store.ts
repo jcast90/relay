@@ -266,10 +266,10 @@ export class ChannelStore {
   /**
    * Flip the per-channel `fullAccess` flag (AL-0). When set, agent
    * subprocesses dispatched on behalf of this channel run with
-   * `--dangerously-skip-permissions` (Claude) / `--full-auto` (Codex) so
-   * they don't prompt for approval on every tool call. Scoping is
-   * per-channel, NOT per-workspace: two channels that happen to share a
-   * repo keep independent flags.
+   * `--dangerously-skip-permissions` (Claude) / `--sandbox workspace-write
+   * --ask-for-approval never` (Codex) so they don't prompt for approval on
+   * every tool call. Scoping is per-channel, NOT per-workspace: two channels
+   * that happen to share a repo keep independent flags.
    *
    * Every toggle records a decision on the channel so the audit trail is
    * durable — the entry shows up in `rly decisions <channelId>` and the GUI
@@ -321,7 +321,7 @@ export class ChannelStore {
         `(previous: ${previous ? "on" : "off"}).`,
       rationale: `Agent subprocesses dispatched for this channel will ${
         next ? "run with" : "no longer receive"
-      } --dangerously-skip-permissions (Claude) / --full-auto (Codex).`,
+      } --dangerously-skip-permissions (Claude) / --sandbox workspace-write --ask-for-approval never (Codex).`,
       alternatives: [],
       decidedBy,
       decidedByName,

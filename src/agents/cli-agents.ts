@@ -33,10 +33,11 @@ interface CliAgentOptions {
   onStreamLine?: (line: string) => void;
   /**
    * Per-channel "full access" opt-in (AL-0). When `true`, Claude runs with
-   * `--dangerously-skip-permissions` and Codex with `--full-auto` regardless
-   * of the `RELAY_AUTO_APPROVE` env var. Channels without the flag still
-   * honor the env-based auto-approve behavior. Undefined / false means
-   * "behave exactly as before" — no change for existing callers.
+   * `--dangerously-skip-permissions` and Codex with `--sandbox
+   * workspace-write --ask-for-approval never` regardless of the
+   * `RELAY_AUTO_APPROVE` env var. Channels without the flag still honor the
+   * env-based auto-approve behavior. Undefined / false means "behave exactly
+   * as before" — no change for existing callers.
    */
   fullAccess?: boolean;
 }
@@ -122,9 +123,11 @@ abstract class CliAgentBase implements Agent {
   protected readonly onStreamLine?: (line: string) => void;
   /**
    * Per-channel full-access flag (AL-0). When `true`, the provider-specific
-   * "skip every permission prompt" flag is threaded through regardless of
-   * the env-based `RELAY_AUTO_APPROVE`. Kept as a member so tests can
-   * assert on the constructed args without mutating `process.env`.
+   * "skip every permission prompt" signals are threaded through regardless
+   * of the env-based `RELAY_AUTO_APPROVE` — Claude gets
+   * `--dangerously-skip-permissions`, Codex gets `--sandbox workspace-write
+   * --ask-for-approval never`. Kept as a member so tests can assert on the
+   * constructed args without mutating `process.env`.
    */
   protected readonly fullAccess: boolean;
 

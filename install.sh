@@ -203,8 +203,8 @@ cat > "$TEMPLATE" <<'ENVEOF'
 # export HARNESS_LIVE=1
 
 # Set to 1 to run Claude / Codex fully unattended — no permission prompts.
-# Claude launches with --dangerously-skip-permissions; Codex with --full-auto
-# (workspace-write sandbox, --ask-for-approval never). Internal scheduler
+# Claude launches with --dangerously-skip-permissions; Codex with
+# --sandbox workspace-write and --ask-for-approval never. Internal scheduler
 # agents inherit. Use only when you trust the tasks being dispatched — this
 # lets the harness run for hours without intervention.
 # export RELAY_AUTO_APPROVE=1

@@ -116,8 +116,9 @@ pub struct Channel {
     /// Per-channel opt-in for unattended agent runs (AL-0). When `true`,
     /// agent subprocesses dispatched on behalf of this channel skip every
     /// permission prompt (Claude `--dangerously-skip-permissions`, Codex
-    /// `--full-auto`). Optional + `#[serde(default)]` so older channel files
-    /// that predate the flag keep deserializing as `false`.
+    /// `--sandbox workspace-write --ask-for-approval never`). Optional +
+    /// `#[serde(default)]` so older channel files that predate the flag keep
+    /// deserializing as `false`.
     #[serde(default)]
     pub full_access: Option<bool>,
     /// ISO 8601 timestamps. Optional for back-compat with channel files

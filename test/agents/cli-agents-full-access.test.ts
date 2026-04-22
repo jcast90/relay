@@ -7,11 +7,11 @@ import type { WorkRequest } from "../../src/domain/agent.js";
 
 /**
  * AL-0: the per-channel `fullAccess` flag must reach the subprocess launch
- * as `--dangerously-skip-permissions` (Claude) / `--full-auto` (Codex),
- * regardless of the host's `RELAY_AUTO_APPROVE` env var. These tests
- * capture the args passed to a fake `CommandInvoker` and assert the right
- * flag appears (or doesn't) under every combination of channel-flag +
- * env-flag.
+ * as `--dangerously-skip-permissions` (Claude) / `--sandbox workspace-write
+ * --ask-for-approval never` (Codex), regardless of the host's
+ * `RELAY_AUTO_APPROVE` env var. These tests capture the args passed to a
+ * fake `CommandInvoker` and assert the right flag appears (or doesn't)
+ * under every combination of channel-flag + env-flag.
  */
 
 class CaptureInvoker implements CommandInvoker {
@@ -156,7 +156,7 @@ describe("cli-agents full-access flag (AL-0)", () => {
     expect(args).toContain("--dangerously-skip-permissions");
   });
 
-  it("Codex: fullAccess=true threads --full-auto and --ask-for-approval never", async () => {
+  it("Codex: fullAccess=true threads workspace-write sandbox and --ask-for-approval never", async () => {
     const invoker = new CaptureInvoker(AGENT_RESULT);
     const agent = new CodexCliAgent({
       id: "a-1",

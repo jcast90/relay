@@ -58,7 +58,8 @@ export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
 
   // Build agent registry with the per-channel full-access flag threaded
   // through so Claude gets `--dangerously-skip-permissions` / Codex gets
-  // `--full-auto` without requiring the machine-wide `RELAY_AUTO_APPROVE`.
+  // `--sandbox workspace-write --ask-for-approval never` without requiring
+  // the machine-wide `RELAY_AUTO_APPROVE`.
   const registry = new AgentRegistry();
   const agents = createLiveAgents({
     cwd: repoPath,
