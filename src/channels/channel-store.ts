@@ -179,6 +179,7 @@ export class ChannelStore {
         | "workspaceIds"
         | "repoAssignments"
         | "primaryWorkspaceId"
+        | "linearProjectId"
       >
     >
   ): Promise<Channel | null> {

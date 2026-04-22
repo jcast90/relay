@@ -256,6 +256,8 @@ Right pane shows repo assignments (with `PRIMARY` badge), pinned refs, and — w
 | `rly channel <id>` | Show channel details + recent feed |
 | `rly channel feed <id> [--limit N]` | Raw feed entries |
 | `rly channel post <id> <content> [--from <name>] [--type <type>]` | Post to the feed |
+| `rly channel link-linear <id> <linearProjectId>` | Bind a Linear project to the channel + do a first read-only mirror of its issues onto the ticket board (requires `LINEAR_API_KEY`) |
+| `rly channel linear-sync <id>` | Re-run the Linear → channel-board mirror for a channel already linked |
 | `rly running` | Active tasks across every workspace |
 | `rly board <channelId>` | Kanban view of the ticket board |
 | `rly decisions <channelId>` | Decision history |

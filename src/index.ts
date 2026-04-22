@@ -49,6 +49,10 @@ import {
   getActiveWatcher
 } from "./cli/pr-watcher-factory.js";
 import type { HarnessPR } from "./integrations/scm.js";
+import {
+  fetchLinearProject,
+  mirrorLinearProject
+} from "./integrations/linear-mirror.js";
 import { handleCrosslinkCommand } from "./crosslink/cli.js";
 import { startDashboard } from "./tui/dashboard.js";
 import { SessionStore } from "./cli/session-store.js";
@@ -648,6 +652,16 @@ async function handleChannelCommand(args: string[]): Promise<void> {
     return;
   }
 
+  if (sub === "link-linear") {
+    await handleChannelLinkLinear(store, args);
+    return;
+  }
+
+  if (sub === "linear-sync") {
+    await handleChannelLinearSync(store, args);
+    return;
+  }
+
   if (sub === "feed") {
     const channelId = args[1];
     const limit = Number(parseNamedArg(args, "--limit") ?? "50");
@@ -740,6 +754,141 @@ async function handleChannelCommand(args: string[]): Promise<void> {
       const from = entry.fromDisplayName ?? "system";
       console.log(`  [${entry.type}] ${from}: ${entry.content.slice(0, 120)}`);
     }
+  }
+}
+
+function getLinearApiKey(): string | null {
+  return process.env.LINEAR_API_KEY ?? null;
+}
+
+async function handleChannelLinkLinear(
+  store: ChannelStore,
+  args: string[]
+): Promise<void> {
+  const channelId = args[1];
+  const projectId = args[2];
+  if (!channelId || !projectId) {
+    console.error(
+      "Usage: rly channel link-linear <channelId> <linearProjectId>"
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const apiKey = getLinearApiKey();
+  if (!apiKey) {
+    console.error(
+      "LINEAR_API_KEY is not set. Add it to ~/.relay/config.env and re-source."
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const channel = await store.getChannel(channelId);
+  if (!channel) {
+    console.error(`Channel not found: ${channelId}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  let project;
+  try {
+    project = await fetchLinearProject(projectId, { apiKey });
+  } catch (err) {
+    console.error(
+      `Failed to validate Linear project: ${err instanceof Error ? err.message : String(err)}`
+    );
+    process.exitCode = 1;
+    return;
+  }
+  if (!project) {
+    console.error(`Linear project not found: ${projectId}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  await store.updateChannel(channelId, { linearProjectId: project.id });
+
+  const result = await mirrorLinearProject(channelId, project.id, {
+    store,
+    apiKey
+  });
+
+  await store.postEntry(channelId, {
+    type: "event",
+    fromAgentId: null,
+    fromDisplayName: "system",
+    content: `Linked Linear project "${project.name}" — mirrored ${result.fetched} issue${result.fetched === 1 ? "" : "s"} onto the channel board.`,
+    metadata: {
+      linearProjectId: project.id,
+      linearProjectName: project.name,
+      fetched: result.fetched
+    }
+  });
+
+  if (args.includes("--json")) {
+    jsonOut({
+      channelId,
+      linearProjectId: project.id,
+      linearProjectName: project.name,
+      fetched: result.fetched,
+      mirrored: result.mirrored.length
+    });
+  } else {
+    console.log(
+      `Linked "${project.name}" (${project.id}) — mirrored ${result.fetched} issues.`
+    );
+  }
+}
+
+async function handleChannelLinearSync(
+  store: ChannelStore,
+  args: string[]
+): Promise<void> {
+  const channelId = args[1];
+  if (!channelId) {
+    console.error("Usage: rly channel linear-sync <channelId>");
+    process.exitCode = 1;
+    return;
+  }
+
+  const apiKey = getLinearApiKey();
+  if (!apiKey) {
+    console.error("LINEAR_API_KEY is not set.");
+    process.exitCode = 1;
+    return;
+  }
+
+  const channel = await store.getChannel(channelId);
+  if (!channel) {
+    console.error(`Channel not found: ${channelId}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (!channel.linearProjectId) {
+    console.error(
+      `Channel ${channelId} has no Linear project linked. Run: rly channel link-linear ${channelId} <linearProjectId>`
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const result = await mirrorLinearProject(channelId, channel.linearProjectId, {
+    store,
+    apiKey
+  });
+
+  if (args.includes("--json")) {
+    jsonOut({
+      channelId,
+      linearProjectId: channel.linearProjectId,
+      fetched: result.fetched,
+      mirrored: result.mirrored.length
+    });
+  } else {
+    console.log(
+      `Synced Linear project ${channel.linearProjectId} — mirrored ${result.fetched} issues.`
+    );
   }
 }
 
