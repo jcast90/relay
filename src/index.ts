@@ -601,6 +601,27 @@ async function handleChannelCommand(args: string[]): Promise<void> {
     return;
   }
 
+  if (sub === "unarchive") {
+    const channelId = args[1];
+    if (!channelId) {
+      console.error("Usage: rly channel unarchive <channelId>");
+      process.exitCode = 1;
+      return;
+    }
+
+    const unarchived = await store.unarchiveChannel(channelId);
+
+    if (args.includes("--json")) {
+      jsonOut(unarchived);
+    } else if (unarchived) {
+      console.log(`Channel unarchived: ${unarchived.name} (${unarchived.channelId})`);
+    } else {
+      console.error(`Channel not found: ${channelId}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   if (sub === "update") {
     const channelId = args[1];
     if (!channelId) {
@@ -727,7 +748,7 @@ async function handleChannelCommand(args: string[]): Promise<void> {
   }
 
   if (!sub) {
-    console.error("Usage: rly channel <channelId|create|archive|update|feed|post>");
+    console.error("Usage: rly channel <channelId|create|archive|unarchive|update|feed|post>");
     process.exitCode = 1;
     return;
   }

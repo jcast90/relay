@@ -16,16 +16,27 @@ name: Release
 #                      matching CHANGELOG.md section as the release body. Also
 #                      independent of release-npm.
 #
-# Admin-only secrets / variables:
-#   NPM_TOKEN                    npm auth token with publish scope for the
-#                                `@jcast90` scope. Only required once
-#                                NPM_PUBLISH_ENABLED is set to "true".
+# Admin-only variables / registry setup:
 #   vars.NPM_PUBLISH_ENABLED     repo-level variable (not a secret). Set to
 #                                "true" to actually publish to npm; anything
 #                                else (including unset) makes release-npm a
 #                                no-op. OSS-21: deferred because publish isn't
-#                                day-1; toggle when the scope and token are
-#                                both provisioned.
+#                                day-1; toggle when the Trusted Publisher
+#                                binding on npm is configured (see below).
+#
+#   Trusted Publishers (OIDC):   npm authentication uses GitHub Actions OIDC
+#                                via npm's Trusted Publishers, not a long-lived
+#                                NPM_TOKEN. Configure on npm once the package
+#                                `@jcast90/relay` exists on the registry:
+#                                https://www.npmjs.com/package/@jcast90/relay/access
+#                                → Publishing access → Add trusted publisher
+#                                  Publisher:   GitHub Actions
+#                                  Repository:  jcast90/relay
+#                                  Workflow:    release.yml
+#                                  Environment: (leave blank)
+#                                The `id-token: write` permission below + pnpm
+#                                v10 are what let the publish step exchange
+#                                the OIDC token automatically.
 #   (GITHUB_TOKEN is provided automatically by Actions; used for GitHub Packages
 #   mirror + Release creation.)
 #
@@ -59,7 +70,9 @@ jobs:
     # repo-level `NPM_PUBLISH_ENABLED` variable is "true". This replaces the
     # earlier "publish is day-1" assumption: both `relay` and `rly` were
     # taken on npm, the package is now scoped as `@jcast90/relay`, and the
-    # admin will flip this toggle once the scope + token are provisioned.
+    # admin will flip this toggle once the Trusted Publisher binding on npm
+    # is configured (see the header comment above). Auth is OIDC — no
+    # long-lived NPM_TOKEN.
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -93,10 +106,13 @@ jobs:
         run: pnpm build
 
       - name: Publish to npm
+        # Auth is OIDC via npm Trusted Publishers — the top-level
+        # `id-token: write` permission lets pnpm mint an OIDC token that npm
+        # exchanges for a short-lived publish credential. No NPM_TOKEN.
+        # `--provenance` attaches a signed build-provenance statement so
+        # consumers can verify the package was built in this workflow.
         if: vars.NPM_PUBLISH_ENABLED == 'true'
-        run: pnpm publish --no-git-checks --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: pnpm publish --no-git-checks --access public --provenance
 
       - name: Setup Node.js (GitHub Packages)
         if: vars.NPM_PUBLISH_ENABLED == 'true'

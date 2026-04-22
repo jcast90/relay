@@ -325,6 +325,10 @@ pub fn load_agent_names() -> Vec<AgentNameEntry> {
 }
 
 pub fn load_channels() -> Vec<Channel> {
+    load_channels_with_status(false)
+}
+
+pub fn load_channels_with_status(include_archived: bool) -> Vec<Channel> {
     let channels_dir = harness_root().join("channels");
     let mut channels = Vec::new();
 
@@ -333,7 +337,7 @@ pub fn load_channels() -> Vec<Channel> {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "json") {
                 if let Some(ch) = load_json::<Channel>(&path) {
-                    if ch.status == "active" {
+                    if include_archived || ch.status == "active" {
                         channels.push(ch);
                     }
                 }

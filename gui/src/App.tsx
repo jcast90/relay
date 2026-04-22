@@ -12,12 +12,13 @@ export function App() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
   const [modalOpen, setModalOpen] = useState(false);
+  const [includeArchived, setIncludeArchived] = useState(false);
 
   const refresh = () => setRefreshTick((n) => n + 1);
 
   useEffect(() => {
     let cancelled = false;
-    api.listChannels().then((cs) => {
+    api.listChannels(includeArchived).then((cs) => {
       if (cancelled) return;
       setChannels(cs);
       if (!selectedId && cs.length > 0) setSelectedId(cs[0].channelId);
@@ -25,7 +26,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [refreshTick]);
+  }, [refreshTick, includeArchived]);
 
   useEffect(() => {
     const id = setInterval(refresh, 5000);
@@ -44,8 +45,16 @@ export function App() {
       <Sidebar
         channels={channels}
         selectedId={selectedId}
+        includeArchived={includeArchived}
         onSelect={setSelectedId}
         onNewChannel={() => setModalOpen(true)}
+        onToggleIncludeArchived={setIncludeArchived}
+        onArchived={(id) => {
+          // If the archived channel was selected, drop the selection so the
+          // center pane doesn't keep rendering a stale channel.
+          if (selectedId === id) setSelectedId(null);
+        }}
+        onRefresh={refresh}
       />
       <CenterPane
         channel={selected}
