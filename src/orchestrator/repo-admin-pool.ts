@@ -40,10 +40,12 @@
  * the CLI exits cleanly. AL-13 flips the default on once the handshake
  * protocol is wired.
  *
- * Scope discipline (out of scope for AL-12):
+ * Scope discipline:
  *   - Ticket routing / dispatch        → AL-13.
  *   - Worker spawning                  → AL-14.
- *   - Memory-shed / session cycling    → AL-15.
+ *   - Memory-shed / session cycling    → AL-15 (implemented on the
+ *     session wrapper; the pool only observes + forwards `cycled`
+ *     events). Cycles are NOT counted against the rapid-flap ceiling.
  *   - Inter-admin coordination         → AL-16.
  */
 
@@ -132,6 +134,20 @@ export type RepoAdminPoolEvent =
       alias: string;
       reason: "rapid-restart-ceiling";
       restartsInWindow: number;
+    }
+  | {
+      /**
+       * AL-15: a repo-admin session completed a memory-shed cycle. The
+       * child backing `sessionId_old` was torn down, the child backing
+       * `sessionId_new` is now live, and the session's in-flight queue
+       * survived the boundary. Observers can surface this in logs /
+       * TUI without subscribing to each individual session.
+       */
+      kind: "cycled";
+      alias: string;
+      sessionId_old: string;
+      sessionId_new: string;
+      reason: "budget-60pct" | "manual";
     };
 
 export interface RepoAdminPoolOptions {
@@ -423,6 +439,20 @@ export class RepoAdminPool {
   }
 
   private handleSessionEvent(record: InternalSessionRecord, evt: RepoAdminSessionEvent): void {
+    // AL-15: forward cycle completions to pool observers. Cycles do NOT
+    // count toward the rapid-restart ceiling (they're planned, not a
+    // crash-and-respawn), and the pending queue survives on the session
+    // wrapper — no pool-side bookkeeping needed beyond the emit.
+    if (evt.kind === "cycled") {
+      this.emit({
+        kind: "cycled",
+        alias: record.session.alias,
+        sessionId_old: evt.previousSessionId,
+        sessionId_new: evt.newSessionId,
+        reason: evt.reason,
+      });
+      return;
+    }
     if (evt.kind !== "exited-unexpected") return;
 
     // Whether we restart hinges on the CURRENT lifecycle state. Even if

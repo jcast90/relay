@@ -1,5 +1,5 @@
 /**
- * Per-repo repo-admin session wrapper (AL-12).
+ * Per-repo repo-admin session wrapper (AL-12, extended by AL-15).
  *
  * One instance of this class owns exactly one long-lived `claude` child
  * process running the repo-admin role (AL-11). The pool (see
@@ -21,18 +21,24 @@
  *   - Scaffold an in-memory ticket queue so AL-13 can add dispatches
  *     through this class without changing its shape. AL-12 never enqueues;
  *     it just carries the list so a restart doesn't drop in-flight work.
+ *   - **AL-15**: own a per-session {@link TokenTracker} and the
+ *     memory-shed cycle trigger. When the tracker crosses 60%, the session
+ *     writes a one-line summary to the channel's decisions board, kills
+ *     its own child, and respawns fresh. A cycle is NOT a restart —
+ *     cycles do not count toward the pool's rapid-flap ceiling.
  *
  * Explicitly out of scope here (each has its own ticket):
- *   - Ticket routing / wire protocol   → AL-13 (`dispatchTicket` throws).
  *   - Worker spawning from repo-admin  → AL-14 (runs inside the process,
- *     not this wrapper).
- *   - Memory-shed / session cycling    → AL-15.
+ *     not this wrapper). AL-14 will also populate
+ *     `worktreesInUse`/`openPrs` on the cycle snapshot; AL-15 stubs them
+ *     as empty arrays.
+ *   - Inter-admin coordination         → AL-16.
  *
  * The state machine purposely has no edge back from `stopped` — once a
  * session is stopped, a fresh session (new sessionId) is the only way
- * back. Restart reuses the same `RepoAdminSession` instance so the pool's
- * reference stays stable, but mints a NEW session id + fresh child
- * process, preserving the in-flight queue.
+ * back. Restart AND cycle both reuse the same `RepoAdminSession` instance
+ * so the pool's reference (and the in-flight queue) stay stable, while
+ * minting a NEW session id + fresh child process underneath.
  */
 
 import { EventEmitter } from "node:events";
@@ -48,6 +54,13 @@ import {
 } from "../agents/command-invoker.js";
 import { REPO_ADMIN_ROLE } from "../agents/repo-admin.js";
 import { getDisallowedBuiltinsForRole } from "../mcp/role-allowlist.js";
+import { TokenTracker, type ThresholdEvent } from "../budget/token-tracker.js";
+import {
+  buildCycleDecision,
+  type CycleDecisionInput,
+  type CycleReason,
+  type CycleSummarySnapshot,
+} from "./session-summary.js";
 
 /** Hard grace period between SIGTERM and SIGKILL on `stop()`. */
 export const STOP_GRACE_MS = 5_000;
@@ -57,6 +70,21 @@ export const STOP_GRACE_MS = 5_000;
  * unexpected exit. Kept small so a chatty session doesn't balloon memory.
  */
 export const STDERR_DIAGNOSTIC_LINES = 200;
+
+/**
+ * AL-15: default per-session token ceiling. 150k tokens matches the
+ * Claude CLI's "roomy" long-session context, leaving headroom under a
+ * 200k-token API window. Overridable per-session via
+ * {@link RepoAdminSessionOptions.adminTokenCeiling}.
+ */
+export const DEFAULT_ADMIN_TOKEN_CEILING = 150_000;
+
+/**
+ * AL-15: the threshold (percent) at which a memory-shed cycle fires. The
+ * {@link TokenTracker} THRESHOLDS list includes 60 for this purpose.
+ * Exported so the pool's test + any future tuning lives in one place.
+ */
+export const CYCLE_THRESHOLD_PCT = 60;
 
 export type RepoAdminSessionState = "booting" | "ready" | "dead" | "stopped";
 
@@ -94,7 +122,13 @@ export interface RepoAdminSpawnArgs {
  *  - `exited-unexpected` — child exited while state was `ready` (or
  *    `booting`, which we treat as a boot crash). Pool decides whether to
  *    restart; includes the exit code + stderr tail for diagnostics.
- *  - `exited-expected`   — child exited during a deliberate `stop()`.
+ *  - `exited-expected`   — child exited during a deliberate `stop()` or
+ *    a cycle tear-down. Use `reason` to distinguish (cycles pass
+ *    `"cycle:<reason>"`).
+ *  - `cycled`            — AL-15: a memory-shed cycle completed. The old
+ *    child is gone, the new child is live under `newSessionId`. The pool
+ *    mirrors this to its own `cycled` event so observers can reason at
+ *    the pool level without subscribing to each session.
  */
 export type RepoAdminSessionEvent =
   | { kind: "booted"; sessionId: string }
@@ -123,7 +157,36 @@ export type RepoAdminSessionEvent =
       kind: "ticket-received";
       sessionId: string;
       ticketId: string;
+    }
+  | {
+      kind: "cycled";
+      previousSessionId: string;
+      newSessionId: string;
+      reason: CycleReason;
     };
+
+/**
+ * AL-15: minimal write-only view of {@link ChannelStore} the session
+ * needs. Typed as the exact method shape so a fake in tests doesn't have
+ * to stub the entire ChannelStore surface.
+ */
+export interface SessionDecisionWriter {
+  recordDecision(channelId: string, input: CycleDecisionInput): Promise<unknown>;
+}
+
+/**
+ * AL-15: wiring the session needs to write cycle summaries to the
+ * decisions board. `channelId` is required for the ChannelStore API.
+ * When unset, the session still cycles (process tear-down + respawn) but
+ * logs a warning and skips the decision write — useful for tests and
+ * for non-channel-backed sessions that might appear in future.
+ */
+export interface SessionCycleConfig {
+  /** Channel on whose board the cycle summary is recorded. */
+  channelId: string;
+  /** Decision store. Accepts `ChannelStore` in production. */
+  decisions: SessionDecisionWriter;
+}
 
 export interface RepoAdminSessionOptions {
   assignment: RepoAssignment;
@@ -144,6 +207,30 @@ export interface RepoAdminSessionOptions {
    * tests — production always uses {@link STOP_GRACE_MS}.
    */
   stopGraceMs?: number;
+  /**
+   * AL-15: declared ceiling for this admin session's own token tracker.
+   * Defaults to {@link DEFAULT_ADMIN_TOKEN_CEILING}. The tracker's 60%
+   * crossing fires a memory-shed cycle.
+   */
+  adminTokenCeiling?: number;
+  /**
+   * AL-15: inject an alternative tracker (tests). The session's default
+   * is a fresh {@link TokenTracker} keyed off the session id + log dir.
+   * A caller can pass their own tracker here to share budget across
+   * multiple sessions or to drive the cycle deterministically in tests.
+   */
+  tokenTracker?: TokenTracker;
+  /**
+   * AL-15: channel + decision-store wiring for the cycle summary entry.
+   * When omitted, the session still cycles (process tear-down + respawn)
+   * but skips the decision write.
+   */
+  cycle?: SessionCycleConfig;
+  /**
+   * AL-15: ISO-clock injection for the cycle event's `cycledAt` field.
+   * Defaults to `() => new Date().toISOString()`.
+   */
+  cycleClock?: () => string;
 }
 
 /**
@@ -254,6 +341,26 @@ export class RepoAdminSession {
   private killTimer: NodeJS.Timeout | null = null;
   private recentStderr: string[] = [];
 
+  /**
+   * AL-15: monotonic count of memory-shed cycles for this session. Used
+   * by tests + observability; the pool does NOT count cycles against its
+   * rapid-flap ceiling (that counter lives on `RepoAdminPool`).
+   */
+  private _cycleCount = 0;
+
+  /**
+   * AL-15: true while the session is in the middle of a cycle. Guards
+   * the `onExit` handler so the child's SIGTERM-driven exit is classified
+   * as expected (not a crash), and prevents overlapping cycles.
+   */
+  private cyclingReason: CycleReason | null = null;
+  private cyclePromise: Promise<void> | null = null;
+  private readonly tokenTracker: TokenTracker;
+  private readonly ownsTokenTracker: boolean;
+  private readonly unsubscribeTokenTracker: () => void;
+  private readonly cycleConfig: SessionCycleConfig | null;
+  private readonly cycleClock: () => string;
+
   constructor(options: RepoAdminSessionOptions) {
     this.alias = options.assignment.alias;
     this.repoPath = options.assignment.repoPath;
@@ -262,6 +369,38 @@ export class RepoAdminSession {
     this.spawner = options.spawner ?? new ClaudeRepoAdminSpawner();
     this.buildSessionId = options.buildSessionId ?? defaultBuildRepoAdminSessionId;
     this.stopGraceMs = options.stopGraceMs ?? STOP_GRACE_MS;
+    this.cycleConfig = options.cycle ?? null;
+    this.cycleClock = options.cycleClock ?? (() => new Date().toISOString());
+
+    // AL-15: the session's own token tracker. A caller that supplies one
+    // (tests, or a future aggregator) owns its lifetime; otherwise we
+    // mint a tracker keyed off the admin alias + logDir so disk writes
+    // land alongside the session's other metadata.
+    if (options.tokenTracker) {
+      this.tokenTracker = options.tokenTracker;
+      this.ownsTokenTracker = false;
+    } else {
+      const ceiling = options.adminTokenCeiling ?? DEFAULT_ADMIN_TOKEN_CEILING;
+      // Tracker sessionId is `admin-<alias>` (not the per-spawn CHILD id)
+      // so a replay across process-restarts recovers the admin's
+      // accumulated budget. The tracker persists under the log dir's
+      // parent (the admin dir), NOT the parent autonomous session's
+      // `sessions/` directory, so each admin's budget file sits next to
+      // its own logs.
+      this.tokenTracker = new TokenTracker(`admin-${this.alias}`, ceiling, {
+        rootDir: dirname(this.logDir),
+      });
+      this.ownsTokenTracker = true;
+    }
+
+    // Subscribe to threshold crossings. We only care about the 60 tier
+    // (AL-15's memory-shed signal); everything else is other subsystems'
+    // business. The unsubscribe function is stashed so `stop()` can
+    // detach cleanly — otherwise a shared tracker (test-injected) would
+    // keep this session alive through the listener reference.
+    this.unsubscribeTokenTracker = this.tokenTracker.onThreshold((evt) =>
+      this.handleThresholdEvent(evt)
+    );
   }
 
   /** Current lifecycle state. Use for assertions; drives no logic itself. */
@@ -280,6 +419,26 @@ export class RepoAdminSession {
   /** Total number of times the child has been spawned in this session's life. */
   get spawnCount(): number {
     return this._spawnCount;
+  }
+
+  /**
+   * AL-15: number of memory-shed cycles the session has completed. Does
+   * NOT include unexpected restarts. Tests assert on this to distinguish
+   * cycles from restarts.
+   */
+  get cycleCount(): number {
+    return this._cycleCount;
+  }
+
+  /**
+   * AL-15: the tracker driving this session's cycle trigger. Exposed
+   * read-only so callers (pool, dispatch code, tests) can `record()`
+   * token usage on the session's own budget. The pool does NOT own this
+   * — each admin has its own tracker so one chatty admin doesn't starve
+   * its peers.
+   */
+  get tracker(): TokenTracker {
+    return this.tokenTracker;
   }
 
   /**
@@ -336,7 +495,11 @@ export class RepoAdminSession {
       return;
     }
 
-    const nextId = this.buildSessionId();
+    // AL-15: a cycle pre-mints the next session id so the decision entry
+    // can reference it. Consume that stash if present; otherwise fall
+    // back to the factory (normal start / restart path).
+    const nextId = this.pendingNextSessionId ?? this.buildSessionId();
+    this.pendingNextSessionId = null;
     this._currentSessionId = nextId;
     this._spawnCount += 1;
     this._state = "booting";
@@ -427,6 +590,7 @@ export class RepoAdminSession {
       // Not running (e.g. booting failed synchronously). Transition
       // directly to stopped so callers observe terminality.
       this._state = "stopped";
+      this.detachTokenTracker();
       this.emit({
         kind: "exited-expected",
         sessionId: this._currentSessionId,
@@ -435,6 +599,13 @@ export class RepoAdminSession {
       });
       return;
     }
+
+    // Subscribe to the exit event BEFORE sending SIGTERM. A spawner (or
+    // an already-dead child) that fires `onExit` synchronously from
+    // inside `kill()` would emit before any post-kill subscription could
+    // hear it, leaving `awaitStopped()` waiting on a never-emitted
+    // event. Ordering the subscribe first closes that race.
+    const stopped = this.awaitStopped();
 
     try {
       this.child.kill("SIGTERM");
@@ -459,7 +630,7 @@ export class RepoAdminSession {
     const t = this.killTimer as { unref?: () => void };
     if (t && typeof t.unref === "function") t.unref();
 
-    await this.awaitStopped();
+    await stopped;
   }
 
   /**
@@ -476,6 +647,7 @@ export class RepoAdminSession {
     this._state = "stopped";
     this.child = null;
     this.clearKillTimer();
+    this.detachTokenTracker();
     this.emit({
       kind: "exited-expected",
       sessionId: this._currentSessionId,
@@ -519,7 +691,246 @@ export class RepoAdminSession {
     });
   }
 
+  /**
+   * AL-15: memory-shed cycle. Planned recycle of the child process.
+   * Unlike `stop()` (graceful shutdown, terminal) and unlike the pool's
+   * restart-on-death (unexpected exit, counted toward rapid-flap), a
+   * cycle:
+   *
+   *   1. Captures a working-set snapshot (active tickets, worktrees,
+   *      open PRs — the latter two stubbed until AL-14).
+   *   2. Writes a one-line decision to the channel board via the
+   *      configured {@link SessionCycleConfig.decisions} store.
+   *   3. SIGTERM's the current child. The exit is CLASSIFIED as expected
+   *      (reason: `cycle:<reason>`) so the pool doesn't try to restart
+   *      and doesn't count it against its rapid-flap ceiling.
+   *   4. Spawns a fresh child with a NEW session id. The pending queue
+   *      is preserved across the boundary (it lives on the session
+   *      wrapper, not in child-process memory).
+   *   5. Emits a `cycled` event so observers (pool, TUI) can log the
+   *      transition.
+   *
+   * Idempotent with respect to overlap: a second caller during an
+   * in-flight cycle gets the same promise. Rejects if the session is
+   * already `stopped` — a cycle is a mid-life operation, not a
+   * resurrection.
+   */
+  async cycle(reason: CycleReason): Promise<void> {
+    if (this._state === "stopped") {
+      throw new Error(
+        `RepoAdminSession(${this.alias}): cannot cycle() after stop(); ` +
+          `cycle is a mid-life operation.`
+      );
+    }
+    if (this.cyclePromise) {
+      // Overlapping cycle request — return the in-flight one.
+      return this.cyclePromise;
+    }
+
+    this.cyclingReason = reason;
+    this.cyclePromise = this.performCycle(reason).finally(() => {
+      this.cyclingReason = null;
+      this.cyclePromise = null;
+    });
+    return this.cyclePromise;
+  }
+
   // --- internals ----------------------------------------------------------
+
+  /**
+   * AL-15: core of the cycle flow. Separated from {@link cycle} so the
+   * promise-memo logic is isolated from the actual work.
+   */
+  private async performCycle(reason: CycleReason): Promise<void> {
+    const previousSessionId = this._currentSessionId;
+    // Mint the next session id NOW so the decision entry can reference it.
+    // The `start()` call below reuses this id by passing it through the
+    // session-id factory — see the `pendingNextSessionId` stash.
+    const nextSessionId = this.buildSessionId();
+    this.pendingNextSessionId = nextSessionId;
+
+    // 1) Build + write the decision. Snapshot the working set first so a
+    //    failure in the write path doesn't leave the queue in a weird
+    //    state. AL-14 populates worktreesInUse + openPrs; for AL-15 they
+    //    are stubs.
+    const snapshot: CycleSummarySnapshot = {
+      activeTickets: this.snapshotActiveTicketIds(),
+      worktreesInUse: [], // AL-14 will populate.
+      openPrs: [], // AL-14 will populate.
+      cycleReason: reason,
+    };
+
+    if (this.cycleConfig) {
+      const decision = buildCycleDecision({
+        alias: this.alias,
+        previousSessionId,
+        nextSessionId,
+        snapshot,
+        cycledAt: this.cycleClock(),
+      });
+      try {
+        await this.cycleConfig.decisions.recordDecision(this.cycleConfig.channelId, decision);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // A decision-write failure is loud but non-fatal: the cycle
+        // still proceeds so the session doesn't wedge at 60%+ context.
+        // The post-cycle admin will see a gap in the board and rebuild
+        // from the adjacent entries.
+        console.warn(
+          `RepoAdminSession(${this.alias}): cycle decision write failed (${reason}): ${msg}`
+        );
+      }
+    }
+
+    // 2) Tear down the current child. `stopChild` classifies the exit as
+    //    expected with a `cycle:<reason>` marker so `handleExit` doesn't
+    //    emit `exited-unexpected` (which would trip the pool's
+    //    restart-on-death path and count this toward rapid-flap).
+    await this.stopChildForCycle(reason);
+
+    // 3) Spawn a fresh child. The `pendingNextSessionId` is consumed
+    //    inside `start()` so the session id in the decision entry
+    //    matches the spawned child's id exactly.
+    await this.start();
+
+    // 4) Reset the tracker. The cycle is a process boundary: the new
+    //    child has no context window residue from the old one, so its
+    //    token budget starts fresh. Without this, `firedThresholds` still
+    //    contains 60 from the triggering crossing and `_used` keeps
+    //    accumulating pre-cycle counts — only ONE auto-cycle could ever
+    //    fire per session lifetime. `reset()` rotates the JSONL on disk
+    //    so the pre-cycle data is preserved for audit.
+    try {
+      await this.tokenTracker.reset();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // A reset failure is loud but not cycle-fatal. The session is
+      // already mid-cycle; aborting here would leave the new child up
+      // with a stale tracker — which is no worse than the pre-fix
+      // behavior. Surface it and move on.
+      console.warn(
+        `RepoAdminSession(${this.alias}): cycle tracker reset failed (${reason}): ${msg}`
+      );
+    }
+
+    // 5) Bookkeeping + observer event.
+    this._cycleCount += 1;
+    this.emit({
+      kind: "cycled",
+      previousSessionId,
+      newSessionId: this._currentSessionId,
+      reason,
+    });
+  }
+
+  /**
+   * AL-15: snapshot the pending-dispatch queue as ticket ids. AL-13 will
+   * populate the queue with real dispatch records; here we accept either
+   * a raw ticket id string, an object with `ticketId`, or fall back to
+   * `String(entry)`. The test for AL-15 stuffs the queue with bare
+   * ticket-id strings (the AL-13 wire shape isn't landed yet).
+   */
+  private snapshotActiveTicketIds(): string[] {
+    const out: string[] = [];
+    for (const entry of this.pendingDispatches) {
+      if (typeof entry === "string") {
+        out.push(entry);
+      } else if (entry && typeof entry === "object" && "ticketId" in entry) {
+        const v = (entry as { ticketId: unknown }).ticketId;
+        if (typeof v === "string") out.push(v);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * AL-15: tear-down path for the cycle. Mirrors `stop()`'s SIGTERM →
+   * SIGKILL escalation but does NOT transition the session to `stopped`
+   * — the state machine stays mid-life so the subsequent `start()` is
+   * legal. The exit event emitted is `exited-expected` with a
+   * `cycle:<reason>` string, distinguishable from the graceful-shutdown
+   * reason by prefix.
+   */
+  private async stopChildForCycle(reason: CycleReason): Promise<void> {
+    if (!this.child) return;
+
+    const cycleReasonTag = `cycle:${reason}`;
+    this.stopReason = cycleReasonTag;
+    // Mark the exit as expected so handleExit classifies it as
+    // `exited-expected` with the cycle reason. We reuse the same flag
+    // that `stop()` uses so the existing classification path handles
+    // this without a separate code branch in `handleExit`.
+    this.stopRequested = true;
+
+    // Subscribe to the exit event BEFORE sending SIGTERM. Some spawners
+    // (and some crashed children) surface `onExit` synchronously from
+    // within `kill()`, which would emit before any listener wired up
+    // AFTER `kill()` could hear it — and this promise would never
+    // resolve. Ordering the subscribe first closes that race.
+    const exited = new Promise<void>((resolve) => {
+      const off = this.onEvent((evt) => {
+        if (evt.kind === "exited-expected" && evt.reason === cycleReasonTag) {
+          off();
+          resolve();
+        }
+      });
+    });
+
+    try {
+      this.child.kill("SIGTERM");
+    } catch {
+      // Already exited between the state check and the signal.
+    }
+
+    this.killTimer = setTimeout(() => {
+      this.killTimer = null;
+      if (this.child) {
+        try {
+          this.child.kill("SIGKILL");
+        } catch {
+          // Same as above.
+        }
+      }
+    }, this.stopGraceMs);
+    const t = this.killTimer as { unref?: () => void };
+    if (t && typeof t.unref === "function") t.unref();
+
+    // Wait for the child to actually exit. Unlike `stop()`'s
+    // `awaitStopped`, we don't transition to `stopped` — the session
+    // reverts to an internal "between cycles" state which `start()`
+    // promotes back to `booting`/`ready` on respawn.
+    await exited;
+
+    // Reset the flags so the subsequent `start()` + eventual `stop()`
+    // aren't confused by the cycle's bookkeeping.
+    this.stopRequested = false;
+    this.stopReason = null;
+    this.clearKillTimer();
+  }
+
+  /**
+   * AL-15: stash used by `performCycle` to thread the next session id
+   * through `start()`. Normal (non-cycle) starts leave this null and the
+   * default factory is used.
+   */
+  private pendingNextSessionId: string | null = null;
+
+  /**
+   * AL-15: threshold-event handler for the per-session token tracker.
+   * Fires a cycle when the 60% tier crosses; other tiers are ignored
+   * (other subsystems subscribe separately if they care).
+   */
+  private handleThresholdEvent(evt: ThresholdEvent): void {
+    if (evt.threshold !== CYCLE_THRESHOLD_PCT) return;
+    if (this._state === "stopped") return;
+    if (this.cyclePromise) return;
+    void this.cycle("budget-60pct").catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `RepoAdminSession(${this.alias}): auto-cycle on ${CYCLE_THRESHOLD_PCT}% failed: ${msg}`
+      );
+    });
+  }
 
   private handleExit(
     exitCode: number | null,
@@ -532,11 +943,27 @@ export class RepoAdminSession {
     this.child = null;
 
     if (expected) {
+      const reason = this.stopReason ?? "unknown";
+      // AL-15: a cycle's exit is "expected" but does NOT terminate the
+      // session — it's a mid-life tear-down before respawn. We detect
+      // that by the `cycle:` prefix left in `stopReason` by
+      // `stopChildForCycle`. In that case, stay out of the terminal
+      // state; `performCycle` will call `start()` next.
+      if (reason.startsWith("cycle:")) {
+        this.emit({
+          kind: "exited-expected",
+          sessionId: previousSessionId,
+          reason,
+          exitCode,
+        });
+        return;
+      }
       this._state = "stopped";
+      this.detachTokenTracker();
       this.emit({
         kind: "exited-expected",
         sessionId: previousSessionId,
-        reason: this.stopReason ?? "unknown",
+        reason,
         exitCode,
       });
       return;
@@ -554,6 +981,25 @@ export class RepoAdminSession {
       signal,
       stderrTail: this.recentStderr.join("\n"),
     });
+  }
+
+  /**
+   * AL-15: detach the token-tracker subscription + close the tracker if
+   * we own it. Safe to call multiple times; the unsubscribe wrapper is
+   * a no-op after the first call, and `TokenTracker.close()` is
+   * idempotent.
+   */
+  private detachTokenTracker(): void {
+    this.unsubscribeTokenTracker();
+    if (this.ownsTokenTracker) {
+      // Fire-and-forget: close() flushes pending writes. A caller
+      // waiting on `stop()` has already observed `exited-expected`, so
+      // we don't need to block them on disk IO.
+      void this.tokenTracker.close().catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`RepoAdminSession(${this.alias}): tracker close failed: ${msg}`);
+      });
+    }
   }
 
   private clearKillTimer(): void {
