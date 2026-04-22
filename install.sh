@@ -84,6 +84,59 @@ if [ "$WITH_TUI" -eq 1 ] || [ "$WITH_GUI" -eq 1 ]; then
   fi
 fi
 
+# Linux-only: Tauri needs a handful of system libraries to build (webkit2gtk
+# et al). We only check when the user asked for --with-gui. This is a soft
+# check — we look for the pkg-config modules, since the package names differ
+# between distros. If pkg-config itself isn't around, we note the common
+# apt-get one-liner and bail.
+UNAME="$(uname -s 2>/dev/null || echo unknown)"
+if [ "$WITH_GUI" -eq 1 ] && [ "$UNAME" = "Linux" ]; then
+  TAURI_MISSING=()
+  if ! have pkg-config; then
+    TAURI_MISSING+=("pkg-config (required to probe system libs for Tauri)")
+  else
+    # These are the pkg-config module names Tauri 2.x probes for on Linux.
+    TAURI_PKGS=(webkit2gtk-4.1 gtk+-3.0 libsoup-3.0 javascriptcoregtk-4.1)
+    for m in "${TAURI_PKGS[@]}"; do
+      if ! pkg-config --exists "$m" 2>/dev/null; then
+        TAURI_MISSING+=("$m (system library required by Tauri)")
+      fi
+    done
+  fi
+  if [ ${#TAURI_MISSING[@]} -gt 0 ]; then
+    warn "Tauri system dependencies missing:"
+    for m in "${TAURI_MISSING[@]}"; do warn "  - $m"; done
+    warn ""
+    warn "On Debian/Ubuntu you can install them with:"
+    warn "  sudo apt-get update && sudo apt-get install -y \\"
+    warn "    libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \\"
+    warn "    librsvg2-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \\"
+    warn "    build-essential curl wget file"
+    if [ "$(id -u)" = "0" ] || have sudo; then
+      printf '\nInstall Tauri deps now via apt-get? [y/N] '
+      read -r REPLY </dev/tty || REPLY=""
+      if [ "$REPLY" = "y" ] || [ "$REPLY" = "Y" ]; then
+        log "Installing Tauri system deps via apt-get"
+        if [ "$(id -u)" = "0" ]; then
+          apt-get update && apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
+            build-essential curl wget file
+        else
+          sudo apt-get update && sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
+            build-essential curl wget file
+        fi
+      else
+        die "Tauri deps missing — rerun without --with-gui or install the packages above first."
+      fi
+    else
+      die "Tauri deps missing and no sudo available — install the packages above first, then rerun."
+    fi
+  fi
+fi
+
 if [ ${#MISSING[@]} -gt 0 ]; then
   echo
   die "Missing prerequisites:$(printf '\n  - %s' "${MISSING[@]}")"
