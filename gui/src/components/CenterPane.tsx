@@ -698,30 +698,41 @@ function BoardView({ tickets }: { tickets: TicketLedgerEntry[] }) {
               {label} ({grouped[status].length})
             </h4>
             <div className="board-column-body">
-              {grouped[status].map((t) => (
-                <div
-                  key={t.ticketId}
-                  className="ticket clickable"
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => setSelected(t)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      setSelected(t);
-                    }
-                  }}
-                >
-                  <div>{t.title}</div>
-                  {t.assignedAlias && (
-                    <div className="ticket-alias-chip">@{t.assignedAlias}</div>
-                  )}
-                  <div className="ticket-meta">
-                    {t.specialty} · attempt {t.attempt}
-                    {t.assignedAgentName ? ` · ${t.assignedAgentName}` : ""}
+              {grouped[status].map((t) => {
+                const isLinear = t.source === "linear";
+                return (
+                  <div
+                    key={t.ticketId}
+                    className={`ticket clickable${isLinear ? " ticket-linear" : ""}`}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelected(t)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setSelected(t);
+                      }
+                    }}
+                  >
+                    {isLinear && t.linearIdentifier && (
+                      <div className="ticket-linear-chip">
+                        Linear · {t.linearIdentifier}
+                      </div>
+                    )}
+                    <div>{t.title}</div>
+                    {t.assignedAlias && (
+                      <div className="ticket-alias-chip">@{t.assignedAlias}</div>
+                    )}
+                    <div className="ticket-meta">
+                      {isLinear
+                        ? t.linearState ?? "linear mirror"
+                        : `${t.specialty} · attempt ${t.attempt}${
+                            t.assignedAgentName ? ` · ${t.assignedAgentName}` : ""
+                          }`}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         ))}
@@ -793,6 +804,35 @@ function TicketDetailModal({
               <span className="detail-label">Assigned to</span>
               <span>@{ticket.assignedAlias}</span>
             </div>
+          )}
+          {ticket.source === "linear" && (
+            <>
+              {ticket.linearIdentifier && (
+                <div className="detail-row">
+                  <span className="detail-label">Linear</span>
+                  <span>{ticket.linearIdentifier}</span>
+                </div>
+              )}
+              {ticket.linearState && (
+                <div className="detail-row">
+                  <span className="detail-label">Linear state</span>
+                  <span>{ticket.linearState}</span>
+                </div>
+              )}
+              {ticket.linearUrl && (
+                <div className="detail-row">
+                  <span className="detail-label">Link</span>
+                  <a
+                    href={ticket.linearUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="tracked-pr-link"
+                  >
+                    Open in Linear
+                  </a>
+                </div>
+              )}
+            </>
           )}
           {deps.length > 0 && (
             <div className="detail-row detail-row-block">
