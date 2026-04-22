@@ -18,7 +18,19 @@ export type WorkKind =
   | "review_changes"
   | "run_checks";
 
-export const FailureCategorySchema = z.enum(["fix_code", "fix_test", "bad_command_plan"]);
+// `routing_error` was added in AL-13 so `TicketRouter` can stamp an
+// unroutable ticket's `lastClassification.category` through the same channel
+// the scheduler already uses for retryable failures. It is NEVER produced by
+// the LLM failure classifier — the agent-facing JSON schema below keeps the
+// original three enumerants so the prompt surface stays identical, and
+// failure-routing switches treat `routing_error` as a no-op passthrough
+// (a misrouted ticket is blocked for operator attention, not retried).
+export const FailureCategorySchema = z.enum([
+  "fix_code",
+  "fix_test",
+  "bad_command_plan",
+  "routing_error",
+]);
 
 export type FailureCategory = z.infer<typeof FailureCategorySchema>;
 

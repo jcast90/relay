@@ -1,7 +1,9 @@
 import type { SessionLifecycle } from "../lifecycle/session-lifecycle.js";
 import type { TokenTracker } from "../budget/token-tracker.js";
 import type { Channel, RepoAssignment } from "../domain/channel.js";
+import { ChannelStore } from "../channels/channel-store.js";
 import { RepoAdminPool, isRepoAdminPoolEnabled } from "./repo-admin-pool.js";
+import { TicketRouter } from "./ticket-router.js";
 
 /**
  * Options handed to {@link startAutonomousSession} by the CLI entrypoint
@@ -38,41 +40,48 @@ export interface StartAutonomousSessionOptions {
 }
 
 /**
- * Autonomous-loop driver entrypoint. AL-4 replaces this stub's body with
- * the real scheduler + dispatcher loop. Today (AL-3) it:
+ * Autonomous-loop driver entrypoint. AL-14 will replace the body with the
+ * real scheduler + dispatcher loop. At AL-13 the loop:
  *
- *   1. Logs a one-line "driver not yet implemented" message so operators
- *      who invoke `rly run --autonomous` on a version without AL-4 get a
- *      loud, expected signal rather than silent success.
- *   2. Transitions the lifecycle to `killed` with reason `"al-4-pending"`
- *      so the persisted `lifecycle.json` reflects a terminal state. Without
- *      this, a subsequent `rly run --autonomous` against the same session
- *      directory would replay a non-terminal state and the watchdog would
- *      still be armed.
- *   3. Drains queued writes via `close()` on both the tracker and the
- *      lifecycle so no disk IO races the process exit.
- *
- * Errors during the stub's own shutdown path are swallowed — the CLI
- * already logged a session-start decision, and a cosmetic teardown failure
- * must not turn a successful `rly run --autonomous` handoff into a non-zero
- * exit.
+ *   1. When {@link RELAY_REPO_ADMIN_POOL_ENABLED} is on:
+ *      - Boots the repo-admin pool (AL-12).
+ *      - Reads the channel's ticket board and routes each ready ticket
+ *        through {@link TicketRouter} so the matching repo-admin queues
+ *        it. Worker spawning + execution is AL-14's scope; AL-13 only
+ *        marks intent.
+ *      - Transitions the lifecycle to `killed` with reason
+ *        `"al-14-pending"` (dispatch without execution is still a stub,
+ *        but the routing stage is real — so the reason shifts).
+ *   2. When the flag is off: preserves the pre-AL-13 behaviour — no pool,
+ *      no routing, lifecycle transitions to `killed / al-13-pending`.
+ *   3. Tears down pool + lifecycle + tracker. Errors during teardown are
+ *      logged and swallowed: a cosmetic shutdown failure must not turn a
+ *      successful handoff into a non-zero CLI exit.
  */
 export async function startAutonomousSession(opts: StartAutonomousSessionOptions): Promise<void> {
   const { sessionId, lifecycle, tracker, channel, allowedRepos } = opts;
 
-  console.log(
-    `[autonomous-loop] dispatcher not yet implemented — ` +
-      `Session ${sessionId} marked as killed with reason "al-13-pending".`
-  );
-
   // AL-12 built the repo-admin pool, but the admin-process handshake
-  // protocol it relies on is AL-13's deliverable. Without that protocol
+  // protocol it relies on is AL-14's deliverable. Without that protocol
   // the default spawner's child exits in ms (no prompt, stdin closed)
   // and the pool flaps until the rapid-restart ceiling fires. Gate pool
   // construction behind RELAY_REPO_ADMIN_POOL_ENABLED so production
   // `rly run --autonomous` invocations keep the pre-AL-12 behaviour
-  // (clean `killed / al-13-pending` exit) until AL-13 flips the flag.
+  // (clean `killed / al-13-pending` exit) until AL-14 flips the flag.
   const poolEnabled = isRepoAdminPoolEnabled();
+
+  if (!poolEnabled) {
+    console.log(
+      `[autonomous-loop] dispatcher not yet implemented — ` +
+        `Session ${sessionId} marked as killed with reason "al-13-pending".`
+    );
+  } else {
+    console.log(
+      `[autonomous-loop] routing channel tickets through repo-admin pool — ` +
+        `Session ${sessionId} will mark killed with reason "al-14-pending" once routed.`
+    );
+  }
+
   const pool = poolEnabled
     ? new RepoAdminPool({
         channel,
@@ -94,6 +103,47 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
     }
   }
 
+  // AL-13: drain the channel's ticket board through the router exactly
+  // once. The scheduler drains its run ledger on a loop; this autonomous
+  // stub doesn't spin — AL-14 adds the steady-state loop (poll for new
+  // tickets, watch worker completions, spawn replacements, etc.). The
+  // single pass here is enough to satisfy AL-13's "boots pool, routes
+  // tickets to admins (who queue them), exits cleanly" scope.
+  let terminalReason: "al-13-pending" | "al-14-pending" = "al-13-pending";
+  if (pool) {
+    terminalReason = "al-14-pending";
+    try {
+      const channelStore = new ChannelStore();
+      const router = new TicketRouter({ pool, channel, channelStore });
+      const boardTickets = await channelStore.readChannelTickets(channel.channelId);
+      for (const ticket of boardTickets) {
+        if (ticket.status !== "ready") continue;
+        if (ticket.source === "linear") continue; // Linear mirror is read-only.
+        try {
+          const result = await router.route(ticket);
+          if (result.kind === "unroutable") {
+            console.warn(
+              `[autonomous-loop] ticket ${ticket.ticketId} unroutable (${result.reason}); ` +
+                `surfaced to channel board as blocked.`
+            );
+          }
+        } catch (err) {
+          console.warn(
+            `[autonomous-loop] router threw on ticket ${ticket.ticketId}: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          );
+        }
+      }
+    } catch (err) {
+      console.warn(
+        `[autonomous-loop] ticket routing pass failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+  }
+
   // Only transition if we're still in a non-terminal state. A concurrent
   // threshold crossing or watchdog fire could theoretically have already
   // pushed us to `killed`; respect that and skip the transition in that
@@ -102,7 +152,7 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
   const state = lifecycle.state;
   if (state !== "killed" && state !== "done") {
     try {
-      await lifecycle.transition("killed", "al-13-pending");
+      await lifecycle.transition("killed", terminalReason);
     } catch (err) {
       console.warn(
         `[autonomous-loop] failed to transition lifecycle to killed: ${
