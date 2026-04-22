@@ -238,11 +238,11 @@ fn cli_json(args: &[&str]) -> Result<serde_json::Value, String> {
 
 /// Subcommands the renderer is allowed to invoke through `run_cli`.
 ///
-/// As of this commit, no call site in `gui/src/` uses `run_cli` — the
-/// frontend reaches the CLI through the typed wrappers (`create_channel`,
-/// `post_to_channel`, etc.). `run_cli` stays for escape-hatch diagnostics
-/// but is locked down to a short read-only list so a compromised renderer
-/// can't trigger destructive operations. Add entries here as the renderer
+/// The frontend reaches the CLI through the typed wrappers
+/// (`create_channel`, `post_to_channel`, etc.). `run_cli` stays for
+/// escape-hatch diagnostics but is locked down to a short read-only list
+/// so a compromised renderer can't trigger destructive operations. Add
+/// entries here as the renderer
 /// grows legitimate needs.
 const RUN_CLI_ALLOWED_SUBCOMMANDS: &[&[&str]] = &[
     &["channel", "list"],
@@ -938,7 +938,7 @@ fn cancel_chat_stream(stream_id: u64) -> Result<(), String> {
     Ok(())
 }
 
-// --- Terminal spawn/kill lifecycle (Task #24, OSS-10) ---
+// --- Terminal spawn/kill lifecycle ---
 //
 // Each channel tracks an associated-repo agent spawn in
 // `~/.relay/channels/<channelId>/spawns.json`.

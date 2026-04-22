@@ -56,13 +56,18 @@ export function CenterPane({
       api.listChannelTickets(channel.channelId),
       api.listChannelDecisions(channel.channelId),
       api.listSessions(channel.channelId),
-    ]).then(([f, t, d, s]) => {
-      if (cancelled) return;
-      setFeed(f);
-      setTickets(t);
-      setDecisions(d);
-      setSessions(s);
-    });
+    ])
+      .then(([f, t, d, s]) => {
+        if (cancelled) return;
+        setFeed(f);
+        setTickets(t);
+        setDecisions(d);
+        setSessions(s);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("[center] batch fetch failed", err);
+      });
     return () => {
       cancelled = true;
     };
@@ -73,10 +78,28 @@ export function CenterPane({
       setSessionMessages([]);
       return;
     }
-    api.loadSession(channel.channelId, sessionId, 500).then(setSessionMessages);
+    let cancelled = false;
+    api
+      .loadSession(channel.channelId, sessionId, 500)
+      .then((ms) => {
+        if (!cancelled) setSessionMessages(ms);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("[center] loadSession failed", err);
+        setSessionMessages([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [channel?.channelId, sessionId, refreshTick]);
 
+  // Tauri's `subscribeChatEvents` returns an UnlistenFn asynchronously.
+  // If the effect unmounts before the promise resolves, we must still call
+  // the unlisten that arrives late — otherwise the channel listener leaks
+  // for the rest of the process lifetime.
   useEffect(() => {
+    let cancelled = false;
     let unlisten: (() => void) | undefined;
     subscribeChatEvents((event: ChatEvent) => {
       setStream((current) => {
@@ -87,8 +110,12 @@ export function CenterPane({
         onRefresh();
         setStream((current) => (current && current.streamId === event.streamId ? null : current));
       }
-    }).then((u) => (unlisten = u));
+    }).then((u) => {
+      if (cancelled) u();
+      else unlisten = u;
+    });
     return () => {
+      cancelled = true;
       if (unlisten) unlisten();
     };
   }, [onRefresh]);

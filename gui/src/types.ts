@@ -157,9 +157,9 @@ export type AgentNameEntry = {
 };
 
 // An agent process launched into its own external terminal window via the
-// spawn flow. Mirrors the shape documented in Task #24's contract. Fields
-// other than alias/repoPath are populated best-effort by the platform
-// Terminal adapter and may be undefined when the adapter can't report them.
+// spawn flow. Fields other than alias/repoPath are populated best-effort by
+// the platform Terminal adapter and may be undefined when the adapter can't
+// report them.
 export type Spawn = {
   alias: string;
   repoPath: string;

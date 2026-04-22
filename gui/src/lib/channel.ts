@@ -32,8 +32,13 @@ export function toUiChannel(c: Channel, now: Date = new Date()): UiChannel {
     (c.primaryWorkspaceId &&
       c.repoAssignments.find((r) => r.workspaceId === c.primaryWorkspaceId)) ||
     c.repoAssignments[0];
-  const primaryRepo = primaryAssignment?.alias ?? "";
-  const repos = sortPrimaryFirst(c.repoAssignments, primaryRepo).map((r) => r.alias);
+  // Aliases are case-insensitive throughout the UI (mention lookup, routing,
+  // render chips). Lowercasing here keeps one convention end-to-end even if a
+  // user types `UI` in the alias input.
+  const primaryRepo = primaryAssignment?.alias.toLowerCase() ?? "";
+  const repos = sortPrimaryFirst(c.repoAssignments, primaryAssignment?.alias ?? "").map((r) =>
+    r.alias.toLowerCase()
+  );
   return {
     id: c.channelId,
     name: c.name,

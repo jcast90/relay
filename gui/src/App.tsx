@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 import type { Channel, GuiSettings } from "./types";
 import { CenterPane } from "./components/CenterPane";
@@ -27,7 +27,11 @@ export function App() {
     }
   });
 
-  const refresh = () => setRefreshTick((n) => n + 1);
+  // Stable identity so effects that depend on it (CenterPane's chat-event
+  // subscription) don't tear down on every parent render — we also run a
+  // 5s setInterval that bumps refreshTick, which would otherwise churn
+  // listeners once per tick.
+  const refresh = useCallback(() => setRefreshTick((n) => n + 1), []);
 
   useEffect(() => {
     try {

@@ -110,60 +110,66 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
     setError(null);
     setSpawnWarning(null);
     try {
+      // Normalize aliases once; everything downstream (create, spawn, kickoff
+      // routing) reads from `sel` so the persisted channel and the kickoff
+      // address agree on the alias string.
       const sel = selectedRows.map((r) => ({
         alias: r.alias.trim() || defaultAlias(r.workspace.repoPath),
         workspaceId: r.workspace.workspaceId,
         repoPath: r.workspace.repoPath,
+        spawn: r.spawn,
       }));
       const result = await api.createChannel(
         slug,
         topic.trim(),
-        sel,
+        sel.map(({ alias, workspaceId, repoPath }) => ({ alias, workspaceId, repoPath })),
         primaryWorkspaceId ?? undefined
       );
 
-      const toSpawn = selectedRows.filter(
-        (r) => r.spawn && r.workspace.workspaceId !== primaryWorkspaceId
-      );
+      const warnings: string[] = [];
+
+      const toSpawn = sel.filter((r) => r.spawn && r.workspaceId !== primaryWorkspaceId);
       if (toSpawn.length > 0) {
         const results = await Promise.all(
           toSpawn.map(async (r) => {
-            const alias = r.alias.trim() || defaultAlias(r.workspace.repoPath);
             try {
-              await api.spawnAgent(result.channelId, alias, r.workspace.repoPath);
+              await api.spawnAgent(result.channelId, r.alias, r.repoPath);
               return { ok: true as const };
             } catch {
-              return { ok: false as const, alias };
+              return { ok: false as const, alias: r.alias };
             }
           })
         );
         const failed = results.filter((x) => !x.ok);
         if (failed.length > 0) {
-          setSpawnWarning(`${failed.length}/${results.length} spawn(s) failed`);
+          warnings.push(`${failed.length}/${results.length} spawn(s) failed`);
         }
       }
 
       const kickoff = firstMessage.trim();
       if (kickoff) {
+        const primary = sel.find((r) => r.workspaceId === primaryWorkspaceId);
         try {
-          const primaryAlias =
-            selectedRows.find((r) => r.workspace.workspaceId === primaryWorkspaceId)?.alias ??
-            undefined;
-          const primaryPath =
-            selectedRows.find((r) => r.workspace.workspaceId === primaryWorkspaceId)?.workspace
-              .repoPath ?? undefined;
           const session = await api.createSession(result.channelId, kickoff.slice(0, 60));
           await api.startChat({
             channelId: result.channelId,
             sessionId: session.sessionId,
             message: kickoff,
-            alias: primaryAlias,
-            cwd: primaryPath,
+            alias: primary?.alias,
+            cwd: primary?.repoPath,
             autoApprove: true,
           });
         } catch (err) {
-          console.warn("[kickoff] startChat failed:", err);
+          warnings.push(`Channel created but kickoff failed: ${err}. Send your message manually.`);
         }
+      }
+
+      if (warnings.length > 0) {
+        setSpawnWarning(warnings.join(" · "));
+        // Keep the modal open so the user can see the warning; they can close
+        // manually via the × after reading it.
+        onCreated(result.channelId);
+        return;
       }
 
       onCreated(result.channelId);

@@ -47,7 +47,7 @@ export function Sidebar({
       await api.setChannelStarred(c.channelId, !c.starred);
       onRefresh();
     } catch (err) {
-      console.warn("[star] failed:", err);
+      alert(`Failed to ${c.starred ? "unstar" : "star"} #${c.name}: ${err}`);
     }
   };
 

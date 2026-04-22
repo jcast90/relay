@@ -130,21 +130,15 @@ export const api = {
   // append a stale assistant turn afterwards.
   cancelChatStream: (streamId: number) => invoke<void>("cancel_chat_stream", { streamId }),
 
-  // Task #24 contract. These invoke wrappers are thin passthroughs that
-  // assume the Rust side registers `spawn_agent`, `list_spawns`, and
-  // `kill_spawned_agent` commands that accept / return camelCase via
-  // serde rename_all. Until that lands, calls here will reject at runtime
-  // with a "command not found"-style error — which surfaces inline in the
-  // spawn UI rather than crashing the app.
   spawnAgent: (channelId: string, alias: string, repoPath: string) =>
     invoke<Spawn>("spawn_agent", { channelId, alias, repoPath }),
   listSpawns: (channelId: string) => invoke<Spawn[]>("list_spawns", { channelId }),
   killSpawnedAgent: (channelId: string, alias: string) =>
     invoke<void>("kill_spawned_agent", { channelId, alias }),
 
-  // OSS-05: Parity commands — tracked-PR mirror + plan approval. These
-  // shell out to the same `rly approve` / `rly reject` commands the CLI
-  // uses, so there's exactly one code path that writes approval records.
+  // Tracked-PR mirror + plan approval. `approve` / `reject` shell out to
+  // the same `rly approve` / `rly reject` paths the CLI uses so approval
+  // records are written through a single code path.
   listTrackedPrs: (channelId: string) => invoke<TrackedPrRow[]>("list_tracked_prs", { channelId }),
   listPendingPlans: () => invoke<PendingPlan[]>("list_pending_plans"),
   approvePlan: (runId: string) => invoke<unknown>("approve_plan", { runId }),
