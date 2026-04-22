@@ -79,6 +79,25 @@ describe("writeConfigEnvKey", () => {
     expect(result).toEqual({ status: "missing-config" });
   });
 
+  it("handles a file with no trailing newline on the replace path", async () => {
+    // No `\n` at the end of the last line.
+    await writeFile(join(dir, "config.env"), 'export GITHUB_TOKEN="old"');
+
+    const result = await writeConfigEnvKey(dir, "GITHUB_TOKEN", "new");
+    expect(result).toEqual({ status: "written", mode: "replaced" });
+
+    const out = await readFile(join(dir, "config.env"), "utf8");
+    expect(out).toContain('export GITHUB_TOKEN="new"');
+    expect(out).not.toContain("old");
+  });
+
+  it("rejects bogus env var names so the inlined regex can't be gamed", async () => {
+    await writeFile(join(dir, "config.env"), "# stub\n");
+    await expect(
+      writeConfigEnvKey(dir, "GITHUB_TOKEN.*", "x")
+    ).rejects.toThrow(/invalid env var name/);
+  });
+
   it("re-applies 0600 permissions after writing", async () => {
     await writeFile(join(dir, "config.env"), '# export GITHUB_TOKEN=""\n', {
       mode: 0o644

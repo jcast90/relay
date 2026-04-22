@@ -1,5 +1,12 @@
 import { existsSync } from "node:fs";
-import { chmod, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  readFile,
+  rename,
+  writeFile
+} from "node:fs/promises";
 import { createInterface, Interface } from "node:readline/promises";
 import { join } from "node:path";
 
@@ -60,6 +67,12 @@ export async function writeConfigEnvKey(
   if (!existsSync(target)) {
     return { status: "missing-config" };
   }
+  // `key` must look like a shell export name so we can inline it into the
+  // regex without escape worries. Guarded defensively: callers today pass
+  // constants from `TOKEN_PROMPTS`, but the helper is exported.
+  if (!/^[A-Z_][A-Z0-9_]*$/.test(key)) {
+    throw new Error(`writeConfigEnvKey: invalid env var name ${JSON.stringify(key)}`);
+  }
   const escaped = value
     .replace(/\\/g, "\\\\")
     .replace(/"/g, '\\"')
@@ -85,10 +98,18 @@ export async function writeConfigEnvKey(
     if (!next.endsWith("\n")) next += "\n";
     next += `${replacement}\n`;
   }
-  await writeFile(target, next);
-  await chmod(target, 0o600).catch(() => undefined);
+  // Atomic write: tmp → chmod 0600 → rename. Matches the file-safety rule
+  // in AGENTS.md ("Anything persisted to ~/.relay/ is atomic"). The chmod
+  // happens before the rename so the final file never briefly exists at a
+  // looser mode when the caller is overwriting an existing 0644 file.
+  const tmpPath = `${target}.tmp.${process.pid}.${configEnvTmpCounter++}`;
+  await writeFile(tmpPath, next, { mode: 0o600 });
+  await chmod(tmpPath, 0o600).catch(() => undefined);
+  await rename(tmpPath, target);
   return { status: "written", mode };
 }
+
+let configEnvTmpCounter = 0;
 
 // Catppuccin-ish ANSI for terminal output. Falls back gracefully on
 // non-colour terminals — no library dependency.
