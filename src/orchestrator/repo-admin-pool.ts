@@ -17,8 +17,28 @@
  *     `onTransition`. On first transition to a terminal state, auto-
  *     invoke {@link stop}.
  *   - Graceful shutdown: iterate all sessions, call `session.stop()`,
- *     await all. Each session has its own 5s SIGTERM→SIGKILL escalation;
- *     `stop()` resolves once every child process is gone.
+ *     await all (bounded by {@link POOL_STOP_TIMEOUT_MS}). Each session
+ *     has its own 5s SIGTERM→SIGKILL escalation; `stop()` resolves once
+ *     every child process is gone OR the outer cap fires.
+ *
+ * ## Activation status
+ *
+ * The pool is **built but not yet wired into production runs**. AL-12
+ * ships the lifecycle mechanics (boot / restart-on-death / rapid-restart
+ * ceiling / graceful shutdown) and tests them in isolation, but the
+ * admin-process handshake protocol — how the autonomous loop actually
+ * talks to a running `claude` repo-admin child — lands in AL-13. Without
+ * that protocol the default-spawner's child exits in milliseconds
+ * (no prompt, stdin closed) and the pool immediately flaps until the
+ * rapid-restart ceiling fires.
+ *
+ * To avoid a production flap-storm, the autonomous-loop driver
+ * (`autonomous-loop.ts`) gates pool construction behind the
+ * {@link RELAY_REPO_ADMIN_POOL_ENABLED} env var, defaulted **off**. When
+ * the flag is unset the pre-AL-12 behaviour is preserved: no pool, the
+ * lifecycle transitions to `killed` with reason `"al-13-pending"`, and
+ * the CLI exits cleanly. AL-13 flips the default on once the handshake
+ * protocol is wired.
  *
  * Scope discipline (out of scope for AL-12):
  *   - Ticket routing / dispatch        → AL-13.
@@ -42,6 +62,28 @@ import {
 } from "./repo-admin-session.js";
 
 /**
+ * Env var gating pool activation. Default **off** until AL-13 ships the
+ * admin-process handshake protocol. When unset / `"0"` / `"false"` /
+ * empty string, the autonomous-loop driver skips pool construction and
+ * falls back to the pre-AL-12 "transition to killed with reason
+ * al-13-pending" behaviour. See this module's top-of-file docstring.
+ */
+export const RELAY_REPO_ADMIN_POOL_ENABLED = "RELAY_REPO_ADMIN_POOL_ENABLED";
+
+/**
+ * Parse the {@link RELAY_REPO_ADMIN_POOL_ENABLED} env var into a bool.
+ * Defaults to `false`. Recognised true-ish values: `"1"`, `"true"`,
+ * `"yes"`, `"on"` (case-insensitive). Anything else is treated as off
+ * so operators who typo the flag don't silently opt in to the flap loop.
+ */
+export function isRepoAdminPoolEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env[RELAY_REPO_ADMIN_POOL_ENABLED];
+  if (!raw) return false;
+  const normalized = raw.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+/**
  * Exponential backoff schedule between restart attempts. Index 0 is the
  * delay BEFORE the 2nd spawn (the 1st restart); values saturate at the
  * last entry for additional attempts in the same rapid-restart window.
@@ -53,6 +95,17 @@ export const RAPID_RESTART_CEILING = 5;
 
 /** Sliding window over which we count restarts toward {@link RAPID_RESTART_CEILING}. */
 export const RAPID_RESTART_WINDOW_MS = 2 * 60 * 1000;
+
+/**
+ * Hard ceiling on {@link RepoAdminPool.stop}'s wait for every session to
+ * reach `exited-expected`. Per-session SIGTERM→SIGKILL escalation already
+ * gives each child 5s; the outer cap guards against a zombie child whose
+ * `awaitStopped()` never resolves (NFS hang, SIGKILL ignored by kernel,
+ * etc.) wedging the whole pool shutdown. When the cap fires we log a warn
+ * naming the stuck aliases and resolve anyway — partial shutdown is
+ * strictly better than an indefinite block on CLI exit.
+ */
+export const POOL_STOP_TIMEOUT_MS = 15_000;
 
 /**
  * States where we keep the pool alive. Any other lifecycle state causes
@@ -198,9 +251,20 @@ export class RepoAdminPool {
     if (this.started) return;
     this.started = true;
 
-    // Hook the parent lifecycle FIRST so a mid-boot transition to a
-    // terminal state can short-circuit spawning rather than leak a
-    // child we're about to kill anyway.
+    // Guard against the edge case where the pool is constructed AFTER the
+    // parent lifecycle already ended. We must short-circuit BEFORE wiring
+    // `onTransition` — `stop()` early-returns on `stopped`, so any
+    // subscription we register here would never be torn down and would
+    // leak a listener on the lifecycle emitter for the rest of the
+    // process lifetime.
+    if (TERMINAL_LIFECYCLE_STATES.includes(this.lifecycle.state)) {
+      this.stopped = true;
+      return;
+    }
+
+    // Hook the parent lifecycle so a mid-boot transition to a terminal
+    // state can short-circuit spawning rather than leak a child we're
+    // about to kill anyway.
     this.unsubscribeLifecycle = this.lifecycle.onTransition((evt) => {
       if (TERMINAL_LIFECYCLE_STATES.includes(evt.to)) {
         // Fire-and-forget: the pool's own stop() is idempotent and awaits
@@ -208,12 +272,6 @@ export class RepoAdminPool {
         void this.stop().catch(() => {});
       }
     });
-    if (TERMINAL_LIFECYCLE_STATES.includes(this.lifecycle.state)) {
-      // Edge case: pool constructed AFTER the lifecycle already ended.
-      // Respect that — don't spawn anything, mark stopped for symmetry.
-      this.stopped = true;
-      return;
-    }
 
     const assignments = this.selectAssignments();
     await Promise.all(assignments.map((assignment) => this.bootSession(assignment)));
@@ -245,7 +303,12 @@ export class RepoAdminPool {
         }
       }
 
-      await Promise.all(
+      // Track which sessions have actually stopped so the timeout path
+      // can name the stuck ones and skip emit for the others (the in-
+      // flight session.stop() may land after we've already given up).
+      const settled = new Set<string>();
+
+      const allStops = Promise.all(
         records.map(async (record) => {
           try {
             await record.session.stop(reason);
@@ -256,10 +319,34 @@ export class RepoAdminPool {
             // eslint-disable-next-line no-console
             console.warn(`RepoAdminPool: session "${record.session.alias}" threw on stop: ${msg}`);
           }
+          settled.add(record.session.alias);
           record.unsubscribeEvents();
           this.emit({ kind: "stopped", alias: record.session.alias, reason });
         })
-      );
+      ).then(() => "ok" as const);
+
+      // Outer cap. `awaitStopped()` inside a session normally resolves
+      // once the child emits `exited-expected` — but if the OS refuses to
+      // reap the child, or the fake spawner never emits, we don't want
+      // pool.stop() (and by extension the CLI exit path) to hang forever.
+      let timeoutHandle: NodeJS.Timeout | number | null = null;
+      const timedOut = new Promise<"timeout">((resolve) => {
+        timeoutHandle = this.setTimer(() => resolve("timeout"), POOL_STOP_TIMEOUT_MS);
+        const t = timeoutHandle as { unref?: () => void };
+        if (t && typeof t.unref === "function") t.unref();
+      });
+
+      const outcome = await Promise.race([allStops, timedOut]);
+      if (timeoutHandle !== null) this.clearTimer(timeoutHandle);
+
+      if (outcome === "timeout") {
+        const stuck = records.map((r) => r.session.alias).filter((alias) => !settled.has(alias));
+        // eslint-disable-next-line no-console
+        console.warn(
+          `RepoAdminPool: stop() timed out after ${POOL_STOP_TIMEOUT_MS}ms; ` +
+            `sessions did not exit cleanly: ${stuck.join(", ")}`
+        );
+      }
 
       this.stopped = true;
       this.stopping = false;

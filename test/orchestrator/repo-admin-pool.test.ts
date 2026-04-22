@@ -18,12 +18,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SpawnedProcess } from "../../src/agents/command-invoker.js";
 import type { Channel } from "../../src/domain/channel.js";
 import { SessionLifecycle } from "../../src/lifecycle/session-lifecycle.js";
 import {
+  POOL_STOP_TIMEOUT_MS,
   RAPID_RESTART_CEILING,
   RAPID_RESTART_WINDOW_MS,
   RESTART_BACKOFF_MS,
@@ -298,18 +299,33 @@ describe("RepoAdminPool", () => {
     pool.onSessionEvent((evt) => events.push(evt));
     await pool.start();
 
-    // Feed more deaths than the ceiling allows. Each death needs the
-    // scheduled restart to fire so the NEXT child exists to be killed.
+    // Feed one more death than the ceiling allows. Each iteration must
+    // advance the clock by the CURRENT tier's backoff (plus a 1ms nudge
+    // so the timer actually fires) — otherwise later iterations stall
+    // on the 2s / 4s / 8s delays and the handler re-enters on a dead
+    // child's re-emitted exit instead of a freshly-respawned one. The
+    // saturation-at-last-entry rule means the 5th restart reuses the
+    // final index (8s) the same way the pool does.
     for (let i = 0; i < RAPID_RESTART_CEILING + 1; i += 1) {
       const kids = spawner.children("frontend");
       const child = kids.at(-1);
       // Once the ceiling hits, markStopped leaves no child to kill.
       if (!child) break;
+      const kidsBefore = kids.length;
       child.emitExit(1, null);
-      // Advance by the first-tier backoff each time. If the pool respawns,
-      // the next child appears; if it stops, no new child shows up.
-      timers.advance(RESTART_BACKOFF_MS[0] + 1);
+
+      // On iter i (0-indexed), the pool's attemptIdx is i (history so
+      // far), so the scheduled delay is RESTART_BACKOFF_MS[min(i, last)].
+      const tierIdx = Math.min(i, RESTART_BACKOFF_MS.length - 1);
+      timers.advance(RESTART_BACKOFF_MS[tierIdx] + 1);
       await flushMicrotasks();
+
+      // On non-ceiling iterations we must have gained a fresh child —
+      // this is the guard that prevents the bug where advancing too
+      // little re-fires on the dead child.
+      if (i < RAPID_RESTART_CEILING) {
+        expect(spawner.children("frontend").length).toBe(kidsBefore + 1);
+      }
     }
 
     const failing = events.find((e) => e.kind === "session-admin-failing");
@@ -317,12 +333,14 @@ describe("RepoAdminPool", () => {
     if (failing?.kind === "session-admin-failing") {
       expect(failing.alias).toBe("frontend");
       expect(failing.reason).toBe("rapid-restart-ceiling");
-      expect(failing.restartsInWindow).toBeGreaterThanOrEqual(RAPID_RESTART_CEILING);
+      expect(failing.restartsInWindow).toBe(RAPID_RESTART_CEILING);
     }
 
-    // No new child beyond the ceiling — pool gave up and marked the
-    // session stopped.
-    expect(spawner.children("frontend").length).toBeLessThanOrEqual(RAPID_RESTART_CEILING + 1);
+    // Each genuine death either respawned a fresh child (5 of them,
+    // from iter 0..4) or tripped the ceiling (the 6th, at iter 5). So
+    // the total number of children equals the original + ceiling
+    // respawns. No new child is spawned by the 6th death.
+    expect(spawner.children("frontend")).toHaveLength(RAPID_RESTART_CEILING + 1);
     expect(pool.getSession("frontend")!.state).toBe("stopped");
 
     await pool.stop();
@@ -431,13 +449,20 @@ describe("RepoAdminPool", () => {
     await pool.start();
 
     // Burn CEILING-1 restarts, then advance past the window, then do one
-    // more — total > CEILING but they're not "in the same window".
+    // more — total > CEILING but they're not "in the same window". Each
+    // iteration must advance the clock by THAT tier's backoff so the
+    // respawn timer actually fires and a fresh child exists to exit
+    // next round (advancing only the 1s tier stalls iters 2+).
     for (let i = 0; i < RAPID_RESTART_CEILING - 1; i += 1) {
+      const kidsBefore = spawner.children("a").length;
       spawner.children("a").at(-1)!.emitExit(1, null);
-      timers.advance(RESTART_BACKOFF_MS[0] + 1);
+      const tierIdx = Math.min(i, RESTART_BACKOFF_MS.length - 1);
+      timers.advance(RESTART_BACKOFF_MS[tierIdx] + 1);
       await flushMicrotasks();
+      expect(spawner.children("a").length).toBe(kidsBefore + 1);
     }
-    // Jump past the window boundary.
+    // Jump past the window boundary. The next death should be attempt
+    // index 0 again (old timestamps dropped), so the 1s tier applies.
     timers.advance(RAPID_RESTART_WINDOW_MS + 10);
     spawner.children("a").at(-1)!.emitExit(1, null);
     timers.advance(RESTART_BACKOFF_MS[0] + 1);
@@ -449,5 +474,89 @@ describe("RepoAdminPool", () => {
     const done = pool.stop();
     spawner.children("a").at(-1)!.emitExit(0, "SIGTERM");
     await done;
+  });
+
+  it("stop() bails out after POOL_STOP_TIMEOUT_MS if a session never exits", async () => {
+    // Regression: pool.stop() awaited Promise.all on session.stop(),
+    // which waits on awaitStopped() — a zombie child that never emits
+    // exit would hang the entire shutdown. We cap the outer wait and
+    // log the stuck aliases.
+    const { pool, spawner, timers } = await buildPool({ aliases: ["stuck", "clean"] });
+    await pool.start();
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    // Kick stop. `stuck` never emits exit; `clean` does. Drain
+    // microtasks so the pool body reaches session.stop() for both
+    // sessions before we emit the clean exit — this guarantees clean's
+    // settled.add() runs ahead of the timeout (otherwise the filter
+    // would incorrectly report clean as stuck too).
+    const stopP = pool.stop();
+    await flushMicrotasks();
+    spawner.children("clean")[0].emitExit(0, "SIGTERM");
+    await flushMicrotasks();
+
+    // Advance past the outer timeout. The outer timer is pool-managed
+    // via the injected setTimer, so fake timers drive it.
+    timers.advance(POOL_STOP_TIMEOUT_MS + 1);
+
+    // Let microtasks drain the timeout resolve → catch path.
+    await stopP;
+
+    const warnCalls = warnSpy.mock.calls.map((args) => String(args[0]));
+    const timeoutWarn = warnCalls.find((msg) => msg.includes("stop() timed out"));
+    expect(timeoutWarn).toBeDefined();
+
+    // Extract the alias list from the warning (the bit after the colon).
+    // The word "cleanly" appears in the fixed prefix so a naive
+    // toContain("clean") match would false-positive — isolate the list.
+    const aliasesInWarn = (timeoutWarn ?? "").split("exit cleanly:")[1]?.trim() ?? "";
+    expect(aliasesInWarn).toContain("stuck");
+    expect(aliasesInWarn).not.toContain("clean");
+
+    warnSpy.mockRestore();
+  });
+
+  it("start() does not subscribe to lifecycle when it's already terminal", async () => {
+    // Regression: start() used to install its onTransition listener
+    // BEFORE checking for a terminal lifecycle, then early-returned on
+    // the terminal check without unsubscribing. stop()'s `if (stopped)`
+    // short-circuit meant the leak never got cleaned up.
+    const channel = buildChannel(["a"]);
+    const lifecycle = new SessionLifecycle(`sess-${Date.now()}-terminal`, {
+      rootDir: lifecycleRoot,
+    });
+    // Walk the lifecycle into a terminal state before the pool is even
+    // constructed.
+    await lifecycle.transition("killed", "test-setup");
+
+    const subscribeSpy = vi.spyOn(lifecycle, "onTransition");
+
+    const spawner = new FakeSpawner();
+    const timers = new FakeTimers();
+    const pool = new RepoAdminPool({
+      channel,
+      lifecycle,
+      spawner,
+      rootDir: root,
+      setTimer: timers.setTimer,
+      clearTimer: timers.clearTimer,
+      clock: timers.clock,
+      buildSessionId: () => `admin-fake-${++sessionIdCounter}`,
+      sessionStopGraceMs: 5,
+    });
+
+    await pool.start();
+
+    // The terminal-state guard MUST run before the subscribe call —
+    // otherwise a listener leaks for the lifetime of the process.
+    expect(subscribeSpy).not.toHaveBeenCalled();
+
+    // And no children were spawned either.
+    expect(spawner.children("a")).toHaveLength(0);
+
+    // stop() is still safe to call; it short-circuits on stopped.
+    await pool.stop();
+    subscribeSpy.mockRestore();
   });
 });

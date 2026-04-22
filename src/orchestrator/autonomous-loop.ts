@@ -1,7 +1,7 @@
 import type { SessionLifecycle } from "../lifecycle/session-lifecycle.js";
 import type { TokenTracker } from "../budget/token-tracker.js";
 import type { Channel, RepoAssignment } from "../domain/channel.js";
-import { RepoAdminPool } from "./repo-admin-pool.js";
+import { RepoAdminPool, isRepoAdminPoolEnabled } from "./repo-admin-pool.js";
 
 /**
  * Options handed to {@link startAutonomousSession} by the CLI entrypoint
@@ -61,30 +61,37 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
   const { sessionId, lifecycle, tracker, channel, allowedRepos } = opts;
 
   console.log(
-    `[autonomous-loop] dispatcher not yet implemented — booting repo-admin ` +
-      `pool then exiting. Session ${sessionId} marked as killed with reason ` +
-      `"al-13-pending".`
+    `[autonomous-loop] dispatcher not yet implemented — ` +
+      `Session ${sessionId} marked as killed with reason "al-13-pending".`
   );
 
-  // AL-12 boots one repo-admin per allowed repoAssignment. AL-13 adds the
-  // ticket router that sends work to these sessions; until then we stand
-  // them up to exercise the boot/shutdown path and return.
-  const allowedAliases = allowedRepos.map((r) => r.alias);
-  const pool = new RepoAdminPool({
-    channel,
-    allowedAliases,
-    fullAccess: channel.fullAccess ?? false,
-    lifecycle,
-  });
+  // AL-12 built the repo-admin pool, but the admin-process handshake
+  // protocol it relies on is AL-13's deliverable. Without that protocol
+  // the default spawner's child exits in ms (no prompt, stdin closed)
+  // and the pool flaps until the rapid-restart ceiling fires. Gate pool
+  // construction behind RELAY_REPO_ADMIN_POOL_ENABLED so production
+  // `rly run --autonomous` invocations keep the pre-AL-12 behaviour
+  // (clean `killed / al-13-pending` exit) until AL-13 flips the flag.
+  const poolEnabled = isRepoAdminPoolEnabled();
+  const pool = poolEnabled
+    ? new RepoAdminPool({
+        channel,
+        allowedAliases: allowedRepos.map((r) => r.alias),
+        fullAccess: channel.fullAccess ?? false,
+        lifecycle,
+      })
+    : null;
 
-  try {
-    await pool.start();
-  } catch (err) {
-    console.warn(
-      `[autonomous-loop] repo-admin pool failed to boot: ${
-        err instanceof Error ? err.message : String(err)
-      }`
-    );
+  if (pool) {
+    try {
+      await pool.start();
+    } catch (err) {
+      console.warn(
+        `[autonomous-loop] repo-admin pool failed to boot: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
   }
 
   // Only transition if we're still in a non-terminal state. A concurrent
@@ -107,14 +114,16 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
 
   // Terminal lifecycle transition triggers the pool's auto-stop, but also
   // await it here so teardown happens before the CLI returns.
-  try {
-    await pool.stop();
-  } catch (err) {
-    console.warn(
-      `[autonomous-loop] repo-admin pool stop failed: ${
-        err instanceof Error ? err.message : String(err)
-      }`
-    );
+  if (pool) {
+    try {
+      await pool.stop();
+    } catch (err) {
+      console.warn(
+        `[autonomous-loop] repo-admin pool stop failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
   }
 
   // Close out resources. Any in-flight writes drain here; errors are
