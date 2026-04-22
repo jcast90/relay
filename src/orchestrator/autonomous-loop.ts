@@ -3,6 +3,7 @@ import type { TokenTracker } from "../budget/token-tracker.js";
 import type { Channel, RepoAssignment } from "../domain/channel.js";
 import { ChannelStore } from "../channels/channel-store.js";
 import { Coordinator } from "../crosslink/coordinator.js";
+import { runPostCompletionAudit, type AuditInvoker, type AuditRunResult } from "./audit-agent.js";
 import { RepoAdminPool, isRepoAdminPoolEnabled } from "./repo-admin-pool.js";
 import type { RepoAdminProcessSpawner } from "./repo-admin-session.js";
 import { TicketRouter } from "./ticket-router.js";
@@ -96,7 +97,57 @@ export interface StartAutonomousSessionOptions {
      * used instead of the real home dir for session/admin logs.
      */
     rootDir?: string;
+    /**
+     * AL-6: replace the audit agent's LLM invoker with a deterministic
+     * scripted function. Tests use this to return pre-shaped JSON so the
+     * gating + decision-write path runs end-to-end without a real CLI
+     * spawn. Production leaves this unset; `runPostCompletionAudit` is
+     * never reached in pre-AL-4 shapes (the driver stub skips it) so the
+     * production default is "no invoker, no audit" until AL-4 wires in a
+     * factory-built agent.
+     */
+    auditInvoker?: AuditInvoker;
   };
+  /**
+   * AL-6 seam: invoked exactly once when the driver reaches "all
+   * tickets done" — after the last ticket finishes draining and before
+   * the lifecycle transitions to its terminal state. AL-4's real driver
+   * is expected to populate this; until AL-4 ships, the default
+   * behaviour (defined below) is to directly invoke
+   * {@link runPostCompletionAudit} against the channel's ledger. Callers
+   * that want to suppress the audit entirely can pass a no-op.
+   *
+   * The hook runs synchronously inside the loop's post-drain block: a
+   * throw here is caught and warned, never rethrown, because the
+   * autonomous loop's shutdown path must be robust to third-party
+   * failures.
+   */
+  onAllTicketsComplete?: (ctx: AllTicketsCompleteContext) => Promise<void>;
+}
+
+/**
+ * Context handed to the {@link StartAutonomousSessionOptions.onAllTicketsComplete}
+ * seam. Everything the seam needs to run AL-6's
+ * {@link runPostCompletionAudit} is on this object; no "reach into the
+ * loop's internals" required.
+ */
+export interface AllTicketsCompleteContext {
+  channel: Channel;
+  channelStore: ChannelStore;
+  sessionId: string;
+  tracker: TokenTracker;
+  /**
+   * Post-drain budget headroom percentage (0..100). Pre-computed so the
+   * seam implementation doesn't have to care whether the tracker has
+   * replayed its JSONL yet.
+   */
+  budgetHeadroomPct: number;
+  /**
+   * Audit invoker threaded through from `testOverrides.auditInvoker`, if
+   * any. Production is `undefined` — AL-4's real driver is expected to
+   * build one from the agent factory.
+   */
+  auditInvoker?: AuditInvoker;
 }
 
 /**
@@ -387,6 +438,47 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
         )
       );
     }
+
+    // AL-6: post-completion audit hook. Fires exactly once per session,
+    // in the window between "last ticket drained" and "terminal lifecycle
+    // transition". Gated internally on budget headroom + ledger health
+    // (see `runPostCompletionAudit`). The `onAllTicketsComplete` seam is
+    // exposed so AL-4's richer driver — which knows about retries,
+    // stop-on-failure flags, etc. — can decide when "all tickets done"
+    // truly holds; the default implementation treats "drain finished"
+    // as the signal, which is correct for the current AL-14 single-pass
+    // shape.
+    //
+    // Only fires when the worker drain was enabled. In drain-disabled
+    // mode no tickets actually ran (AL-13 pending), so auditing what
+    // "just completed" is meaningless and would write stale proposals
+    // from a stale board.
+    if (drainEnabled) {
+      const headroomPct = Math.max(0, 100 - tracker.pct);
+      const auditCtx: AllTicketsCompleteContext = {
+        channel,
+        channelStore,
+        sessionId,
+        tracker,
+        budgetHeadroomPct: headroomPct,
+        auditInvoker: testOverrides?.auditInvoker,
+      };
+      try {
+        if (opts.onAllTicketsComplete) {
+          await opts.onAllTicketsComplete(auditCtx);
+        } else {
+          await defaultOnAllTicketsComplete(auditCtx);
+        }
+      } catch (err) {
+        // A misbehaving hook must NOT keep the loop from tearing down
+        // its pool / lifecycle / tracker. Warn and continue.
+        console.warn(
+          `[autonomous-loop] onAllTicketsComplete hook failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+      }
+    }
   }
 
   // Only transition if we're still in a non-terminal state. A concurrent
@@ -457,6 +549,58 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
   } catch (err) {
     console.warn(
       `[autonomous-loop] tracker close failed: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
+/**
+ * AL-6: default implementation of the `onAllTicketsComplete` seam.
+ * Reads the channel's current ticket ledger + decisions, then hands them
+ * to {@link runPostCompletionAudit}. Logs the outcome so an operator can
+ * tell from the autonomous-loop's final output whether the audit fired,
+ * was gated off, or produced an invalid response.
+ *
+ * Auto-audit is disabled when no `auditInvoker` is supplied — i.e. the
+ * production default until AL-4 wires the agent factory into this seam.
+ * Tests explicitly pass an invoker via `testOverrides.auditInvoker`.
+ */
+async function defaultOnAllTicketsComplete(ctx: AllTicketsCompleteContext): Promise<void> {
+  if (!ctx.auditInvoker) {
+    // No invoker, no audit. Keeping this silent by default — the
+    // autonomous-loop's pre-audit log already told the operator that
+    // AL-4 is not yet wired; shouting "audit skipped (no invoker)" on
+    // every successful run would just add noise.
+    return;
+  }
+
+  const tickets = await ctx.channelStore.readChannelTickets(ctx.channel.channelId);
+  const decisions = await ctx.channelStore.listDecisions(ctx.channel.channelId);
+
+  const result: AuditRunResult = await runPostCompletionAudit({
+    channel: ctx.channel,
+    channelStore: ctx.channelStore,
+    run: {
+      sessionId: ctx.sessionId,
+      tickets,
+      decisions,
+      // Recent git log capture is deferred to AL-4's richer driver,
+      // which knows which repos the run touched. The audit prompt
+      // tolerates an empty array, so skipping here produces no noise.
+      recentCommits: [],
+    },
+    budgetHeadroomPct: ctx.budgetHeadroomPct,
+    invokeAudit: ctx.auditInvoker,
+  });
+
+  if (result.kind === "fired") {
+    console.log(
+      `[autonomous-loop] audit-agent fired — ${result.proposalsWritten} proposal(s) written.`
+    );
+  } else if (result.kind === "skipped") {
+    console.log(`[autonomous-loop] audit-agent skipped (${result.reason}).`);
+  } else {
+    console.warn(
+      `[autonomous-loop] audit-agent returned invalid response (${result.issues.length} issue(s)).`
     );
   }
 }
