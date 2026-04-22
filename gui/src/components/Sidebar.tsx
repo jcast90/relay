@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { api } from "../api";
+import { notifyError } from "../lib/dialogs";
 import type { Channel } from "../types";
 
 type Props = {
@@ -56,7 +57,7 @@ export function Sidebar({
       await api.setChannelStarred(c.channelId, !c.starred);
       onRefresh();
     } catch (err) {
-      alert(`Failed to ${c.starred ? "unstar" : "star"} #${c.name}: ${err}`);
+      await notifyError(`Failed to ${c.starred ? "unstar" : "star"} #${c.name}: ${err}`);
     }
   };
 

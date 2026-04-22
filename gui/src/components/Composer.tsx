@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type ChatEvent } from "../api";
+import { notifyError } from "../lib/dialogs";
 import type { Channel, ChatSession, WorkspaceEntry } from "../types";
 
 type ActivityEntry = { text: string; ts: number };
@@ -114,7 +115,7 @@ export function Composer({
       await api.updateChannelRepos(channel.channelId, next);
       applyMention(attachAlias);
     } catch (err) {
-      alert(`Attach failed: ${err}`);
+      await notifyError(`Attach failed: ${err}`);
     } finally {
       setAttaching(null);
     }
@@ -277,7 +278,7 @@ export function Composer({
       ];
       await api.updateChannelRepos(channel.channelId, next);
     } catch (err) {
-      alert(`Attach failed: ${err}`);
+      await notifyError(`Attach failed: ${err}`);
     } finally {
       setAttaching(null);
     }

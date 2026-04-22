@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { confirmAction, notifyError } from "../lib/dialogs";
 import type { Channel, Spawn } from "../types";
 
 type Tab = "repos" | "members" | "about";
@@ -63,12 +64,12 @@ function ReposTab({ channel, onRefresh }: { channel: Channel; onRefresh: () => v
       await api.setPrimaryRepo(channel.channelId, workspaceId);
       onRefresh();
     } catch (err) {
-      alert(`Promote failed: ${err}`);
+      await notifyError(`Promote failed: ${err}`);
     }
   };
 
   const detach = async (workspaceId: string) => {
-    if (!confirm("Detach this repo from the channel?")) return;
+    if (!(await confirmAction("Detach this repo from the channel?"))) return;
     const remaining = channel.repoAssignments
       .filter((r) => r.workspaceId !== workspaceId)
       .map((r) => ({ alias: r.alias, workspaceId: r.workspaceId, repoPath: r.repoPath }));
@@ -76,7 +77,7 @@ function ReposTab({ channel, onRefresh }: { channel: Channel; onRefresh: () => v
       await api.updateChannelRepos(channel.channelId, remaining);
       onRefresh();
     } catch (err) {
-      alert(`Detach failed: ${err}`);
+      await notifyError(`Detach failed: ${err}`);
     }
   };
 
@@ -85,7 +86,7 @@ function ReposTab({ channel, onRefresh }: { channel: Channel; onRefresh: () => v
       const s = await api.spawnAgent(channel.channelId, alias, repoPath);
       setSpawns((prev) => [...prev, s]);
     } catch (err) {
-      alert(`Spawn failed: ${err}`);
+      await notifyError(`Spawn failed: ${err}`);
     }
   };
 
@@ -94,7 +95,7 @@ function ReposTab({ channel, onRefresh }: { channel: Channel; onRefresh: () => v
     try {
       await api.killSpawnedAgent(channel.channelId, alias);
     } catch (err) {
-      alert(`Kill failed: ${err}`);
+      await notifyError(`Kill failed: ${err}`);
     }
   };
 
@@ -237,13 +238,13 @@ function AboutTab({
     const prompt = next
       ? `Enable full access for #${channel.name}? All subprocesses spawned from this channel will run without permission prompts until this is turned off.`
       : `Disable full access for #${channel.name}? Permission prompts will return for new subprocesses.`;
-    if (!confirm(prompt)) return;
+    if (!(await confirmAction(prompt, { title: "Full access" }))) return;
     try {
       await api.setChannelFullAccess(channel.channelId, next);
       setFullAccess(next);
       onRefresh();
     } catch (err) {
-      alert(`Failed to toggle full access: ${err}`);
+      await notifyError(`Failed to toggle full access: ${err}`);
     }
   };
 
@@ -253,13 +254,14 @@ function AboutTab({
       await api.setChannelTier(channel.channelId, next || null);
       onRefresh();
     } catch (err) {
-      alert(`Tier update failed: ${err}`);
+      await notifyError(`Tier update failed: ${err}`);
     }
   };
 
   const handleArchive = async () => {
     const archived = channel.status === "archived";
-    if (!confirm(`${archived ? "Unarchive" : "Archive"} #${channel.name}?`)) return;
+    const prompt = `${archived ? "Unarchive" : "Archive"} #${channel.name}?`;
+    if (!(await confirmAction(prompt, { title: archived ? "Unarchive" : "Archive" }))) return;
     setBusy(true);
     try {
       if (archived) {
@@ -270,7 +272,7 @@ function AboutTab({
       }
       onRefresh();
     } catch (err) {
-      alert(`Failed: ${err}`);
+      await notifyError(`Failed: ${err}`);
     } finally {
       setBusy(false);
     }

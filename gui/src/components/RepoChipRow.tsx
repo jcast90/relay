@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { notifyError } from "../lib/dialogs";
 import type { Channel, WorkspaceEntry } from "../types";
 
 type Props = {
@@ -42,7 +43,7 @@ export function RepoChipRow({ channel, onChanged }: Props) {
       onChanged();
       setOpenChipId(null);
     } catch (err) {
-      alert(`Promote failed: ${err}`);
+      await notifyError(`Promote failed: ${err}`);
     }
   };
 
@@ -60,7 +61,7 @@ export function RepoChipRow({ channel, onChanged }: Props) {
       onChanged();
       setOpenChipId(null);
     } catch (err) {
-      alert(`Detach failed: ${err}`);
+      await notifyError(`Detach failed: ${err}`);
     }
   };
 
@@ -69,7 +70,7 @@ export function RepoChipRow({ channel, onChanged }: Props) {
       await api.spawnAgent(channel.channelId, alias, repoPath);
       setOpenChipId(null);
     } catch (err) {
-      alert(`Spawn failed: ${err}`);
+      await notifyError(`Spawn failed: ${err}`);
     }
   };
 
@@ -185,7 +186,7 @@ function AddRepoPopover({
       await api.updateChannelRepos(channel.channelId, next);
       onAttached();
     } catch (err) {
-      alert(`Attach failed: ${err}`);
+      await notifyError(`Attach failed: ${err}`);
     } finally {
       setBusy(false);
     }
