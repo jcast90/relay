@@ -248,13 +248,13 @@ export async function main(): Promise<void> {
     const autoApprove = isAutoApproveEnabled(args);
     const userArgs = stripAutoApproveFlags(stripHarnessMcpOptOut(args));
 
-    // For claude-* variants (e.g. claude-turingon), use the base binary
+    // For claude-* variants (e.g. claude-myproject), use the base binary
     // with CLAUDE_CONFIG_DIR set to ~/.claude-<variant>
     const isVariant = command.startsWith("claude-") || command.startsWith("codex-");
     const baseBinary = isVariant ? command.split("-")[0] : command;
     const variantEnv: Record<string, string> = {};
     if (isVariant) {
-      const variantName = command; // e.g. "claude-turingon"
+      const variantName = command; // e.g. "claude-myproject"
       const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
       variantEnv.CLAUDE_CONFIG_DIR = `${home}/.${variantName}`;
     }
