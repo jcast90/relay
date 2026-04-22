@@ -26,8 +26,7 @@ export interface AgentNameEntry {
  * through the store as a coordination record for Postgres-backed deployments
  * (T-402). Same pattern as T-101's `upsertChannelTickets` coordination doc.
  */
-const namesPath = (dir?: string): string =>
-  join(dir ?? getRelayDir(), "agent-names.json");
+const namesPath = (dir?: string): string => join(dir ?? getRelayDir(), "agent-names.json");
 
 /**
  * Doc id for the `STORE_NS.agentName` coordination record. The registry is
@@ -90,11 +89,7 @@ export async function setAgentName(
   // persisted the data Rust/GUI care about.
   try {
     const store = resolveStore(io);
-    await store.mutate<AgentNameEntry[]>(
-      STORE_NS.agentName,
-      REGISTRY_DOC_ID,
-      () => entries
-    );
+    await store.mutate<AgentNameEntry[]>(STORE_NS.agentName, REGISTRY_DOC_ID, () => entries);
   } catch (err) {
     // Never let a mirror failure shadow a successful primary write. The
     // Rust-visible file is already on disk; a future caller's `setAgentName`
@@ -108,21 +103,14 @@ export async function setAgentName(
   return entry;
 }
 
-export async function getAgentName(
-  agentId: string,
-  io?: AgentNameIO
-): Promise<string> {
+export async function getAgentName(agentId: string, io?: AgentNameIO): Promise<string> {
   const entries = await listAgentNames(io);
   return entries.find((e) => e.agentId === agentId)?.displayName ?? agentId;
 }
 
-export async function listAgentNames(
-  io?: AgentNameIO
-): Promise<AgentNameEntry[]> {
+export async function listAgentNames(io?: AgentNameIO): Promise<AgentNameEntry[]> {
   try {
-    return JSON.parse(
-      await readFile(namesPath(io?.relayDir), "utf8")
-    ) as AgentNameEntry[];
+    return JSON.parse(await readFile(namesPath(io?.relayDir), "utf8")) as AgentNameEntry[];
   } catch {
     return [];
   }

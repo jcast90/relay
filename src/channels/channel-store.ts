@@ -13,7 +13,7 @@ import {
   type ChannelRef,
   type ChannelRunLink,
   type ChannelStatus,
-  type RepoAssignment
+  type RepoAssignment,
 } from "../domain/channel.js";
 import { buildDecisionId, type Decision } from "../domain/decision.js";
 import type { TrackedPrRow } from "../domain/pr-row.js";
@@ -134,7 +134,7 @@ export class ChannelStore {
       repoAssignments: assignments,
       primaryWorkspaceId,
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
     };
 
     await this.writeChannel(channel);
@@ -146,10 +146,7 @@ export class ChannelStore {
   async getChannel(channelId: string): Promise<Channel | null> {
     assertSafeSegment(channelId, "channelId");
     try {
-      const raw = await readFile(
-        join(this.channelsDir, `${channelId}.json`),
-        "utf8"
-      );
+      const raw = await readFile(join(this.channelsDir, `${channelId}.json`), "utf8");
       return JSON.parse(raw) as Channel;
     } catch {
       return null;
@@ -164,9 +161,7 @@ export class ChannelStore {
       if (!file.endsWith(".json")) continue;
 
       try {
-        const raw = JSON.parse(
-          await readFile(join(this.channelsDir, file), "utf8")
-        ) as Channel;
+        const raw = JSON.parse(await readFile(join(this.channelsDir, file), "utf8")) as Channel;
 
         if (!status || raw.status === status) {
           channels.push(raw);
@@ -201,7 +196,7 @@ export class ChannelStore {
     const updated: Channel = {
       ...channel,
       ...patch,
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
     };
 
     // Reconcile primaryWorkspaceId against the (possibly updated) repo list.
@@ -221,8 +216,7 @@ export class ChannelStore {
     const assignments = updated.repoAssignments ?? [];
     const currentPrimary = updated.primaryWorkspaceId;
     const primaryStillValid =
-      !!currentPrimary &&
-      assignments.some((a) => a.workspaceId === currentPrimary);
+      !!currentPrimary && assignments.some((a) => a.workspaceId === currentPrimary);
 
     if (primaryExplicitlyCleared) {
       updated.primaryWorkspaceId = undefined;
@@ -252,9 +246,7 @@ export class ChannelStore {
     }
 
     if (channel.primaryWorkspaceId) {
-      const match = assignments.find(
-        (a) => a.workspaceId === channel.primaryWorkspaceId
-      );
+      const match = assignments.find((a) => a.workspaceId === channel.primaryWorkspaceId);
       if (match) return match;
     }
 
@@ -281,7 +273,10 @@ export class ChannelStore {
 
   // --- Members ---
 
-  async joinChannel(channelId: string, member: Omit<ChannelMember, "joinedAt" | "status">): Promise<Channel | null> {
+  async joinChannel(
+    channelId: string,
+    member: Omit<ChannelMember, "joinedAt" | "status">
+  ): Promise<Channel | null> {
     assertSafeSegment(channelId, "channelId");
     const channel = await this.getChannel(channelId);
     if (!channel) return null;
@@ -292,7 +287,7 @@ export class ChannelStore {
     const fullMember: ChannelMember = {
       ...member,
       joinedAt: now,
-      status: "active"
+      status: "active",
     };
 
     if (existing >= 0) {
@@ -309,7 +304,7 @@ export class ChannelStore {
       fromAgentId: member.agentId,
       fromDisplayName: member.displayName,
       content: `${member.displayName} joined the channel.`,
-      metadata: { role: member.role, provider: member.provider }
+      metadata: { role: member.role, provider: member.provider },
     });
 
     return channel;
@@ -332,7 +327,7 @@ export class ChannelStore {
       fromAgentId: agentId,
       fromDisplayName: member.displayName,
       content: `${member.displayName} left the channel.`,
-      metadata: {}
+      metadata: {},
     });
 
     return channel;
@@ -362,13 +357,10 @@ export class ChannelStore {
       fromDisplayName: input.fromDisplayName,
       content: input.content,
       metadata: normalizeMetadata(input.metadata),
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     };
 
-    await appendFile(
-      join(feedDir, "feed.jsonl"),
-      JSON.stringify(entry) + "\n"
-    );
+    await appendFile(join(feedDir, "feed.jsonl"), JSON.stringify(entry) + "\n");
 
     // Bump channel-level activity so sorts by updatedAt reflect feed writes.
     await this.touchChannel(channelId);
@@ -399,7 +391,7 @@ export class ChannelStore {
       fromAgentId: options?.fromAgentId ?? null,
       fromDisplayName: options?.fromDisplayName ?? "system",
       content,
-      metadata: options?.metadata ?? {}
+      metadata: options?.metadata ?? {},
     });
     return entry.entryId;
   }
@@ -416,9 +408,7 @@ export class ChannelStore {
         .filter(Boolean)
         .map((line) => {
           const entry = JSON.parse(line) as ChannelEntry;
-          entry.metadata = denormalizeMetadata(
-            entry.metadata as Record<string, string>
-          );
+          entry.metadata = denormalizeMetadata(entry.metadata as Record<string, string>);
           return entry;
         });
 
@@ -449,7 +439,7 @@ export class ChannelStore {
       fromAgentId: null,
       fromDisplayName: null,
       content: `Reference added: ${ref.label} (${ref.type}: ${ref.targetId})`,
-      metadata: { refType: ref.type, targetId: ref.targetId }
+      metadata: { refType: ref.type, targetId: ref.targetId },
     });
 
     return channel;
@@ -489,17 +479,14 @@ export class ChannelStore {
       fromAgentId: null,
       fromDisplayName: null,
       content: `Run ${runId} linked to channel.`,
-      metadata: { runId, workspaceId }
+      metadata: { runId, workspaceId },
     });
   }
 
   async readRunLinks(channelId: string): Promise<ChannelRunLink[]> {
     assertSafeSegment(channelId, "channelId");
     try {
-      const raw = await readFile(
-        join(this.channelsDir, channelId, "runs.json"),
-        "utf8"
-      );
+      const raw = await readFile(join(this.channelsDir, channelId, "runs.json"), "utf8");
       return JSON.parse(raw) as ChannelRunLink[];
     } catch {
       return [];
@@ -527,17 +514,12 @@ export class ChannelStore {
       // Any other failure surfaces so a corrupt file isn't silently
       // overwritten by the next snapshot.
       throw new Error(
-        `Failed to read tracked-prs at ${path}: ${
-          err instanceof Error ? err.message : String(err)
-        }`
+        `Failed to read tracked-prs at ${path}: ${err instanceof Error ? err.message : String(err)}`
       );
     }
   }
 
-  async writeTrackedPrs(
-    channelId: string,
-    rows: TrackedPrRow[]
-  ): Promise<void> {
+  async writeTrackedPrs(channelId: string, rows: TrackedPrRow[]): Promise<void> {
     assertSafeSegment(channelId, "channelId");
     const channelDir = join(this.channelsDir, channelId);
     await mkdir(channelDir, { recursive: true });
@@ -545,11 +527,7 @@ export class ChannelStore {
     const tmpPath = `${path}.tmp.${process.pid}.${channelTicketsTmpCounter++}`;
     await writeFile(
       tmpPath,
-      JSON.stringify(
-        { updatedAt: new Date().toISOString(), rows },
-        null,
-        2
-      )
+      JSON.stringify({ updatedAt: new Date().toISOString(), rows }, null, 2)
     );
     await rename(tmpPath, path);
   }
@@ -603,10 +581,7 @@ export class ChannelStore {
    * `upsertChannelTickets` — this method is primarily for seeders and
    * full-board rewrites.
    */
-  async writeChannelTickets(
-    channelId: string,
-    tickets: TicketLedgerEntry[]
-  ): Promise<void> {
+  async writeChannelTickets(channelId: string, tickets: TicketLedgerEntry[]): Promise<void> {
     assertSafeSegment(channelId, "channelId");
     const channelDir = join(this.channelsDir, channelId);
     await mkdir(channelDir, { recursive: true });
@@ -621,7 +596,7 @@ export class ChannelStore {
       JSON.stringify(
         {
           updatedAt: new Date().toISOString(),
-          tickets
+          tickets,
         },
         null,
         2
@@ -697,22 +672,15 @@ export class ChannelStore {
     // this executes under `pg_advisory_xact_lock`, on FileHarnessStore it
     // serializes through the in-process key-lock. Purely advisory —
     // nothing reads this record today; T-402 consumers layer on top.
-    await this.store.mutate<TicketLockRecord>(
-      STORE_NS.channelTickets,
-      channelId,
-      () => ({
-        updatedAt: new Date().toISOString(),
-        count: merged.length
-      })
-    );
+    await this.store.mutate<TicketLockRecord>(STORE_NS.channelTickets, channelId, () => ({
+      updatedAt: new Date().toISOString(),
+      count: merged.length,
+    }));
 
     return merged;
   }
 
-  private async withChannelLock<T>(
-    channelId: string,
-    fn: () => Promise<T>
-  ): Promise<T> {
+  private async withChannelLock<T>(channelId: string, fn: () => Promise<T>): Promise<T> {
     const prev = channelTicketLocks.get(channelId) ?? Promise.resolve();
     let resolveCurrent!: () => void;
     const current = new Promise<void>((resolve) => {
@@ -759,7 +727,7 @@ export class ChannelStore {
       decisionId: buildDecisionId(),
       channelId,
       ...input,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     };
 
     const path = join(decisionsDir, `${decision.decisionId}.json`);
@@ -798,8 +766,8 @@ export class ChannelStore {
       metadata: {
         decisionId: decision.decisionId,
         ...(input.runId ? { runId: input.runId } : {}),
-        ...(input.ticketId ? { ticketId: input.ticketId } : {})
-      }
+        ...(input.ticketId ? { ticketId: input.ticketId } : {}),
+      },
     });
 
     return decision;
@@ -829,9 +797,7 @@ export class ChannelStore {
       if (!file.endsWith(".json")) continue;
 
       try {
-        const raw = JSON.parse(
-          await readFile(join(decisionsDir, file), "utf8")
-        ) as Decision;
+        const raw = JSON.parse(await readFile(join(decisionsDir, file), "utf8")) as Decision;
         decisions.push(raw);
       } catch {
         // skip
@@ -881,9 +847,7 @@ const JSON_TAG = "__ah_meta_json::";
  * `JSON_TAG` is also JSON-tagged on write so `denormalizeMetadata` restores
  * the exact original string instead of treating it as a serialized payload.
  */
-function normalizeMetadata(
-  metadata: Record<string, unknown>
-): Record<string, string> {
+function normalizeMetadata(metadata: Record<string, unknown>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(metadata)) {
     if (value === undefined || value === null) continue;
@@ -891,9 +855,7 @@ function normalizeMetadata(
       // Normal case: strings pass through verbatim. The rare string that
       // coincidentally starts with the tag must be tagged too, otherwise
       // the reader would mis-parse it.
-      out[key] = value.startsWith(JSON_TAG)
-        ? JSON_TAG + JSON.stringify(value)
-        : value;
+      out[key] = value.startsWith(JSON_TAG) ? JSON_TAG + JSON.stringify(value) : value;
     } else {
       out[key] = JSON_TAG + JSON.stringify(value);
     }

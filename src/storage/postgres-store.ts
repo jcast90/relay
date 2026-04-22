@@ -1,12 +1,7 @@
 import pg from "pg";
 
 import { assertSafeSegment } from "./file-store.js";
-import type {
-  BlobRef,
-  ChangeEvent,
-  HarnessStore,
-  ReadLogOptions
-} from "./store.js";
+import type { BlobRef, ChangeEvent, HarnessStore, ReadLogOptions } from "./store.js";
 
 /**
  * Postgres channel names truncate at 63 bytes. The prefix `harness_change_`
@@ -71,9 +66,7 @@ export class PostgresHarnessStore implements HarnessStore {
       this.ownsPool = true;
       this.connectionString = opts.connectionString;
     } else {
-      throw new Error(
-        "PostgresHarnessStore requires `pool` or `connectionString`"
-      );
+      throw new Error("PostgresHarnessStore requires `pool` or `connectionString`");
     }
   }
 
@@ -133,8 +126,7 @@ export class PostgresHarnessStore implements HarnessStore {
     // literally, mirroring FileHarnessStore.listDocs which uses
     // `String.startsWith`. Without this, a prefix of `a_b` would match
     // `axb`, `aab`, etc., diverging from the contract.
-    const escapedPrefix =
-      prefix !== undefined ? prefix.replace(/[\\%_]/g, "\\$&") : null;
+    const escapedPrefix = prefix !== undefined ? prefix.replace(/[\\%_]/g, "\\$&") : null;
     const result = await this.pool.query<{ doc: T }>(
       `SELECT doc FROM harness_docs
        WHERE ns = $1
@@ -148,26 +140,20 @@ export class PostgresHarnessStore implements HarnessStore {
   async deleteDoc(ns: string, id: string): Promise<void> {
     assertSafeSegment(ns, "ns");
     assertSafeSegment(id, "id");
-    await this.pool.query(
-      "DELETE FROM harness_docs WHERE ns = $1 AND id = $2",
-      [ns, id]
-    );
+    await this.pool.query("DELETE FROM harness_docs WHERE ns = $1 AND id = $2", [ns, id]);
   }
 
   async appendLog(ns: string, id: string, entry: unknown): Promise<void> {
     assertSafeSegment(ns, "ns");
     assertSafeSegment(id, "id");
-    await this.pool.query(
-      "INSERT INTO harness_logs (ns, id, entry) VALUES ($1, $2, $3::jsonb)",
-      [ns, id, JSON.stringify(entry)]
-    );
+    await this.pool.query("INSERT INTO harness_logs (ns, id, entry) VALUES ($1, $2, $3::jsonb)", [
+      ns,
+      id,
+      JSON.stringify(entry),
+    ]);
   }
 
-  async readLog<T>(
-    ns: string,
-    id: string,
-    opts?: ReadLogOptions
-  ): Promise<T[]> {
+  async readLog<T>(ns: string, id: string, opts?: ReadLogOptions): Promise<T[]> {
     assertSafeSegment(ns, "ns");
     assertSafeSegment(id, "id");
 
@@ -241,7 +227,7 @@ export class PostgresHarnessStore implements HarnessStore {
       ns,
       id,
       size: bytes.byteLength,
-      contentType: hasMeta ? contentType : undefined
+      contentType: hasMeta ? contentType : undefined,
     };
   }
 
@@ -253,9 +239,7 @@ export class PostgresHarnessStore implements HarnessStore {
       [ref.ns, ref.id]
     );
     if (result.rowCount === 0) {
-      const err: NodeJS.ErrnoException = new Error(
-        `Blob not found: ${ref.ns}/${ref.id}`
-      );
+      const err: NodeJS.ErrnoException = new Error(`Blob not found: ${ref.ns}/${ref.id}`);
       err.code = "ENOENT";
       throw err;
     }
@@ -277,11 +261,7 @@ export class PostgresHarnessStore implements HarnessStore {
    * is rolled back and no row is modified. `fn` itself should be pure and
    * fast — the row lock is held for its entire runtime.
    */
-  async mutate<T>(
-    ns: string,
-    id: string,
-    fn: (prev: T | null) => T
-  ): Promise<T> {
+  async mutate<T>(ns: string, id: string, fn: (prev: T | null) => T): Promise<T> {
     assertSafeSegment(ns, "ns");
     assertSafeSegment(id, "id");
     const client = await this.pool.connect();
@@ -296,18 +276,16 @@ export class PostgresHarnessStore implements HarnessStore {
       // byte (`E'\0'`) is rejected by Postgres's UTF8 input at parse time
       // so we deliberately avoid it even though it would be a more obvious
       // delimiter.
-      await client.query(
-        "SELECT pg_advisory_xact_lock(hashtextextended($1 || '/' || $2, 0))",
-        [ns, id]
-      );
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1 || '/' || $2, 0))", [
+        ns,
+        id,
+      ]);
       const existing = await client.query<{ doc: T }>(
         "SELECT doc FROM harness_docs WHERE ns = $1 AND id = $2 FOR UPDATE",
         [ns, id]
       );
       const prev: T | null =
-        existing.rowCount && existing.rowCount > 0
-          ? existing.rows[0]!.doc
-          : null;
+        existing.rowCount && existing.rowCount > 0 ? existing.rows[0]!.doc : null;
       const next = fn(prev);
       await client.query(
         `INSERT INTO harness_docs (ns, id, doc, updated_at)
@@ -360,12 +338,10 @@ export class PostgresHarnessStore implements HarnessStore {
         if (sub.closed) return { value: undefined, done: true };
         const queued = sub.queue.shift();
         if (queued) return { value: queued, done: false };
-        const event = await new Promise<ChangeEvent | null>(
-          (resolve, reject) => {
-            sub.resolveWaiter = resolve;
-            sub.rejectWaiter = reject;
-          }
-        );
+        const event = await new Promise<ChangeEvent | null>((resolve, reject) => {
+          sub.resolveWaiter = resolve;
+          sub.rejectWaiter = reject;
+        });
         if (event === null) return { value: undefined, done: true };
         return { value: event, done: false };
       },
@@ -378,18 +354,15 @@ export class PostgresHarnessStore implements HarnessStore {
         const sub = await subPromise;
         await store.unsubscribe(ns, sub);
         throw err;
-      }
+      },
     };
 
     return {
-      [Symbol.asyncIterator]: () => iterator
+      [Symbol.asyncIterator]: () => iterator,
     };
   }
 
-  private async subscribe(
-    ns: string,
-    id: string
-  ): Promise<WatchSubscription> {
+  private async subscribe(ns: string, id: string): Promise<WatchSubscription> {
     const sub: WatchSubscription = {
       ns,
       expectedId: id,
@@ -397,13 +370,13 @@ export class PostgresHarnessStore implements HarnessStore {
       resolveWaiter: null,
       rejectWaiter: null,
       closed: false,
-      error: null
+      error: null,
     };
 
     let entry = this.listenClients.get(ns);
     if (!entry) {
       const client = new pg.Client({
-        connectionString: this.connectionStringForClient()
+        connectionString: this.connectionStringForClient(),
       });
       // A Pool client can't hold a long-lived LISTEN because the pool will
       // rotate it back into the free list. Dedicated Client instead.
@@ -473,10 +446,7 @@ export class PostgresHarnessStore implements HarnessStore {
     return sub;
   }
 
-  private async unsubscribe(
-    ns: string,
-    sub: WatchSubscription
-  ): Promise<void> {
+  private async unsubscribe(ns: string, sub: WatchSubscription): Promise<void> {
     sub.closed = true;
     // Wake any pending waiter so the generator's finally can run; otherwise
     // iterator.return() awaits a promise that will never resolve.

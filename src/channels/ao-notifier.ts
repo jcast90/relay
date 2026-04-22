@@ -1,9 +1,4 @@
-import type {
-  Notifier,
-  NotifyAction,
-  NotifyContext,
-  OrchestratorEvent
-} from "@aoagents/ao-core";
+import type { Notifier, NotifyAction, NotifyContext, OrchestratorEvent } from "@aoagents/ao-core";
 
 import type { ChannelStore } from "./channel-store.js";
 
@@ -30,15 +25,12 @@ export class HarnessChannelNotifier implements Notifier {
     await this.channelStore.post(this.defaultChannelId, this.formatEventMessage(event), {
       type: "event",
       fromDisplayName: "orchestrator",
-      metadata: this.buildEventMetadata(event)
+      metadata: this.buildEventMetadata(event),
     });
   }
 
   /** Push a notification with actionable links appended to the body. */
-  async notifyWithActions(
-    event: OrchestratorEvent,
-    actions: NotifyAction[]
-  ): Promise<void> {
+  async notifyWithActions(event: OrchestratorEvent, actions: NotifyAction[]): Promise<void> {
     const base = this.formatEventMessage(event);
     const actionLines = actions
       .map((a) => {
@@ -52,7 +44,7 @@ export class HarnessChannelNotifier implements Notifier {
     await this.channelStore.post(this.defaultChannelId, content, {
       type: "event",
       fromDisplayName: "orchestrator",
-      metadata: this.buildEventMetadata(event)
+      metadata: this.buildEventMetadata(event),
     });
   }
 
@@ -72,7 +64,7 @@ export class HarnessChannelNotifier implements Notifier {
     return this.channelStore.post(channelId, message, {
       type: "message",
       fromDisplayName: "orchestrator",
-      metadata
+      metadata,
     });
   }
 
@@ -91,7 +83,7 @@ export class HarnessChannelNotifier implements Notifier {
       timestamp: event.timestamp.toISOString(),
       // Preserve the event payload — the channel store will JSON-serialize
       // this so downstream readers keep seeing string-valued metadata.
-      data: event.data
+      data: event.data,
     };
   }
 }

@@ -21,12 +21,10 @@ import type {
 export const api = {
   listWorkspaces: () => invoke<WorkspaceEntry[]>("list_workspaces"),
   listChannels: () => invoke<Channel[]>("list_channels"),
-  getChannel: (channelId: string) =>
-    invoke<Channel | null>("get_channel", { channelId }),
+  getChannel: (channelId: string) => invoke<Channel | null>("get_channel", { channelId }),
   listFeed: (channelId: string, limit = 200) =>
     invoke<ChannelEntry[]>("list_feed", { channelId, limit }),
-  listSessions: (channelId: string) =>
-    invoke<ChatSession[]>("list_sessions", { channelId }),
+  listSessions: (channelId: string) => invoke<ChatSession[]>("list_sessions", { channelId }),
   loadSession: (channelId: string, sessionId: string, limit = 500) =>
     invoke<PersistedChatMessage[]>("load_session", {
       channelId,
@@ -39,22 +37,20 @@ export const api = {
     invoke<Decision[]>("list_channel_decisions", { channelId }),
   listChannelRuns: (channelId: string) =>
     invoke<ChannelRunLink[]>("list_channel_runs", { channelId }),
-  listRuns: (workspaceId: string) =>
-    invoke<RunIndexEntry[]>("list_runs", { workspaceId }),
+  listRuns: (workspaceId: string) => invoke<RunIndexEntry[]>("list_runs", { workspaceId }),
   listTicketLedger: (workspaceId: string, runId: string) =>
     invoke<TicketLedgerEntry[]>("list_ticket_ledger", { workspaceId, runId }),
   listAgentNames: () => invoke<AgentNameEntry[]>("list_agent_names"),
   runCli: (args: string[]) =>
-    invoke<{ success: boolean; stdout: string; stderr: string; code: number | null }>(
-      "run_cli",
-      { args },
-    ),
+    invoke<{ success: boolean; stdout: string; stderr: string; code: number | null }>("run_cli", {
+      args,
+    }),
 
   createChannel: (
     name: string,
     description: string,
     repos: { alias: string; workspaceId: string; repoPath: string }[],
-    primaryWorkspaceId?: string,
+    primaryWorkspaceId?: string
   ) =>
     invoke<{ channelId: string }>("create_channel", {
       name,
@@ -62,19 +58,12 @@ export const api = {
       repos,
       primaryWorkspaceId,
     }),
-  archiveChannel: (channelId: string) =>
-    invoke<unknown>("archive_channel", { channelId }),
+  archiveChannel: (channelId: string) => invoke<unknown>("archive_channel", { channelId }),
   updateChannelRepos: (
     channelId: string,
-    repos: { alias: string; workspaceId: string; repoPath: string }[],
-  ) =>
-    invoke<unknown>("update_channel_repos", { channelId, repos }),
-  postToChannel: (
-    channelId: string,
-    content: string,
-    from?: string,
-    entryType?: string,
-  ) =>
+    repos: { alias: string; workspaceId: string; repoPath: string }[]
+  ) => invoke<unknown>("update_channel_repos", { channelId, repos }),
+  postToChannel: (channelId: string, content: string, from?: string, entryType?: string) =>
     invoke<unknown>("post_to_channel", {
       channelId,
       content,
@@ -91,7 +80,7 @@ export const api = {
     role: string,
     content: string,
     agentAlias?: string,
-    metadata?: Record<string, string>,
+    metadata?: Record<string, string>
   ) =>
     invoke<unknown>("append_session_message", {
       channelId,
@@ -104,12 +93,7 @@ export const api = {
 
   rewindSnapshot: (channelId: string, sessionId: string) =>
     invoke<RewindSnapshot>("rewind_snapshot", { channelId, sessionId }),
-  rewindApply: (
-    channelId: string,
-    sessionId: string,
-    key: string,
-    messageTimestamp: string,
-  ) =>
+  rewindApply: (channelId: string, sessionId: string, key: string, messageTimestamp: string) =>
     invoke<RewindResult>("rewind_apply", {
       channelId,
       sessionId,
@@ -132,8 +116,7 @@ export const api = {
   // persisting the assistant message. Called by the rewind flow BEFORE
   // truncating the session log so the stream can't race truncation and
   // append a stale assistant turn afterwards.
-  cancelChatStream: (streamId: number) =>
-    invoke<void>("cancel_chat_stream", { streamId }),
+  cancelChatStream: (streamId: number) => invoke<void>("cancel_chat_stream", { streamId }),
 
   // Task #24 contract. These invoke wrappers are thin passthroughs that
   // assume the Rust side registers `spawn_agent`, `list_spawns`, and
@@ -143,19 +126,16 @@ export const api = {
   // spawn UI rather than crashing the app.
   spawnAgent: (channelId: string, alias: string, repoPath: string) =>
     invoke<Spawn>("spawn_agent", { channelId, alias, repoPath }),
-  listSpawns: (channelId: string) =>
-    invoke<Spawn[]>("list_spawns", { channelId }),
+  listSpawns: (channelId: string) => invoke<Spawn[]>("list_spawns", { channelId }),
   killSpawnedAgent: (channelId: string, alias: string) =>
     invoke<void>("kill_spawned_agent", { channelId, alias }),
 
   // OSS-05: Parity commands — tracked-PR mirror + plan approval. These
   // shell out to the same `rly approve` / `rly reject` commands the CLI
   // uses, so there's exactly one code path that writes approval records.
-  listTrackedPrs: (channelId: string) =>
-    invoke<TrackedPrRow[]>("list_tracked_prs", { channelId }),
+  listTrackedPrs: (channelId: string) => invoke<TrackedPrRow[]>("list_tracked_prs", { channelId }),
   listPendingPlans: () => invoke<PendingPlan[]>("list_pending_plans"),
-  approvePlan: (runId: string) =>
-    invoke<unknown>("approve_plan", { runId }),
+  approvePlan: (runId: string) => invoke<unknown>("approve_plan", { runId }),
   rejectPlan: (runId: string, feedback?: string) =>
     invoke<unknown>("reject_plan", { runId, feedback }),
 };
@@ -168,8 +148,6 @@ export type ChatEvent =
   | { kind: "done"; streamId: number; finalText: string }
   | { kind: "error"; streamId: number; message: string };
 
-export function subscribeChatEvents(
-  cb: (event: ChatEvent) => void,
-): Promise<UnlistenFn> {
+export function subscribeChatEvents(cb: (event: ChatEvent) => void): Promise<UnlistenFn> {
   return listen<ChatEvent>("chat-event", (e) => cb(e.payload));
 }

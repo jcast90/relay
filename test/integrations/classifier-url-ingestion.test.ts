@@ -10,16 +10,17 @@ const mocks = vi.hoisted(() => ({
     const s = input.trim();
     if (!s) return null;
     if (/^https?:\/\/(?:www\.)?github\.com\/[^/]+\/[^/]+\/issues\/\d+/i.test(s)) return "github";
-    if (/^https?:\/\/(?:www\.)?linear\.app\/[^/]+\/issue\/[A-Z][A-Z0-9]*-\d+/i.test(s)) return "linear";
+    if (/^https?:\/\/(?:www\.)?linear\.app\/[^/]+\/issue\/[A-Z][A-Z0-9]*-\d+/i.test(s))
+      return "linear";
     if (/^[A-Z][A-Z0-9]*-\d+$/.test(s)) return "linear";
     return null;
-  }
+  },
 }));
 
 vi.mock("../../src/integrations/tracker.js", () => ({
   createTracker: mocks.createTracker,
   resolveIssue: mocks.resolveIssue,
-  detectTrackerKind: (input: string) => mocks.detectTrackerKindReal(input)
+  detectTrackerKind: (input: string) => mocks.detectTrackerKindReal(input),
 }));
 
 import { classifyRequest } from "../../src/orchestrator/classifier.js";
@@ -46,7 +47,7 @@ function buildRun(featureRequest: string): HarnessRun {
     phaseLedgerPath: null,
     ticketLedger: [],
     ticketLedgerPath: null,
-    runIndexPath: null
+    runIndexPath: null,
   };
 }
 
@@ -67,7 +68,7 @@ describe("classifyRequest — tracker URL ingestion", () => {
       body: "We need RBAC with org scoping and row-level policies.",
       url,
       labels: ["feature", "backend"],
-      branchName: "42-add-user-management"
+      branchName: "42-add-user-management",
     });
 
     // Dispatch receives the enriched feature request; capture and respond.
@@ -86,9 +87,9 @@ describe("classifyRequest — tracker URL ingestion", () => {
             suggestedSpecialties: ["api_crud", "ui"],
             estimatedTicketCount: 5,
             needsDesignDoc: false,
-            needsUserApproval: true
-          }
-        })
+            needsUserApproval: true,
+          },
+        }),
       };
       return result;
     });
@@ -97,7 +98,7 @@ describe("classifyRequest — tracker URL ingestion", () => {
       run: buildRun(url),
       featureRequest: url,
       repoRoot: "/tmp/fake-repo",
-      dispatch
+      dispatch,
     });
 
     // Tracker seam was exercised with parsed identifier "42".
@@ -128,7 +129,7 @@ describe("classifyRequest — tracker URL ingestion", () => {
       body: "Small docs fix.",
       url,
       labels: [],
-      branchName: "7-fix-typo"
+      branchName: "7-fix-typo",
     });
 
     // Heuristic should short-circuit — dispatch must NOT be called.
@@ -136,14 +137,14 @@ describe("classifyRequest — tracker URL ingestion", () => {
       summary: "",
       evidence: [],
       proposedCommands: [],
-      blockers: []
+      blockers: [],
     }));
 
     const result = await classifyRequest({
       run: buildRun(url),
       featureRequest: url,
       repoRoot: "/tmp/fake-repo",
-      dispatch
+      dispatch,
     });
 
     expect(dispatch).not.toHaveBeenCalled();
@@ -169,16 +170,16 @@ describe("classifyRequest — tracker URL ingestion", () => {
           suggestedSpecialties: ["general"],
           estimatedTicketCount: 2,
           needsDesignDoc: false,
-          needsUserApproval: false
-        }
-      })
+          needsUserApproval: false,
+        },
+      }),
     }));
 
     const classification = await classifyRequest({
       run: buildRun(url),
       featureRequest: url,
       repoRoot: "/tmp/fake-repo",
-      dispatch
+      dispatch,
     });
 
     // Classification still returned, and the original URL text was fed straight to dispatch.

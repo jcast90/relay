@@ -19,3 +19,4 @@ config.env
 config.env.*
 !config.env.template
 .claude/
+.agent-harness/

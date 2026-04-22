@@ -42,10 +42,7 @@ export class VerificationRunner {
   ) {}
 
   async run(input: VerificationRunInput): Promise<VerificationRunResult> {
-    const selection = selectVerificationCommands(
-      input.proposedCommands,
-      input.allowlistedCommands
-    );
+    const selection = selectVerificationCommands(input.proposedCommands, input.allowlistedCommands);
     const executed: VerificationCommandResult[] = [];
 
     for (const command of selection.commandsToRun) {
@@ -53,13 +50,13 @@ export class VerificationRunner {
         runId: input.runId,
         phaseId: input.phaseId,
         repoRoot: input.repoRoot,
-        command
+        command,
       });
 
       executed.push({
         command,
         result,
-        artifact
+        artifact,
       });
     }
 
@@ -68,7 +65,7 @@ export class VerificationRunner {
       executed,
       rejected: selection.rejected,
       overridden: selection.overridden,
-      substitutedCommands: selection.overridden ? [...selection.commandsToRun] : []
+      substitutedCommands: selection.overridden ? [...selection.commandsToRun] : [],
     };
   }
 
@@ -85,19 +82,19 @@ export class VerificationRunner {
       command: "zsh",
       args: ["-c", input.command],
       cwd: input.repoRoot,
-      timeoutMs: 300_000
+      timeoutMs: 300_000,
     });
     const artifact = await this.artifactStore.saveCommandResult({
       runId: input.runId,
       phaseId: input.phaseId,
       command: input.command,
       result,
-      cwd: input.repoRoot
+      cwd: input.repoRoot,
     });
 
     return {
       result,
-      artifact
+      artifact,
     };
   }
 }
@@ -132,7 +129,7 @@ export function selectVerificationCommands(
         ? approvedProposed
         : uniqueNormalizedCommands(allowlistedCommands),
     rejected,
-    overridden
+    overridden,
   };
 }
 

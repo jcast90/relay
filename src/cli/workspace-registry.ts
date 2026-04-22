@@ -110,7 +110,7 @@ export class WorkspaceRegistry {
       const raw = JSON.parse(content) as WorkspaceRegistryDoc;
       return {
         updatedAt: raw.updatedAt ?? new Date().toISOString(),
-        workspaces: Array.isArray(raw.workspaces) ? raw.workspaces : []
+        workspaces: Array.isArray(raw.workspaces) ? raw.workspaces : [],
       };
     } catch (err) {
       throw new Error(
@@ -154,14 +154,10 @@ export class WorkspaceRegistry {
     // doesn't look like a failed registry write to the caller. Mirrors the
     // T-101 policy for channel-ticket coordination records.
     try {
-      await this.store.mutate<WorkspaceRegistryLockRecord>(
-        STORE_NS.workspace,
-        "registry",
-        () => ({
-          updatedAt: registry.updatedAt,
-          count: registry.workspaces.length
-        })
-      );
+      await this.store.mutate<WorkspaceRegistryLockRecord>(STORE_NS.workspace, "registry", () => ({
+        updatedAt: registry.updatedAt,
+        count: registry.workspaces.length,
+      }));
     } catch (err) {
       console.warn(
         `[workspace-registry] coordination-record mutate failed (path=${path}, count=${registry.workspaces.length}): ${
@@ -176,9 +172,7 @@ export class WorkspaceRegistry {
     const workspaceId = buildWorkspaceId(repoPath);
     const now = new Date().toISOString();
 
-    const existing = registry.workspaces.find(
-      (w) => w.workspaceId === workspaceId
-    );
+    const existing = registry.workspaces.find((w) => w.workspaceId === workspaceId);
 
     if (existing) {
       existing.lastAccessedAt = now;
@@ -192,7 +186,7 @@ export class WorkspaceRegistry {
       workspaceId,
       repoPath,
       registeredAt: now,
-      lastAccessedAt: now
+      lastAccessedAt: now,
     };
 
     registry.workspaces.push(entry);
@@ -202,14 +196,10 @@ export class WorkspaceRegistry {
     return entry;
   }
 
-  async resolveForRepo(
-    repoPath: string
-  ): Promise<WorkspaceRegistryEntry | null> {
+  async resolveForRepo(repoPath: string): Promise<WorkspaceRegistryEntry | null> {
     const registry = await this.read();
     const workspaceId = buildWorkspaceId(repoPath);
-    return (
-      registry.workspaces.find((w) => w.workspaceId === workspaceId) ?? null
-    );
+    return registry.workspaces.find((w) => w.workspaceId === workspaceId) ?? null;
   }
 
   async list(): Promise<WorkspaceRegistryEntry[]> {
@@ -232,28 +222,20 @@ export async function readRegistry(): Promise<WorkspaceRegistryDoc> {
   return new WorkspaceRegistry(undefined, getHarnessStore()).read();
 }
 
-export async function writeRegistry(
-  registry: WorkspaceRegistryDoc
-): Promise<void> {
+export async function writeRegistry(registry: WorkspaceRegistryDoc): Promise<void> {
   return new WorkspaceRegistry(undefined, getHarnessStore()).write(registry);
 }
 
-export async function registerWorkspace(
-  repoPath: string
-): Promise<WorkspaceRegistryEntry> {
+export async function registerWorkspace(repoPath: string): Promise<WorkspaceRegistryEntry> {
   return new WorkspaceRegistry(undefined, getHarnessStore()).register(repoPath);
 }
 
 export async function resolveWorkspaceForRepo(
   repoPath: string
 ): Promise<WorkspaceRegistryEntry | null> {
-  return new WorkspaceRegistry(undefined, getHarnessStore()).resolveForRepo(
-    repoPath
-  );
+  return new WorkspaceRegistry(undefined, getHarnessStore()).resolveForRepo(repoPath);
 }
 
-export async function listRegisteredWorkspaces(): Promise<
-  WorkspaceRegistryEntry[]
-> {
+export async function listRegisteredWorkspaces(): Promise<WorkspaceRegistryEntry[]> {
   return new WorkspaceRegistry(undefined, getHarnessStore()).list();
 }

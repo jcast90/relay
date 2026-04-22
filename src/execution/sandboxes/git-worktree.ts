@@ -4,12 +4,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
 import { getRelayDir } from "../../cli/paths.js";
-import type {
-  DestroyResult,
-  RepoRef,
-  SandboxProvider,
-  SandboxRef
-} from "../sandbox.js";
+import type { DestroyResult, RepoRef, SandboxProvider, SandboxRef } from "../sandbox.js";
 export type { DestroyResult } from "../sandbox.js";
 
 // argv-based runner (no shell) keeps repo paths safe from shell expansion.
@@ -34,10 +29,7 @@ export interface RunGitResult {
  * process with argv (no shell). Tests inject a mock so the provider is
  * unit-testable without a real git repo on disk.
  */
-export type RunGit = (
-  args: string[],
-  cwd: string
-) => Promise<RunGitResult>;
+export type RunGit = (args: string[], cwd: string) => Promise<RunGitResult>;
 
 export interface GitWorktreeSandboxOptions {
   /** Parent dir holding all sandboxes for this harness. */
@@ -70,7 +62,7 @@ const DIRTY_STDERR_FRAGMENTS = [
   "contains modified or untracked files",
   "is dirty",
   "has modifications",
-  "use --force to delete it"
+  "use --force to delete it",
 ];
 
 /**
@@ -83,10 +75,7 @@ const DIRTY_STDERR_FRAGMENTS = [
  * {@link ../../storage/file-store.ts} — see the PR review: a tiny local copy
  * is preferable to extracting a shared helper during a review-response commit.
  */
-function assertSafeSegment(
-  segment: string,
-  kind: "runId" | "ticketId"
-): void {
+function assertSafeSegment(segment: string, kind: "runId" | "ticketId"): void {
   if (
     segment === "" ||
     segment === "." ||
@@ -119,13 +108,13 @@ const defaultRunGit: RunGit = async (args, cwd) => {
         stdout: e.stdout ?? "",
         stderr: e.stderr ?? String(err),
         code: 1,
-        spawnCode: e.code
+        spawnCode: e.code,
       };
     }
     return {
       stdout: e.stdout ?? "",
       stderr: e.stderr ?? String(err),
-      code: typeof e.code === "number" ? e.code : 1
+      code: typeof e.code === "number" ? e.code : 1,
     };
   }
 };
@@ -159,15 +148,9 @@ export class GitWorktreeSandboxProvider implements SandboxProvider {
    * crash), the worktree and its `.relay-state.json` remain on disk for T-203
    * recovery — deletion is never implicit.
    */
-  async create(
-    repo: RepoRef,
-    base: string,
-    options?: CreateOptions
-  ): Promise<SandboxRef> {
+  async create(repo: RepoRef, base: string, options?: CreateOptions): Promise<SandboxRef> {
     if (!options) {
-      throw new Error(
-        "GitWorktreeSandboxProvider.create requires { runId, ticketId }"
-      );
+      throw new Error("GitWorktreeSandboxProvider.create requires { runId, ticketId }");
     }
     // Validate BEFORE the non-null coerce in requireIds — an empty string
     // should surface as "Unsafe path segment" (not as the lower-priority
@@ -210,7 +193,7 @@ export class GitWorktreeSandboxProvider implements SandboxProvider {
       ticketId,
       createdAt: new Date().toISOString(),
       base,
-      branch
+      branch,
     };
 
     try {
@@ -227,10 +210,7 @@ export class GitWorktreeSandboxProvider implements SandboxProvider {
       console.debug(
         `[git-worktree] state-file write failed at ${sandboxPath}; attempting rollback`
       );
-      const rollback = await this.runGit(
-        ["worktree", "remove", "--force", sandboxPath],
-        repo.root
-      );
+      const rollback = await this.runGit(["worktree", "remove", "--force", sandboxPath], repo.root);
       if (rollback.code !== 0) {
         // eslint-disable-next-line no-console
         console.debug(
@@ -238,9 +218,7 @@ export class GitWorktreeSandboxProvider implements SandboxProvider {
         );
       }
       const message = err instanceof Error ? err.message : String(err);
-      throw new Error(
-        `Failed to write .relay-state.json at ${sandboxPath}: ${message}`
-      );
+      throw new Error(`Failed to write .relay-state.json at ${sandboxPath}: ${message}`);
     }
 
     this.ownerRepo.set(id, repo.root);
@@ -248,7 +226,7 @@ export class GitWorktreeSandboxProvider implements SandboxProvider {
     return {
       id,
       workdir: { kind: "local", path: sandboxPath },
-      meta: { branch, base, runId, ticketId }
+      meta: { branch, base, runId, ticketId },
     };
   }
 
@@ -265,10 +243,7 @@ export class GitWorktreeSandboxProvider implements SandboxProvider {
    * that a T-203 recovery sweep is expected to salvage. Pass
    * `{ force: true }` to override.
    */
-  async destroy(
-    ref: SandboxRef,
-    opts: DestroyOptions = {}
-  ): Promise<DestroyResult> {
+  async destroy(ref: SandboxRef, opts: DestroyOptions = {}): Promise<DestroyResult> {
     if (ref.workdir.kind !== "local") {
       return { kind: "missing" };
     }
@@ -331,9 +306,7 @@ export class GitWorktreeSandboxProvider implements SandboxProvider {
 
 function requireIds(options: CreateOptions | undefined): CreateOptions {
   if (!options?.runId || !options.ticketId) {
-    throw new Error(
-      "GitWorktreeSandboxProvider.create requires { runId, ticketId }"
-    );
+    throw new Error("GitWorktreeSandboxProvider.create requires { runId, ticketId }");
   }
   return options;
 }

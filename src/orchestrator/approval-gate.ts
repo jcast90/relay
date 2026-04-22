@@ -17,7 +17,7 @@ export async function checkApproval(input: {
 
   return {
     decision: record.decision,
-    feedback: record.feedback
+    feedback: record.feedback,
   };
 }
 
@@ -30,6 +30,6 @@ export async function submitApproval(input: {
   return input.artifactStore.saveApprovalRecord({
     runId: input.runId,
     decision: input.decision,
-    feedback: input.feedback
+    feedback: input.feedback,
   });
 }

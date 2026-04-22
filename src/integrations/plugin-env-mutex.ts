@@ -29,15 +29,13 @@ let held = false;
 
 export async function withEnvOverride<T>(
   overrides: Record<string, string | undefined>,
-  fn: () => T | Promise<T>,
+  fn: () => T | Promise<T>
 ): Promise<T> {
   // Fail fast on recursion. We throw *before* touching the chain so the outer
   // call's mutex state stays intact — once the outer `fn` returns normally,
   // subsequent unrelated callers queued behind it still run as usual.
   if (held) {
-    throw new Error(
-      "withEnvOverride: recursive call detected — plugin factories must not reenter",
-    );
+    throw new Error("withEnvOverride: recursive call detected — plugin factories must not reenter");
   }
 
   const prior = chain;

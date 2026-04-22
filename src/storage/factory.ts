@@ -79,9 +79,7 @@ function resolveKind(explicit: StoreKind | undefined): StoreKind {
  *
  * Precedence: `opts.kind` > `HARNESS_STORE` env > default `"file"`.
  */
-export function buildHarnessStore(
-  opts: StoreFactoryOptions = {}
-): HarnessStore {
+export function buildHarnessStore(opts: StoreFactoryOptions = {}): HarnessStore {
   const kind = resolveKind(opts.kind);
 
   if (kind === "file") {

@@ -28,7 +28,7 @@ describe("writeConfigEnvKey", () => {
     const body = [
       "# header comment",
       '# export GITHUB_TOKEN=""',
-      '# export LINEAR_API_KEY=""'
+      '# export LINEAR_API_KEY=""',
     ].join("\n");
     await writeFile(join(dir, "config.env"), body);
 
@@ -93,14 +93,14 @@ describe("writeConfigEnvKey", () => {
 
   it("rejects bogus env var names so the inlined regex can't be gamed", async () => {
     await writeFile(join(dir, "config.env"), "# stub\n");
-    await expect(
-      writeConfigEnvKey(dir, "GITHUB_TOKEN.*", "x")
-    ).rejects.toThrow(/invalid env var name/);
+    await expect(writeConfigEnvKey(dir, "GITHUB_TOKEN.*", "x")).rejects.toThrow(
+      /invalid env var name/
+    );
   });
 
   it("re-applies 0600 permissions after writing", async () => {
     await writeFile(join(dir, "config.env"), '# export GITHUB_TOKEN=""\n', {
-      mode: 0o644
+      mode: 0o644,
     });
 
     await writeConfigEnvKey(dir, "GITHUB_TOKEN", "v");

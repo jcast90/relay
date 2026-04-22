@@ -13,13 +13,13 @@ runRejection.stack = [
   "    at frame 1",
   "    at frame 2",
   "    at frame 3",
-  "    at frame 4"
+  "    at frame 4",
 ].join("\n");
 
 vi.mock("../../src/orchestrator/orchestrator-v2.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../src/orchestrator/orchestrator-v2.js")
-  >("../../src/orchestrator/orchestrator-v2.js");
+  const actual = await vi.importActual<typeof import("../../src/orchestrator/orchestrator-v2.js")>(
+    "../../src/orchestrator/orchestrator-v2.js"
+  );
   class MockOrchestratorV2 {
     attachPoller(): void {
       /* no-op */
@@ -30,7 +30,7 @@ vi.mock("../../src/orchestrator/orchestrator-v2.js", async () => {
   }
   return {
     ...actual,
-    OrchestratorV2: MockOrchestratorV2
+    OrchestratorV2: MockOrchestratorV2,
   };
 });
 
@@ -39,7 +39,7 @@ vi.mock("../../src/agents/factory.js", () => ({
   createLiveAgents: () => [],
   registerAgentNames: async () => {
     /* no-op */
-  }
+  },
 }));
 
 // Pin the storage factory to a tmp-backed FileHarnessStore so dispatch's call
@@ -52,7 +52,7 @@ vi.mock("../../src/storage/factory.js", async () => {
   const store = new FileHarnessStore(root);
   return {
     getHarnessStore: () => store,
-    buildHarnessStore: () => store
+    buildHarnessStore: () => store,
   };
 });
 
@@ -88,7 +88,7 @@ describe("dispatch surfaces fire-and-forget orchestrator errors", () => {
 
     const result = await dispatch({
       featureRequest: "Test feature",
-      repoPath: "/irrelevant/repo"
+      repoPath: "/irrelevant/repo",
     });
 
     expect(result.status).toBe("dispatched");

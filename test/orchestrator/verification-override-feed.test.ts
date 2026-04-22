@@ -7,15 +7,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { NodeCommandInvoker } from "../../src/agents/command-invoker.js";
 import { createLiveAgents } from "../../src/agents/factory.js";
 import { AgentRegistry } from "../../src/agents/registry.js";
-import type {
-  AgentResult,
-  WorkRequest
-} from "../../src/domain/agent.js";
+import type { AgentResult, WorkRequest } from "../../src/domain/agent.js";
 import type { HarnessRun } from "../../src/domain/run.js";
 import {
   initializeTicketLedger,
   parseTicketPlan,
-  type TicketDefinition
+  type TicketDefinition,
 } from "../../src/domain/ticket.js";
 import { ChannelStore } from "../../src/channels/channel-store.js";
 import { LocalArtifactStore } from "../../src/execution/artifact-store.js";
@@ -26,10 +23,7 @@ import { ScriptedInvoker } from "../../src/simulation/scripted-invoker.js";
 
 const RETRY_POLICY = { maxAgentAttempts: 1, maxTestFixLoops: 1 } as const;
 
-function buildTicket(
-  id: string,
-  verificationCommands: string[]
-): TicketDefinition {
+function buildTicket(id: string, verificationCommands: string[]): TicketDefinition {
   return {
     id,
     title: `Ticket ${id}`,
@@ -40,22 +34,18 @@ function buildTicket(
     verificationCommands,
     docsToUpdate: [],
     dependsOn: [],
-    retryPolicy: { ...RETRY_POLICY }
+    retryPolicy: { ...RETRY_POLICY },
   };
 }
 
-function buildRun(
-  repoRoot: string,
-  tickets: TicketDefinition[],
-  channelId: string
-): HarnessRun {
+function buildRun(repoRoot: string, tickets: TicketDefinition[], channelId: string): HarnessRun {
   const now = new Date().toISOString();
   const ticketPlan = parseTicketPlan({
     version: 1,
     task: {
       title: "Test run",
       featureRequest: "Test feature",
-      repoRoot
+      repoRoot,
     },
     classification: {
       tier: "feature_small",
@@ -63,11 +53,11 @@ function buildRun(
       suggestedSpecialties: ["general"],
       estimatedTicketCount: tickets.length,
       needsDesignDoc: false,
-      needsUserApproval: false
+      needsUserApproval: false,
     },
     tickets,
     finalVerification: { commands: [] },
-    docsToUpdate: []
+    docsToUpdate: [],
   });
 
   return {
@@ -88,7 +78,7 @@ function buildRun(
     phaseLedgerPath: null,
     ticketLedger: initializeTicketLedger(tickets),
     ticketLedgerPath: null,
-    runIndexPath: null
+    runIndexPath: null,
   };
 }
 
@@ -110,13 +100,13 @@ describe("TicketScheduler verification override surfaces to channel feed", () =>
     const channelStore = new ChannelStore(join(tmp, "channels"));
     const channel = await channelStore.createChannel({
       name: "#ver-override",
-      description: "override test"
+      description: "override test",
     });
 
     const registry = new AgentRegistry();
     for (const agent of createLiveAgents({
       cwd: tmp,
-      invoker: new ScriptedInvoker(tmp)
+      invoker: new ScriptedInvoker(tmp),
     })) {
       registry.register(agent);
     }
@@ -125,10 +115,7 @@ describe("TicketScheduler verification override surfaces to channel feed", () =>
       join(tmp, "artifacts"),
       new FileHarnessStore(join(tmp, "__hs__"))
     );
-    const verificationRunner = new VerificationRunner(
-      new NodeCommandInvoker(),
-      artifactStore
-    );
+    const verificationRunner = new VerificationRunner(new NodeCommandInvoker(), artifactStore);
 
     // The tester dispatch proposes a command that is not on the ticket's
     // allowlist. The scheduler must (a) fall back to the allowlist for
@@ -142,14 +129,14 @@ describe("TicketScheduler verification override surfaces to channel feed", () =>
           summary: "proposed bogus commands",
           evidence: [],
           proposedCommands: ["rm -rf /tmp/nope"],
-          blockers: []
+          blockers: [],
         };
       }
       return {
         summary: `ok:${req.kind}`,
         evidence: [],
         proposedCommands: [],
-        blockers: []
+        blockers: [],
       };
     };
 
@@ -165,11 +152,7 @@ describe("TicketScheduler verification override surfaces to channel feed", () =>
       { maxConcurrency: 1, channelStore }
     );
 
-    const run = buildRun(
-      tmp,
-      [buildTicket("t_override", ["echo allowlisted"])],
-      channel.channelId
-    );
+    const run = buildRun(tmp, [buildTicket("t_override", ["echo allowlisted"])], channel.channelId);
 
     await scheduler.executeAll(run);
 
@@ -178,9 +161,7 @@ describe("TicketScheduler verification override surfaces to channel feed", () =>
     // feed entry is visible here without a sleep workaround.
     const entries = await channelStore.readFeed(channel.channelId);
     const override = entries.find(
-      (e) =>
-        e.type === "status_update" &&
-        e.content.startsWith("Verification override")
+      (e) => e.type === "status_update" && e.content.startsWith("Verification override")
     );
     expect(override).toBeDefined();
     expect(override!.fromDisplayName).toBe("Verifier");

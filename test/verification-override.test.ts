@@ -9,7 +9,7 @@ import { LocalArtifactStore } from "../src/execution/artifact-store.js";
 import { FileHarnessStore } from "../src/storage/file-store.js";
 import {
   selectVerificationCommands,
-  VerificationRunner
+  VerificationRunner,
 } from "../src/execution/verification-runner.js";
 
 describe("selectVerificationCommands override signal", () => {
@@ -45,10 +45,7 @@ describe("VerificationRunner surfaces override in run() result", () => {
   it("marks overridden=true and records substitutedCommands when the agent's proposals are rejected", async () => {
     const artifactRoot = await mkdtemp(join(tmpdir(), "ver-override-art-"));
     const storeRoot = await mkdtemp(join(tmpdir(), "ver-override-hs-"));
-    const artifactStore = new LocalArtifactStore(
-      artifactRoot,
-      new FileHarnessStore(storeRoot)
-    );
+    const artifactStore = new LocalArtifactStore(artifactRoot, new FileHarnessStore(storeRoot));
     const runner = new VerificationRunner(new FakeCommandInvoker(), artifactStore);
 
     try {
@@ -57,7 +54,7 @@ describe("VerificationRunner surfaces override in run() result", () => {
         phaseId: "phase-1",
         repoRoot: process.cwd(),
         proposedCommands: ["rm -rf /tmp/nope"],
-        allowlistedCommands: ["pnpm test", "pnpm typecheck"]
+        allowlistedCommands: ["pnpm test", "pnpm typecheck"],
       });
 
       expect(result.overridden).toBe(true);
@@ -74,10 +71,7 @@ describe("VerificationRunner surfaces override in run() result", () => {
   it("keeps overridden=false and substitutedCommands empty on the happy path", async () => {
     const artifactRoot = await mkdtemp(join(tmpdir(), "ver-override-art-"));
     const storeRoot = await mkdtemp(join(tmpdir(), "ver-override-hs-"));
-    const artifactStore = new LocalArtifactStore(
-      artifactRoot,
-      new FileHarnessStore(storeRoot)
-    );
+    const artifactStore = new LocalArtifactStore(artifactRoot, new FileHarnessStore(storeRoot));
     const runner = new VerificationRunner(new FakeCommandInvoker(), artifactStore);
 
     try {
@@ -86,7 +80,7 @@ describe("VerificationRunner surfaces override in run() result", () => {
         phaseId: "phase-1",
         repoRoot: process.cwd(),
         proposedCommands: ["pnpm test"],
-        allowlistedCommands: ["pnpm test", "pnpm typecheck"]
+        allowlistedCommands: ["pnpm test", "pnpm typecheck"],
       });
 
       expect(result.overridden).toBe(false);
@@ -105,7 +99,7 @@ class FakeCommandInvoker implements CommandInvoker {
     return {
       stdout: `simulated ${invocation.args.join(" ")}`,
       stderr: "",
-      exitCode: 0
+      exitCode: 0,
     };
   }
 }

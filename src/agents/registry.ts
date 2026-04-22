@@ -1,9 +1,4 @@
-import {
-  type Agent,
-  type AgentRole,
-  type WorkRequest,
-  roleForWork
-} from "../domain/agent.js";
+import { type Agent, type AgentRole, type WorkRequest, roleForWork } from "../domain/agent.js";
 import type { AgentSpecialty } from "../domain/specialty.js";
 
 export class AgentRegistry {
@@ -19,7 +14,7 @@ export class AgentRegistry {
       .filter((agent) => agent.capability.role === requiredRole)
       .map((agent) => ({
         agent,
-        score: scoreAgent(agent.capability.role, agent.capability.specialties, request.specialty)
+        score: scoreAgent(agent.capability.role, agent.capability.specialties, request.specialty),
       }))
       .sort((left, right) => right.score - left.score);
 

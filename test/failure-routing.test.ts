@@ -4,7 +4,7 @@ import {
   buildRetryContext,
   buildRetryObjective,
   fallbackFailureClassification,
-  isVerificationPlanIssue
+  isVerificationPlanIssue,
 } from "../src/orchestrator/failure-routing.js";
 
 describe("failure routing", () => {
@@ -13,7 +13,7 @@ describe("failure routing", () => {
       buildRetryObjective("Repair the phase.", {
         category: "fix_code",
         rationale: "Code path failed.",
-        nextAction: "Fix product logic."
+        nextAction: "Fix product logic.",
       })
     ).toContain("product or business logic");
 
@@ -21,7 +21,7 @@ describe("failure routing", () => {
       buildRetryObjective("Repair the phase.", {
         category: "fix_test",
         rationale: "Tests failed.",
-        nextAction: "Fix tests."
+        nextAction: "Fix tests.",
       })
     ).toContain("tests, fixtures, mocks");
   });
@@ -30,17 +30,19 @@ describe("failure routing", () => {
     expect(
       fallbackFailureClassification({
         artifactContext: ["STDERR:\ncommand not found: pnpmx"],
-        rejectedCommands: []
+        rejectedCommands: [],
       }).category
     ).toBe("bad_command_plan");
   });
 
   it("marks bad command plan as a verification-plan issue", () => {
     expect(isVerificationPlanIssue("bad_command_plan")).toBe(true);
-    expect(buildRetryContext({
-      category: "bad_command_plan",
-      rationale: "Allowlist mismatch.",
-      nextAction: "Repair command plan."
-    })[0]).toContain("bad_command_plan");
+    expect(
+      buildRetryContext({
+        category: "bad_command_plan",
+        rationale: "Allowlist mismatch.",
+        nextAction: "Repair command plan.",
+      })[0]
+    ).toContain("bad_command_plan");
   });
 });

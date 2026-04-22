@@ -18,18 +18,14 @@ export type WorkKind =
   | "review_changes"
   | "run_checks";
 
-export const FailureCategorySchema = z.enum([
-  "fix_code",
-  "fix_test",
-  "bad_command_plan"
-]);
+export const FailureCategorySchema = z.enum(["fix_code", "fix_test", "bad_command_plan"]);
 
 export type FailureCategory = z.infer<typeof FailureCategorySchema>;
 
 export const FailureClassificationSchema = z.object({
   category: FailureCategorySchema,
   rationale: z.string().min(1),
-  nextAction: z.string().min(1)
+  nextAction: z.string().min(1),
 });
 
 export type FailureClassification = z.infer<typeof FailureClassificationSchema>;
@@ -103,7 +99,7 @@ export const AgentResultSchema = z.object({
   proposedCommands: z.array(z.string()),
   blockers: z.array(z.string()),
   failureClassification: FailureClassificationSchema.optional(),
-  phasePlan: z.unknown().optional()
+  phasePlan: z.unknown().optional(),
 });
 
 export const agentResultJsonSchema = {
@@ -112,19 +108,19 @@ export const agentResultJsonSchema = {
   required: ["summary", "evidence", "proposedCommands", "blockers"],
   properties: {
     summary: {
-      type: "string"
+      type: "string",
     },
     evidence: {
       type: "array",
-      items: { type: "string" }
+      items: { type: "string" },
     },
     proposedCommands: {
       type: "array",
-      items: { type: "string" }
+      items: { type: "string" },
     },
     blockers: {
       type: "array",
-      items: { type: "string" }
+      items: { type: "string" },
     },
     failureClassification: {
       type: "object",
@@ -133,18 +129,18 @@ export const agentResultJsonSchema = {
       properties: {
         category: {
           type: "string",
-          enum: ["fix_code", "fix_test", "bad_command_plan"]
+          enum: ["fix_code", "fix_test", "bad_command_plan"],
         },
         rationale: {
-          type: "string"
+          type: "string",
         },
         nextAction: {
-          type: "string"
-        }
-      }
+          type: "string",
+        },
+      },
     },
     phasePlan: {
-      type: "object"
-    }
-  }
+      type: "object",
+    },
+  },
 } as const;

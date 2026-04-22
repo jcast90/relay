@@ -17,7 +17,7 @@ export const STORE_NS = {
   session: "session",
   decision: "decision",
   crosslinkSession: "crosslink-session",
-  crosslinkMailbox: "crosslink-mailbox"
+  crosslinkMailbox: "crosslink-mailbox",
 } as const;
 
 export type StoreNamespace = (typeof STORE_NS)[keyof typeof STORE_NS];

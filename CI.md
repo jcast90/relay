@@ -28,11 +28,11 @@ need external services. Two triggers:
 
 ### Jobs and what they need
 
-| Job | Unskip flag | External service | Secret required |
-|---|---|---|---|
-| `postgres-integration` | `HARNESS_TEST_POSTGRES_URL` | Postgres 16 service container | none — provisioned inline |
-| `git-worktree-integration` | `RELAY_TEST_REAL_GIT=1` | system `git` | none |
-| `pr-watcher-live` | `GITHUB_TOKEN`, `HARNESS_LIVE=1` | github.com | `INTEGRATION_GITHUB_TOKEN` (fine-grained read token) |
+| Job                        | Unskip flag                      | External service              | Secret required                                      |
+| -------------------------- | -------------------------------- | ----------------------------- | ---------------------------------------------------- |
+| `postgres-integration`     | `HARNESS_TEST_POSTGRES_URL`      | Postgres 16 service container | none — provisioned inline                            |
+| `git-worktree-integration` | `RELAY_TEST_REAL_GIT=1`          | system `git`                  | none                                                 |
+| `pr-watcher-live`          | `GITHUB_TOKEN`, `HARNESS_LIVE=1` | github.com                    | `INTEGRATION_GITHUB_TOKEN` (fine-grained read token) |
 
 Jobs whose secret isn't set print a skip notice and exit 0 — the workflow
 stays green until an admin provisions them. Grep the workflow file for

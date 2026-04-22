@@ -28,13 +28,13 @@ export function getCrosslinkToolDefinitions(): object[] {
                 "testing",
                 "documentation",
                 "architecture",
-                "general"
-              ]
+                "general",
+              ],
             },
-            description: "Optional filter: only show sessions with these capabilities."
-          }
-        }
-      }
+            description: "Optional filter: only show sessions with these capabilities.",
+          },
+        },
+      },
     },
     {
       name: "crosslink_send",
@@ -47,19 +47,19 @@ export function getCrosslinkToolDefinitions(): object[] {
         properties: {
           toSessionId: {
             type: "string",
-            description: "The session ID to send the message to."
+            description: "The session ID to send the message to.",
           },
           content: {
             type: "string",
-            description: "The message content (question, information, etc.)."
+            description: "The message content (question, information, etc.).",
           },
           type: {
             type: "string",
             enum: ["question", "notification"],
-            description: "Message type. Defaults to 'question'."
-          }
-        }
-      }
+            description: "Message type. Defaults to 'question'.",
+          },
+        },
+      },
     },
     {
       name: "crosslink_poll",
@@ -68,9 +68,9 @@ export function getCrosslinkToolDefinitions(): object[] {
       inputSchema: {
         type: "object",
         additionalProperties: false,
-        properties: {}
-      }
-    }
+        properties: {},
+      },
+    },
   ];
 }
 
@@ -116,7 +116,7 @@ async function handleRegister(
 
   const updated = await state.store.updateSession(state.sessionId, {
     description,
-    ...(capabilities ? { capabilities } : {})
+    ...(capabilities ? { capabilities } : {}),
   });
 
   if (!updated) {
@@ -126,7 +126,7 @@ async function handleRegister(
   return {
     sessionId: updated.sessionId,
     description: updated.description,
-    capabilities: updated.capabilities
+    capabilities: updated.capabilities,
   };
 }
 
@@ -142,9 +142,7 @@ async function handleDiscover(
 
   if (filterCapabilities && filterCapabilities.length > 0) {
     sessions = sessions.filter((session) =>
-      filterCapabilities.some((cap) =>
-        session.capabilities.includes(cap as CrosslinkCapability)
-      )
+      filterCapabilities.some((cap) => session.capabilities.includes(cap as CrosslinkCapability))
     );
   }
 
@@ -157,8 +155,8 @@ async function handleDiscover(
       capabilities: session.capabilities,
       agentProvider: session.agentProvider,
       status: session.status,
-      isSelf: session.sessionId === state.sessionId
-    }))
+      isSelf: session.sessionId === state.sessionId,
+    })),
   };
 }
 
@@ -172,7 +170,7 @@ async function handleSend(
 
   const toSessionId = String(args.toSessionId ?? "");
   const content = String(args.content ?? "");
-  const type = args.type === "notification" ? "notification" as const : "question" as const;
+  const type = args.type === "notification" ? ("notification" as const) : ("question" as const);
 
   if (!toSessionId || !content) {
     return { error: "toSessionId and content are required." };
@@ -182,7 +180,7 @@ async function handleSend(
     fromSessionId: state.sessionId,
     toSessionId,
     content,
-    type
+    type,
   });
 
   notifyTmux(toSessionId, state.sessionId);
@@ -190,7 +188,7 @@ async function handleSend(
   return {
     messageId: message.messageId,
     toSessionId: message.toSessionId,
-    status: message.status
+    status: message.status,
   };
 }
 
@@ -209,8 +207,8 @@ async function handlePoll(state: CrosslinkToolState): Promise<unknown> {
       type: msg.type,
       content: msg.content,
       inReplyTo: msg.inReplyTo,
-      createdAt: msg.createdAt
-    }))
+      createdAt: msg.createdAt,
+    })),
   };
 }
 
@@ -241,7 +239,7 @@ async function handleReply(
     toSessionId: original.fromSessionId,
     content,
     type: "reply",
-    inReplyTo: messageId
+    inReplyTo: messageId,
   });
 
   await state.store.updateMessageStatus(state.sessionId, messageId, "replied");
@@ -251,7 +249,7 @@ async function handleReply(
   return {
     replyMessageId: reply.messageId,
     toSessionId: original.fromSessionId,
-    inReplyTo: messageId
+    inReplyTo: messageId,
   };
 }
 
@@ -273,10 +271,11 @@ function notifyTmux(targetSessionId: string, fromSessionId: string): void {
   }
 
   try {
-    execFileSync("tmux", [
-      "display-message",
-      `Crosslink: message from ${fromSessionId} → ${targetSessionId}`
-    ], { stdio: "ignore", timeout: 2000 });
+    execFileSync(
+      "tmux",
+      ["display-message", `Crosslink: message from ${fromSessionId} → ${targetSessionId}`],
+      { stdio: "ignore", timeout: 2000 }
+    );
   } catch {
     // tmux not available or failed
   }
@@ -288,7 +287,7 @@ const VALID_CAPABILITIES = new Set([
   "testing",
   "documentation",
   "architecture",
-  "general"
+  "general",
 ]);
 
 function isValidCapability(value: string): value is CrosslinkCapability {

@@ -33,11 +33,11 @@ global side-effect.
 
 ## Environment
 
-| `HARNESS_STORE` | Behavior |
-| --- | --- |
-| unset / `file` | `FileHarnessStore` at `getRelayDir()` (usually `~/.relay/`) |
-| `postgres` | Throws `NotImplementedError` until T-402 lands |
-| `sqlite` | Throws `NotImplementedError` (no tracking ticket yet) |
+| `HARNESS_STORE` | Behavior                                                    |
+| --------------- | ----------------------------------------------------------- |
+| unset / `file`  | `FileHarnessStore` at `getRelayDir()` (usually `~/.relay/`) |
+| `postgres`      | Throws `NotImplementedError` until T-402 lands              |
+| `sqlite`        | Throws `NotImplementedError` (no tracking ticket yet)       |
 
 ## Legacy stores (unmigrated)
 
@@ -45,13 +45,13 @@ These five modules still import `node:fs/promises` directly. They predate
 `HarnessStore` and migrate one ticket at a time so each PR stays
 reviewable:
 
-| File | Ticket |
-| --- | --- |
-| `src/channels/channel-store.ts` | T-101 (partial) |
-| `src/cli/workspace-registry.ts` | T-102 (partial) |
-| `src/cli/session-store.ts` | T-102 (partial) |
-| `src/execution/artifact-store.ts` | T-103 |
-| `src/crosslink/store.ts` | T-104 |
+| File                              | Ticket          |
+| --------------------------------- | --------------- |
+| `src/channels/channel-store.ts`   | T-101 (partial) |
+| `src/cli/workspace-registry.ts`   | T-102 (partial) |
+| `src/cli/session-store.ts`        | T-102 (partial) |
+| `src/execution/artifact-store.ts` | T-103           |
+| `src/crosslink/store.ts`          | T-104           |
 
 Until those tickets land, these files are exempt from a "no direct fs in
 storage code" lint. The canonical list lives as a comment in

@@ -39,7 +39,9 @@
     "test": "vitest run",
     "changeset": "changeset",
     "changeset-version": "changeset version && node scripts/sync-versions.mjs",
-    "changeset-publish": "pnpm build && changeset publish"
+    "changeset-publish": "pnpm build && changeset publish",
+    "format": "prettier --write \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx}\" \"gui/src/**/*.{ts,tsx}\" \"scripts/**/*.{ts,mts}\" \"*.md\" \"docs/**/*.md\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx}\" \"test/**/*.{ts,tsx}\" \"gui/src/**/*.{ts,tsx}\" \"scripts/**/*.{ts,mts}\" \"*.md\" \"docs/**/*.md\""
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.0",

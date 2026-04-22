@@ -10,7 +10,7 @@ export const CrosslinkCapabilitySchema = z.enum([
   "testing",
   "documentation",
   "architecture",
-  "general"
+  "general",
 ]);
 
 export type CrosslinkCapability = z.infer<typeof CrosslinkCapabilitySchema>;
@@ -34,7 +34,7 @@ export const CrosslinkSessionSchema = z.object({
   agentProvider: AgentProviderSchema,
   registeredAt: z.string(),
   lastHeartbeat: z.string(),
-  status: SessionStatusSchema
+  status: SessionStatusSchema,
 });
 
 export type CrosslinkSession = z.infer<typeof CrosslinkSessionSchema>;
@@ -43,12 +43,7 @@ export const MessageTypeSchema = z.enum(["question", "reply", "notification"]);
 
 export type MessageType = z.infer<typeof MessageTypeSchema>;
 
-export const MessageStatusSchema = z.enum([
-  "pending",
-  "delivered",
-  "replied",
-  "expired"
-]);
+export const MessageStatusSchema = z.enum(["pending", "delivered", "replied", "expired"]);
 
 export type MessageStatus = z.infer<typeof MessageStatusSchema>;
 
@@ -62,7 +57,7 @@ export const CrosslinkMessageSchema = z.object({
   status: MessageStatusSchema,
   createdAt: z.string(),
   deliveredAt: z.string().nullable(),
-  repliedAt: z.string().nullable()
+  repliedAt: z.string().nullable(),
 });
 
 export type CrosslinkMessage = z.infer<typeof CrosslinkMessageSchema>;

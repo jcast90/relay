@@ -12,13 +12,7 @@
  *   - prState -> "merged" | "closed": post entry + untrack.
  *   - Any other delta: informational entry only.
  */
-import type {
-  CiSummary,
-  EnrichedPR,
-  HarnessPR,
-  HarnessScm,
-  ReviewDecision,
-} from "./scm.js";
+import type { CiSummary, EnrichedPR, HarnessPR, HarnessScm, ReviewDecision } from "./scm.js";
 import type { ChannelStore } from "../channels/channel-store.js";
 
 export interface TrackedPr {
@@ -185,7 +179,7 @@ export class PrPoller {
   private async handleTransitions(
     entry: TrackedPr,
     previous: EnrichedPR,
-    current: EnrichedPR,
+    current: EnrichedPR
   ): Promise<void> {
     if (current.ci !== previous.ci) {
       await this.onCiChange(entry, previous.ci, current.ci);
@@ -227,7 +221,7 @@ export class PrPoller {
   private async onReviewChange(
     entry: TrackedPr,
     from: ReviewDecision,
-    to: ReviewDecision,
+    to: ReviewDecision
   ): Promise<void> {
     await this.post(entry.channelId, `Review ${from} -> ${to} on ${this.keyFor(entry)}`, {
       ticketId: entry.ticketId,
@@ -254,10 +248,7 @@ export class PrPoller {
     });
   }
 
-  private async onPrStateChange(
-    entry: TrackedPr,
-    to: "open" | "merged" | "closed",
-  ): Promise<void> {
+  private async onPrStateChange(entry: TrackedPr, to: "open" | "merged" | "closed"): Promise<void> {
     await this.post(entry.channelId, `PR ${this.keyFor(entry)} is now ${to}`, {
       ticketId: entry.ticketId,
       prUrl: entry.pr.url,
@@ -269,7 +260,7 @@ export class PrPoller {
   private async post(
     channelId: string,
     content: string,
-    metadata: Record<string, string>,
+    metadata: Record<string, string>
   ): Promise<void> {
     try {
       await this.channelStore.postEntry(channelId, {

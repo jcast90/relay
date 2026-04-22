@@ -3,7 +3,7 @@ import {
   NodeCommandInvoker,
   type CommandInvocation,
   type CommandInvoker,
-  type SpawnedProcess
+  type SpawnedProcess,
 } from "../agents/command-invoker.js";
 import type {
   AgentExecutor,
@@ -11,7 +11,7 @@ import type {
   ExecutionHandle,
   ExecutionResult,
   ExecutionStatus,
-  ExecutorStartOptions
+  ExecutorStartOptions,
 } from "./executor.js";
 import type { SandboxProvider, SandboxRef } from "./sandbox.js";
 
@@ -94,9 +94,7 @@ const POST_KILL_WATCHDOG_MS = 5_000;
 const MAX_HEARTBEAT_COUNT = 120;
 const SUMMARY_PREFIX_LENGTH = 120;
 
-function defaultResolveCommand(
-  ticket: TicketDefinition
-): ResolvedCommand | null {
+function defaultResolveCommand(ticket: TicketDefinition): ResolvedCommand | null {
   const first = ticket.allowedCommands[0];
   if (!first) return null;
   const parts = first.trim().split(/\s+/);
@@ -308,7 +306,7 @@ class LocalExecutionHandle implements ExecutionHandle {
       this.bus.emit({
         kind: "stdout",
         at: new Date().toISOString(),
-        data: chunk
+        data: chunk,
       });
     });
     this.deps.process.onStderr((chunk) => {
@@ -316,7 +314,7 @@ class LocalExecutionHandle implements ExecutionHandle {
       this.bus.emit({
         kind: "stderr",
         at: new Date().toISOString(),
-        data: chunk
+        data: chunk,
       });
     });
     this.deps.process.onError((error) => {
@@ -328,9 +326,7 @@ class LocalExecutionHandle implements ExecutionHandle {
       // those apart. Unknown codes fall through to 1.
       this.stderrBuf += error.message;
       const code = (error as NodeJS.ErrnoException).code;
-      const reason = code
-        ? `${error.message} (code ${code})`
-        : error.message;
+      const reason = code ? `${error.message} (code ${code})` : error.message;
       let exitCode = 1;
       if (code === "ENOENT") {
         exitCode = COMMAND_NOT_FOUND_EXIT_CODE;
@@ -352,8 +348,7 @@ class LocalExecutionHandle implements ExecutionHandle {
       // Unix convention: signal-terminated processes surface as 128+signo so
       // callers can distinguish them from natural exits. We preserve Node's
       // own `code` when present, otherwise fall back to signo arithmetic.
-      const exitCode =
-        code ?? (signal ? 128 + signalToNumber(signal) : 1);
+      const exitCode = code ?? (signal ? 128 + signalToNumber(signal) : 1);
       this.finalize(exitCode);
     });
   }
@@ -381,7 +376,7 @@ class LocalExecutionHandle implements ExecutionHandle {
         this.bus.emit({
           kind: "heartbeat",
           at: new Date().toISOString(),
-          data: "heartbeat-cap-reached"
+          data: "heartbeat-cap-reached",
         });
         if (this.heartbeatHandle) clearInterval(this.heartbeatHandle);
         this.heartbeatHandle = null;
@@ -451,7 +446,7 @@ class LocalExecutionHandle implements ExecutionHandle {
       exitCode,
       summary,
       stdout: this.stdoutBuf,
-      stderr: this.stderrBuf
+      stderr: this.stderrBuf,
     };
 
     if (this.timeoutHandle) clearTimeout(this.timeoutHandle);
@@ -463,7 +458,7 @@ class LocalExecutionHandle implements ExecutionHandle {
       {
         kind: "exit",
         at: new Date().toISOString(),
-        data: String(exitCode)
+        data: String(exitCode),
       },
       true
     );
@@ -487,12 +482,7 @@ class LocalExecutionHandle implements ExecutionHandle {
   }
 }
 
-function buildSummary(
-  stdout: string,
-  stderr: string,
-  exitCode: number,
-  reason?: string
-): string {
+function buildSummary(stdout: string, stderr: string, exitCode: number, reason?: string): string {
   if (reason) return reason;
   if (exitCode === 0 && stderr.trim() === "") {
     return stdout.slice(0, SUMMARY_PREFIX_LENGTH);
@@ -505,13 +495,20 @@ function buildSummary(
 // when Node hands us `signal` without `code`.
 function signalToNumber(signal: NodeJS.Signals): number {
   switch (signal) {
-    case "SIGHUP": return 1;
-    case "SIGINT": return 2;
-    case "SIGQUIT": return 3;
-    case "SIGABRT": return 6;
-    case "SIGKILL": return 9;
-    case "SIGTERM": return 15;
-    default: return 1;
+    case "SIGHUP":
+      return 1;
+    case "SIGINT":
+      return 2;
+    case "SIGQUIT":
+      return 3;
+    case "SIGABRT":
+      return 6;
+    case "SIGKILL":
+      return 9;
+    case "SIGTERM":
+      return 15;
+    default:
+      return 1;
   }
 }
 
@@ -560,10 +557,7 @@ export class LocalChildProcessExecutor implements AgentExecutor {
     }
   }
 
-  async start(
-    ticket: TicketDefinition,
-    opts: ExecutorStartOptions
-  ): Promise<ExecutionHandle> {
+  async start(ticket: TicketDefinition, opts: ExecutorStartOptions): Promise<ExecutionHandle> {
     // Create-per-start sandbox management. We create before validating opts
     // so a mis-typed "remote" ref from the provider path is still caught
     // symmetrically with the caller-supplied path below.
@@ -583,11 +577,10 @@ export class LocalChildProcessExecutor implements AgentExecutor {
           options?: { runId: string; ticketId: string }
         ): Promise<SandboxRef>;
       };
-      sandbox = await provider.create(
-        { root: opts.repoRoot },
-        "main",
-        { runId: opts.runId, ticketId: ticket.id }
-      );
+      sandbox = await provider.create({ root: opts.repoRoot }, "main", {
+        runId: opts.runId,
+        ticketId: ticket.id,
+      });
       ownsSandbox = true;
     } else {
       sandbox = opts.sandbox;
@@ -641,7 +634,7 @@ export class LocalChildProcessExecutor implements AgentExecutor {
       args: resolved.args,
       cwd: ownedSandbox.workdir.path,
       stdin: resolved.stdin,
-      env: { ...opts.env, ...resolved.env }
+      env: { ...opts.env, ...resolved.env },
     };
 
     // Narrowed above by the ctor-time check; `!` here is load-bearing so TS
@@ -669,7 +662,7 @@ export class LocalChildProcessExecutor implements AgentExecutor {
           // waits on the result of this cleanup.
           await providerForCleanup.destroy(ownedSandbox);
         }
-      }
+      },
     });
 
     return handle;

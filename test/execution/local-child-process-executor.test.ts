@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   NodeCommandInvoker,
   type CommandInvoker,
-  type SpawnedProcess
+  type SpawnedProcess,
 } from "../../src/agents/command-invoker.js";
 import type { TicketDefinition } from "../../src/domain/ticket.js";
 import type { ExecutionEvent } from "../../src/execution/executor.js";
@@ -17,7 +17,7 @@ import type {
   DestroyResult,
   RepoRef,
   SandboxProvider,
-  SandboxRef
+  SandboxRef,
 } from "../../src/execution/sandbox.js";
 
 function makeTicket(partial: Partial<TicketDefinition> = {}): TicketDefinition {
@@ -31,13 +31,11 @@ function makeTicket(partial: Partial<TicketDefinition> = {}): TicketDefinition {
     verificationCommands: partial.verificationCommands ?? [],
     docsToUpdate: partial.docsToUpdate ?? [],
     dependsOn: partial.dependsOn ?? [],
-    retryPolicy: partial.retryPolicy ?? { maxAgentAttempts: 1, maxTestFixLoops: 1 }
+    retryPolicy: partial.retryPolicy ?? { maxAgentAttempts: 1, maxTestFixLoops: 1 },
   };
 }
 
-async function collectStream(
-  stream: AsyncIterable<ExecutionEvent>
-): Promise<ExecutionEvent[]> {
+async function collectStream(stream: AsyncIterable<ExecutionEvent>): Promise<ExecutionEvent[]> {
   const events: ExecutionEvent[] = [];
   for await (const event of stream) {
     events.push(event);
@@ -52,9 +50,8 @@ async function collectStream(
 class FakeSpawned {
   private stdoutListener: ((chunk: string) => void) | null = null;
   private stderrListener: ((chunk: string) => void) | null = null;
-  private exitListener:
-    | ((code: number | null, signal: NodeJS.Signals | null) => void)
-    | null = null;
+  private exitListener: ((code: number | null, signal: NodeJS.Signals | null) => void) | null =
+    null;
   private errorListener: ((err: Error) => void) | null = null;
   public killed: NodeJS.Signals[] = [];
   private alive = true;
@@ -94,7 +91,7 @@ class FakeSpawned {
         const s = (signal ?? "SIGTERM") as NodeJS.Signals;
         this.killed.push(s);
         return this.alive;
-      }
+      },
     };
   }
 }
@@ -107,11 +104,7 @@ class FakeInvoker implements CommandInvoker {
     throw new Error("FakeInvoker.exec not supported");
   }
 
-  spawn(invocation: {
-    command: string;
-    args: string[];
-    cwd: string;
-  }): SpawnedProcess {
+  spawn(invocation: { command: string; args: string[]; cwd: string }): SpawnedProcess {
     this.lastInvocation = { ...invocation };
     const fake = new FakeSpawned();
     this.spawned.push(fake);
@@ -134,7 +127,7 @@ class CountingSandboxProvider implements SandboxProvider {
     this.lastRef = {
       id: `counting-${this.creates}`,
       workdir: { kind: "local", path: this.workdirPath },
-      meta: { base }
+      meta: { base },
     };
     return this.lastRef;
   }
@@ -153,7 +146,7 @@ describe("LocalChildProcessExecutor - real child processes", () => {
     try {
       const executor = new LocalChildProcessExecutor({
         invoker: new NodeCommandInvoker(),
-        resolveCommand: () => ({ command: "echo", args: ["hello"] })
+        resolveCommand: () => ({ command: "echo", args: ["hello"] }),
       });
       const provider = new NoopSandboxProvider();
       const sandbox = await provider.create({ root: tmp }, "main");
@@ -161,7 +154,7 @@ describe("LocalChildProcessExecutor - real child processes", () => {
       const handle = await executor.start(makeTicket(), {
         runId: "run-echo",
         repoRoot: tmp,
-        sandbox
+        sandbox,
       });
 
       const result = await handle.wait();
@@ -177,7 +170,7 @@ describe("LocalChildProcessExecutor - real child processes", () => {
     const tmp = await mkdtemp(join(tmpdir(), "local-exec-default-"));
     try {
       const executor = new LocalChildProcessExecutor({
-        invoker: new NodeCommandInvoker()
+        invoker: new NodeCommandInvoker(),
       });
       const provider = new NoopSandboxProvider();
       const sandbox = await provider.create({ root: tmp }, "main");
@@ -186,7 +179,7 @@ describe("LocalChildProcessExecutor - real child processes", () => {
       const handle = await executor.start(ticket, {
         runId: "run-default",
         repoRoot: tmp,
-        sandbox
+        sandbox,
       });
 
       const result = await handle.wait();
@@ -203,7 +196,7 @@ describe("LocalChildProcessExecutor - lifecycle and streaming", () => {
     const invoker = new FakeInvoker();
     const executor = new LocalChildProcessExecutor({
       invoker,
-      resolveCommand: () => ({ command: "noop", args: [] })
+      resolveCommand: () => ({ command: "noop", args: [] }),
     });
 
     const provider = new NoopSandboxProvider();
@@ -211,7 +204,7 @@ describe("LocalChildProcessExecutor - lifecycle and streaming", () => {
     const handle = await executor.start(makeTicket(), {
       runId: "run-stream",
       repoRoot: "/tmp/repo",
-      sandbox
+      sandbox,
     });
 
     // Drive the fake through its lifecycle on the next tick so stream() has
@@ -236,7 +229,7 @@ describe("LocalChildProcessExecutor - lifecycle and streaming", () => {
     const invoker = new FakeInvoker();
     const executor = new LocalChildProcessExecutor({
       invoker,
-      resolveCommand: () => ({ command: "noop", args: [] })
+      resolveCommand: () => ({ command: "noop", args: [] }),
     });
 
     const provider = new NoopSandboxProvider();
@@ -244,7 +237,7 @@ describe("LocalChildProcessExecutor - lifecycle and streaming", () => {
     const handle = await executor.start(makeTicket(), {
       runId: "run-stream-2",
       repoRoot: "/tmp/repo",
-      sandbox
+      sandbox,
     });
 
     invoker.spawned[0].emitExit(0, null);
@@ -258,7 +251,7 @@ describe("LocalChildProcessExecutor - lifecycle and streaming", () => {
     const invoker = new FakeInvoker();
     const executor = new LocalChildProcessExecutor({
       invoker,
-      resolveCommand: () => ({ command: "noop", args: [] })
+      resolveCommand: () => ({ command: "noop", args: [] }),
     });
 
     const provider = new NoopSandboxProvider();
@@ -266,7 +259,7 @@ describe("LocalChildProcessExecutor - lifecycle and streaming", () => {
     const handle = await executor.start(makeTicket(), {
       runId: "run-kill",
       repoRoot: "/tmp/repo",
-      sandbox
+      sandbox,
     });
 
     expect(handle.status).toBe("running");
@@ -287,7 +280,7 @@ describe("LocalChildProcessExecutor - lifecycle and streaming", () => {
     const invoker = new FakeInvoker();
     const executor = new LocalChildProcessExecutor({
       invoker,
-      resolveCommand: () => ({ command: "noop", args: [] })
+      resolveCommand: () => ({ command: "noop", args: [] }),
     });
 
     const provider = new NoopSandboxProvider();
@@ -295,7 +288,7 @@ describe("LocalChildProcessExecutor - lifecycle and streaming", () => {
     const handle = await executor.start(makeTicket(), {
       runId: "run-kill-after",
       repoRoot: "/tmp/repo",
-      sandbox
+      sandbox,
     });
 
     invoker.spawned[0].emitExit(0, null);
@@ -314,7 +307,7 @@ describe("LocalChildProcessExecutor - lifecycle and streaming", () => {
     const executor = new LocalChildProcessExecutor({
       invoker,
       resolveCommand: () => ({ command: "sleep", args: ["999"] }),
-      killGraceMs: 20
+      killGraceMs: 20,
     });
 
     const provider = new NoopSandboxProvider();
@@ -323,7 +316,7 @@ describe("LocalChildProcessExecutor - lifecycle and streaming", () => {
       runId: "run-timeout",
       repoRoot: "/tmp/repo",
       sandbox,
-      timeoutMs: 30
+      timeoutMs: 30,
     });
 
     // Don't emit exit for SIGTERM - simulate an uncooperative child that only
@@ -345,19 +338,19 @@ describe("LocalChildProcessExecutor - lifecycle and streaming", () => {
     const invoker = new FakeInvoker();
     const executor = new LocalChildProcessExecutor({
       invoker,
-      resolveCommand: () => ({ command: "noop", args: [] })
+      resolveCommand: () => ({ command: "noop", args: [] }),
     });
 
     const remoteSandbox: SandboxRef = {
       id: "remote-1",
-      workdir: { kind: "remote", uri: "pod://ns/name:/work" }
+      workdir: { kind: "remote", uri: "pod://ns/name:/work" },
     };
 
     await expect(
       executor.start(makeTicket(), {
         runId: "run-remote",
         repoRoot: "/tmp/repo",
-        sandbox: remoteSandbox
+        sandbox: remoteSandbox,
       })
     ).rejects.toThrow(/kind === "local"/);
   });
@@ -373,14 +366,14 @@ describe("LocalChildProcessExecutor - lifecycle and streaming", () => {
       executor.start(makeTicket({ allowedCommands: [] }), {
         runId: "run-nocmd",
         repoRoot: "/tmp/repo",
-        sandbox
+        sandbox,
       })
     ).rejects.toThrow(/No command resolved/);
   });
 
   it("rejects an invoker that does not implement spawn at construction time", () => {
     const bareInvoker: CommandInvoker = {
-      exec: async () => ({ stdout: "", stderr: "", exitCode: 0 })
+      exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
     };
     expect(() => new LocalChildProcessExecutor({ invoker: bareInvoker })).toThrow(
       /requires a CommandInvoker that implements spawn/
@@ -397,12 +390,12 @@ describe("LocalChildProcessExecutor - sandbox lifecycle via injected provider", 
       const executor = new LocalChildProcessExecutor({
         invoker,
         sandboxProvider: provider,
-        resolveCommand: () => ({ command: "noop", args: [] })
+        resolveCommand: () => ({ command: "noop", args: [] }),
       });
 
       const handle = await executor.start(makeTicket(), {
         runId: "run-sb-success",
-        repoRoot: tmp
+        repoRoot: tmp,
       });
 
       expect(provider.creates).toBe(1);
@@ -428,12 +421,12 @@ describe("LocalChildProcessExecutor - sandbox lifecycle via injected provider", 
       const executor = new LocalChildProcessExecutor({
         invoker,
         sandboxProvider: provider,
-        resolveCommand: () => ({ command: "noop", args: [] })
+        resolveCommand: () => ({ command: "noop", args: [] }),
       });
 
       const handle = await executor.start(makeTicket(), {
         runId: "run-sb-fail",
-        repoRoot: tmp
+        repoRoot: tmp,
       });
 
       invoker.spawned[0].emitStderr("oops");
@@ -454,13 +447,13 @@ describe("LocalChildProcessExecutor - sandbox lifecycle via injected provider", 
     const executor = new LocalChildProcessExecutor({
       invoker: new FakeInvoker(),
       sandboxProvider: provider,
-      resolveCommand: () => ({ command: "noop", args: [] })
+      resolveCommand: () => ({ command: "noop", args: [] }),
     });
 
     await expect(
       executor.start(makeTicket(), {
         runId: "run-sb-create-fail",
-        repoRoot: "/tmp/repo"
+        repoRoot: "/tmp/repo",
       })
     ).rejects.toThrow(/create failed/);
   });
@@ -471,24 +464,24 @@ describe("LocalChildProcessExecutor - sandbox lifecycle via injected provider", 
       async create(): Promise<SandboxRef> {
         return {
           id: "remote-from-provider",
-          workdir: { kind: "remote", uri: "pod://x" }
+          workdir: { kind: "remote", uri: "pod://x" },
         };
       },
       async destroy(): Promise<DestroyResult> {
         destroyed = true;
         return { kind: "missing" };
-      }
+      },
     };
     const executor = new LocalChildProcessExecutor({
       invoker: new FakeInvoker(),
       sandboxProvider: provider,
-      resolveCommand: () => ({ command: "noop", args: [] })
+      resolveCommand: () => ({ command: "noop", args: [] }),
     });
 
     await expect(
       executor.start(makeTicket(), {
         runId: "run-remote-prov",
-        repoRoot: "/tmp/repo"
+        repoRoot: "/tmp/repo",
       })
     ).rejects.toThrow(/kind === "local"/);
     expect(destroyed).toBe(true);
@@ -509,23 +502,23 @@ describe("LocalChildProcessExecutor - sandbox lifecycle via injected provider", 
         async create(): Promise<SandboxRef> {
           return {
             id: "sb-destroy-will-fail",
-            workdir: { kind: "remote", uri: "pod://y" }
+            workdir: { kind: "remote", uri: "pod://y" },
           };
         },
         async destroy(): Promise<DestroyResult> {
           throw new Error("destroy boom");
-        }
+        },
       };
       const executor = new LocalChildProcessExecutor({
         invoker: new FakeInvoker(),
         sandboxProvider: provider,
-        resolveCommand: () => ({ command: "noop", args: [] })
+        resolveCommand: () => ({ command: "noop", args: [] }),
       });
 
       await expect(
         executor.start(makeTicket({ id: "T-destroy-fail" }), {
           runId: "run-destroy-fail",
-          repoRoot: "/tmp/repo"
+          repoRoot: "/tmp/repo",
         })
       ).rejects.toThrow(/kind === "local"/);
 
@@ -549,7 +542,7 @@ describe("LocalChildProcessExecutor - stuck-child and failure-mode escape hatche
     const executor = new LocalChildProcessExecutor({
       invoker,
       resolveCommand: () => ({ command: "noop", args: [] }),
-      postKillWatchdogMs: 30
+      postKillWatchdogMs: 30,
     });
 
     const provider = new NoopSandboxProvider();
@@ -557,7 +550,7 @@ describe("LocalChildProcessExecutor - stuck-child and failure-mode escape hatche
     const handle = await executor.start(makeTicket(), {
       runId: "run-stuck",
       repoRoot: "/tmp/repo",
-      sandbox
+      sandbox,
     });
 
     const waitP = handle.wait();
@@ -575,12 +568,12 @@ describe("LocalChildProcessExecutor - stuck-child and failure-mode escape hatche
   it("maps ENOENT to exit 127 (command not found) and EACCES to exit 126 (permission denied)", async () => {
     for (const [code, expectedExit] of [
       ["ENOENT", 127],
-      ["EACCES", 126]
+      ["EACCES", 126],
     ] as const) {
       const invoker = new FakeInvoker();
       const executor = new LocalChildProcessExecutor({
         invoker,
-        resolveCommand: () => ({ command: "noop", args: [] })
+        resolveCommand: () => ({ command: "noop", args: [] }),
       });
 
       const provider = new NoopSandboxProvider();
@@ -588,7 +581,7 @@ describe("LocalChildProcessExecutor - stuck-child and failure-mode escape hatche
       const handle = await executor.start(makeTicket(), {
         runId: `run-err-${code}`,
         repoRoot: "/tmp/repo",
-        sandbox
+        sandbox,
       });
 
       const err: NodeJS.ErrnoException = new Error(`spawn ${code}`);
@@ -610,7 +603,7 @@ describe("LocalChildProcessExecutor - stuck-child and failure-mode escape hatche
       invoker,
       resolveCommand: () => ({ command: "noop", args: [] }),
       heartbeatIntervalMs: 5,
-      maxHeartbeatCount: 3
+      maxHeartbeatCount: 3,
     });
 
     const provider = new NoopSandboxProvider();
@@ -618,7 +611,7 @@ describe("LocalChildProcessExecutor - stuck-child and failure-mode escape hatche
     const handle = await executor.start(makeTicket(), {
       runId: "run-hb-cap",
       repoRoot: "/tmp/repo",
-      sandbox
+      sandbox,
     });
 
     // Collect events in the background. We'll emit exit after the cap trips

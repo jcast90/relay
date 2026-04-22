@@ -53,17 +53,17 @@ describe("FileHarnessStore", () => {
       await store.putDoc<Widget>("widgets", "beta-2", {
         id: "beta-2",
         label: "b2",
-        count: 0
+        count: 0,
       });
       await store.putDoc<Widget>("widgets", "alpha-1", {
         id: "alpha-1",
         label: "a1",
-        count: 0
+        count: 0,
       });
       await store.putDoc<Widget>("widgets", "alpha-2", {
         id: "alpha-2",
         label: "a2",
-        count: 0
+        count: 0,
       });
 
       const all = await store.listDocs<Widget>("widgets");
@@ -77,7 +77,7 @@ describe("FileHarnessStore", () => {
       await store.putDoc<Widget>("widgets", "w1", {
         id: "w1",
         label: "a",
-        count: 1
+        count: 1,
       });
       expect(await store.getDoc<Widget>("widgets", "w1")).not.toBeNull();
 
@@ -95,10 +95,7 @@ describe("FileHarnessStore", () => {
       await store.appendLog("events", "run-1", { id: "b", v: 2 });
       await store.appendLog("events", "run-1", { id: "c", v: 3 });
 
-      const entries = await store.readLog<{ id: string; v: number }>(
-        "events",
-        "run-1"
-      );
+      const entries = await store.readLog<{ id: string; v: number }>("events", "run-1");
       expect(entries.map((e) => e.id)).toEqual(["a", "b", "c"]);
     });
 
@@ -106,11 +103,7 @@ describe("FileHarnessStore", () => {
       for (const n of [1, 2, 3, 4, 5]) {
         await store.appendLog("events", "run-2", { id: `e${n}`, v: n });
       }
-      const tail = await store.readLog<{ id: string; v: number }>(
-        "events",
-        "run-2",
-        { limit: 2 }
-      );
+      const tail = await store.readLog<{ id: string; v: number }>("events", "run-2", { limit: 2 });
       expect(tail.map((e) => e.id)).toEqual(["e4", "e5"]);
     });
 
@@ -118,11 +111,9 @@ describe("FileHarnessStore", () => {
       for (const n of [1, 2, 3, 4]) {
         await store.appendLog("events", "run-3", { id: `e${n}`, v: n });
       }
-      const after = await store.readLog<{ id: string; v: number }>(
-        "events",
-        "run-3",
-        { after: "e2" }
-      );
+      const after = await store.readLog<{ id: string; v: number }>("events", "run-3", {
+        after: "e2",
+      });
       expect(after.map((e) => e.id)).toEqual(["e3", "e4"]);
     });
 
@@ -138,14 +129,14 @@ describe("FileHarnessStore", () => {
       for (let i = 0; i < 256; i++) bytes[i] = i;
 
       const ref = await store.putBlob("artifacts", "bin-1", bytes, {
-        contentType: "application/octet-stream"
+        contentType: "application/octet-stream",
       });
 
       expect(ref).toMatchObject({
         ns: "artifacts",
         id: "bin-1",
         size: 256,
-        contentType: "application/octet-stream"
+        contentType: "application/octet-stream",
       });
 
       const loaded = await store.getBlob(ref);
@@ -162,7 +153,7 @@ describe("FileHarnessStore", () => {
       const manual: BlobRef = {
         ns: "artifacts",
         id: "txt-1",
-        size: payload.byteLength
+        size: payload.byteLength,
       };
       const loaded = await store.getBlob(manual);
       expect(new TextDecoder().decode(loaded)).toBe("hello world");
@@ -184,7 +175,7 @@ describe("FileHarnessStore", () => {
       await store.putDoc<Widget>("widgets", "ctr", {
         id: "ctr",
         label: "counter",
-        count: 0
+        count: 0,
       });
 
       const ops: Promise<Widget>[] = [];
@@ -193,7 +184,7 @@ describe("FileHarnessStore", () => {
           store.mutate<Widget>("widgets", "ctr", (prev) => ({
             id: "ctr",
             label: "counter",
-            count: (prev?.count ?? 0) + 1
+            count: (prev?.count ?? 0) + 1,
           }))
         );
       }
@@ -218,16 +209,12 @@ describe("FileHarnessStore", () => {
       await store.putDoc<Widget>("widgets", "watched", {
         id: "watched",
         label: "hi",
-        count: 1
+        count: 1,
       });
 
-      const result = await Promise.race<
-        IteratorResult<ChangeEvent> | "timeout"
-      >([
+      const result = await Promise.race<IteratorResult<ChangeEvent> | "timeout">([
         nextEvent,
-        new Promise<"timeout">((resolve) =>
-          setTimeout(() => resolve("timeout"), 2000)
-        )
+        new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 2000)),
       ]);
 
       expect(result).not.toBe("timeout");
@@ -239,7 +226,7 @@ describe("FileHarnessStore", () => {
       expect(events[0]).toMatchObject({
         ns: "widgets",
         id: "watched",
-        kind: "put"
+        kind: "put",
       });
 
       // Return closes the async generator; the polling loop should exit.
@@ -261,12 +248,10 @@ describe("FileHarnessStore", () => {
       await store.putDoc<Widget>("watch-errs", "w1", {
         id: "w1",
         label: "seed",
-        count: 0
+        count: 0,
       });
 
-      const iterator = store
-        .watch("watch-errs", "w1")
-        [Symbol.asyncIterator]();
+      const iterator = store.watch("watch-errs", "w1")[Symbol.asyncIterator]();
       const nextEvent = iterator.next();
 
       // Deny read on the namespace dir so stat() throws EACCES on the next
@@ -279,9 +264,7 @@ describe("FileHarnessStore", () => {
         await expect(
           Promise.race<IteratorResult<ChangeEvent> | "timeout">([
             nextEvent,
-            new Promise<"timeout">((resolve) =>
-              setTimeout(() => resolve("timeout"), 2000)
-            )
+            new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 2000)),
           ])
         ).rejects.toThrow();
       } finally {
@@ -300,7 +283,7 @@ describe("FileHarnessStore", () => {
           store.putDoc<Widget>("widgets", "concurrent", {
             id: "concurrent",
             label: `write-${i}`,
-            count: i
+            count: i,
           })
         );
       }
@@ -325,31 +308,19 @@ describe("FileHarnessStore", () => {
     const unsafeId = "../x";
 
     it("getDoc rejects unsafe ns and id", async () => {
-      await expect(store.getDoc("valid", unsafeId)).rejects.toThrow(
-        /Unsafe path segment/
-      );
-      await expect(store.getDoc(unsafeNs, "valid")).rejects.toThrow(
-        /Unsafe path segment/
-      );
+      await expect(store.getDoc("valid", unsafeId)).rejects.toThrow(/Unsafe path segment/);
+      await expect(store.getDoc(unsafeNs, "valid")).rejects.toThrow(/Unsafe path segment/);
     });
 
     it("putDoc rejects unsafe ns and id", async () => {
       const widget: Widget = { id: "x", label: "a", count: 0 };
-      await expect(store.putDoc("valid", unsafeId, widget)).rejects.toThrow(
-        /Unsafe path segment/
-      );
-      await expect(store.putDoc(unsafeNs, "valid", widget)).rejects.toThrow(
-        /Unsafe path segment/
-      );
+      await expect(store.putDoc("valid", unsafeId, widget)).rejects.toThrow(/Unsafe path segment/);
+      await expect(store.putDoc(unsafeNs, "valid", widget)).rejects.toThrow(/Unsafe path segment/);
     });
 
     it("deleteDoc rejects unsafe ns and id", async () => {
-      await expect(store.deleteDoc("valid", unsafeId)).rejects.toThrow(
-        /Unsafe path segment/
-      );
-      await expect(store.deleteDoc(unsafeNs, "valid")).rejects.toThrow(
-        /Unsafe path segment/
-      );
+      await expect(store.deleteDoc("valid", unsafeId)).rejects.toThrow(/Unsafe path segment/);
+      await expect(store.deleteDoc(unsafeNs, "valid")).rejects.toThrow(/Unsafe path segment/);
     });
 
     it("appendLog rejects unsafe ns and id", async () => {
@@ -363,12 +334,8 @@ describe("FileHarnessStore", () => {
 
     it("putBlob rejects unsafe ns and id", async () => {
       const bytes = new Uint8Array([0, 1, 2]);
-      await expect(store.putBlob("valid", unsafeId, bytes)).rejects.toThrow(
-        /Unsafe path segment/
-      );
-      await expect(store.putBlob(unsafeNs, "valid", bytes)).rejects.toThrow(
-        /Unsafe path segment/
-      );
+      await expect(store.putBlob("valid", unsafeId, bytes)).rejects.toThrow(/Unsafe path segment/);
+      await expect(store.putBlob(unsafeNs, "valid", bytes)).rejects.toThrow(/Unsafe path segment/);
     });
   });
 
@@ -380,11 +347,9 @@ describe("FileHarnessStore", () => {
 
       // Contract: unknown cursor → []. Returning the full log would cause
       // duplicate delivery on resume.
-      const out = await store.readLog<{ id: string; v: number }>(
-        "events",
-        "run-x",
-        { after: "does-not-exist" }
-      );
+      const out = await store.readLog<{ id: string; v: number }>("events", "run-x", {
+        after: "does-not-exist",
+      });
       expect(out).toEqual([]);
     });
   });

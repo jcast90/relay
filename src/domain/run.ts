@@ -1,8 +1,4 @@
-import type {
-  AgentProvider,
-  FailureCategory,
-  WorkKind
-} from "./agent.js";
+import type { AgentProvider, FailureCategory, WorkKind } from "./agent.js";
 import type { ClassificationResult } from "./classification.js";
 import type { PhasePlan } from "./phase-plan.js";
 import type { TicketLedgerEntry, TicketPlan } from "./ticket.js";
@@ -95,9 +91,7 @@ export interface FailureClassificationArtifactRecord {
   nextAction: string;
 }
 
-export type ArtifactRecord =
-  | CommandResultArtifactRecord
-  | FailureClassificationArtifactRecord;
+export type ArtifactRecord = CommandResultArtifactRecord | FailureClassificationArtifactRecord;
 
 export type VerificationStatus =
   | "pending"

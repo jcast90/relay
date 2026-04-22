@@ -8,7 +8,7 @@ export const ComplexityTierSchema = z.enum([
   "feature_small",
   "feature_large",
   "architectural",
-  "multi_repo"
+  "multi_repo",
 ]);
 
 export type ComplexityTier = z.infer<typeof ComplexityTierSchema>;
@@ -30,7 +30,7 @@ export const ClassificationResultSchema = z.object({
    * was an issue URL or bare Linear identifier. Purely advisory — callers may
    * use it to seed worktree names for downstream tickets.
    */
-  suggestedBranch: z.string().optional()
+  suggestedBranch: z.string().optional(),
 });
 
 export type ClassificationResult = z.infer<typeof ClassificationResultSchema>;
@@ -48,36 +48,29 @@ export const classificationResultJsonSchema = {
     "suggestedSpecialties",
     "estimatedTicketCount",
     "needsDesignDoc",
-    "needsUserApproval"
+    "needsUserApproval",
   ],
   properties: {
     tier: {
       type: "string",
-      enum: [
-        "trivial",
-        "bugfix",
-        "feature_small",
-        "feature_large",
-        "architectural",
-        "multi_repo"
-      ]
+      enum: ["trivial", "bugfix", "feature_small", "feature_large", "architectural", "multi_repo"],
     },
     rationale: { type: "string" },
     suggestedSpecialties: {
       type: "array",
       items: {
         type: "string",
-        enum: ["general", "ui", "business_logic", "api_crud", "devops", "testing"]
-      }
+        enum: ["general", "ui", "business_logic", "api_crud", "devops", "testing"],
+      },
     },
     estimatedTicketCount: {
       type: "integer",
       minimum: 1,
-      maximum: 50
+      maximum: 50,
     },
     needsDesignDoc: { type: "boolean" },
-    needsUserApproval: { type: "boolean" }
-  }
+    needsUserApproval: { type: "boolean" },
+  },
 } as const;
 
 export function tierNeedsApproval(tier: ComplexityTier): boolean {

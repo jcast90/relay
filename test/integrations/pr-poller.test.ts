@@ -9,7 +9,7 @@ import {
   PrPoller,
   type FollowUpDispatcher,
   type FollowUpRequest,
-  type TrackedPr
+  type TrackedPr,
 } from "../../src/integrations/pr-poller.js";
 import type { EnrichedPR, HarnessScm } from "../../src/integrations/scm.js";
 
@@ -20,9 +20,9 @@ function makeTracked(channelId: string): TrackedPr {
     pr: {
       number: 42,
       url: "https://github.com/acme/widgets/pull/42",
-      branch: "feat/42"
+      branch: "feat/42",
     },
-    repo: { owner: "acme", name: "widgets" }
+    repo: { owner: "acme", name: "widgets" },
   };
 }
 
@@ -30,7 +30,7 @@ function seed(state: Partial<EnrichedPR> = {}): EnrichedPR {
   return {
     ci: state.ci ?? "none",
     review: state.review ?? "pending",
-    prState: state.prState ?? "open"
+    prState: state.prState ?? "open",
   };
 }
 
@@ -49,7 +49,7 @@ function scriptedScm(series: Array<Map<string, EnrichedPR>>): HarnessScm {
       const next = series[Math.min(i, series.length - 1)];
       i += 1;
       return next;
-    })
+    }),
   } as unknown as HarnessScm;
 }
 
@@ -63,9 +63,7 @@ describe("PrPoller", () => {
         async () => "followup-id"
       );
       const scheduler: FollowUpDispatcher = { enqueueFollowUp };
-      const scm = scriptedScm([
-        new Map([["acme/widgets#42", seed({ ci: "passing" })]])
-      ]);
+      const scm = scriptedScm([new Map([["acme/widgets#42", seed({ ci: "passing" })]])]);
       const snapshots: Array<ReadonlyArray<unknown>> = [];
       const poller = new PrPoller({
         scm,
@@ -73,7 +71,7 @@ describe("PrPoller", () => {
         scheduler,
         onSnapshot: (rows) => {
           snapshots.push([...rows]);
-        }
+        },
       });
       poller.track(makeTracked(channel.channelId));
       expect(snapshots.length).toBeGreaterThanOrEqual(1);
@@ -106,7 +104,7 @@ describe("PrPoller", () => {
       const scheduler: FollowUpDispatcher = { enqueueFollowUp };
 
       const scm = scriptedScm([
-        new Map([["acme/widgets#42", seed({ ci: "none", review: "pending", prState: "open" })]])
+        new Map([["acme/widgets#42", seed({ ci: "none", review: "pending", prState: "open" })]]),
       ]);
       const poller = new PrPoller({ scm, channelStore: store, scheduler });
       poller.track(makeTracked(channel.channelId));
@@ -135,7 +133,7 @@ describe("PrPoller", () => {
 
       const scm = scriptedScm([
         new Map([["acme/widgets#42", seed({ ci: "none" })]]),
-        new Map([["acme/widgets#42", seed({ ci: "failing" })]])
+        new Map([["acme/widgets#42", seed({ ci: "failing" })]]),
       ]);
       const poller = new PrPoller({ scm, channelStore: store, scheduler });
       poller.track(makeTracked(channel.channelId));
@@ -179,7 +177,7 @@ describe("PrPoller", () => {
 
       const scm = scriptedScm([
         new Map([["acme/widgets#42", seed({ review: "pending" })]]),
-        new Map([["acme/widgets#42", seed({ review: "changes_requested" })]])
+        new Map([["acme/widgets#42", seed({ review: "changes_requested" })]]),
       ]);
       const poller = new PrPoller({ scm, channelStore: store, scheduler });
       poller.track(makeTracked(channel.channelId));
@@ -228,7 +226,7 @@ describe("PrPoller", () => {
         getCiSummary: vi.fn(),
         getReviewDecision: vi.fn(),
         getPendingComments: vi.fn(),
-        enrichBatch
+        enrichBatch,
       } as unknown as HarnessScm;
 
       const poller = new PrPoller({ scm, channelStore: store, scheduler });
@@ -268,7 +266,7 @@ describe("PrPoller", () => {
         getCiSummary: vi.fn(),
         getReviewDecision: vi.fn(),
         getPendingComments: vi.fn(),
-        enrichBatch
+        enrichBatch,
       } as unknown as HarnessScm;
 
       const intervalMs = 1_000;
@@ -310,7 +308,7 @@ describe("PrPoller", () => {
         new Map([["acme/widgets#42", seed({ prState: "open" })]]),
         new Map([["acme/widgets#42", seed({ prState: "merged" })]]),
         // third tick returns nothing new — if still tracked, poller would query
-        new Map([["acme/widgets#42", seed({ prState: "merged" })]])
+        new Map([["acme/widgets#42", seed({ prState: "merged" })]]),
       ]);
       const poller = new PrPoller({ scm, channelStore: store, scheduler });
       poller.track(makeTracked(channel.channelId));

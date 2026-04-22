@@ -9,7 +9,7 @@ import { LocalArtifactStore } from "../src/execution/artifact-store.js";
 import { FileHarnessStore } from "../src/storage/file-store.js";
 import {
   selectVerificationCommands,
-  VerificationRunner
+  VerificationRunner,
 } from "../src/execution/verification-runner.js";
 
 describe("verification command selection", () => {
@@ -22,7 +22,7 @@ describe("verification command selection", () => {
     ).toEqual({
       commandsToRun: ["pnpm test", "pnpm typecheck"],
       rejected: ["rm -rf /tmp/nope"],
-      overridden: false
+      overridden: false,
     });
   });
 
@@ -30,7 +30,7 @@ describe("verification command selection", () => {
     expect(selectVerificationCommands([], ["pnpm typecheck"])).toEqual({
       commandsToRun: ["pnpm typecheck"],
       rejected: [],
-      overridden: false
+      overridden: false,
     });
   });
 });
@@ -40,17 +40,14 @@ describe("verification runner", () => {
     const artifactRoot = await mkdtemp(join(tmpdir(), "relay-artifacts-"));
     const storeRoot = await mkdtemp(join(tmpdir(), "relay-artifacts-hs-"));
     const artifactStore = new LocalArtifactStore(artifactRoot, new FileHarnessStore(storeRoot));
-    const runner = new VerificationRunner(
-      new FakeCommandInvoker(),
-      artifactStore
-    );
+    const runner = new VerificationRunner(new FakeCommandInvoker(), artifactStore);
 
     try {
       const execution = await runner.executeCommand({
         runId: "run-1",
         phaseId: "phase-1",
         repoRoot: process.cwd(),
-        command: "pnpm typecheck"
+        command: "pnpm typecheck",
       });
 
       const file = await artifactStore.readCommandResult(execution.artifact.path);
@@ -63,11 +60,11 @@ describe("verification runner", () => {
     } finally {
       await rm(artifactRoot, {
         recursive: true,
-        force: true
+        force: true,
       });
       await rm(storeRoot, {
         recursive: true,
-        force: true
+        force: true,
       });
     }
   });
@@ -78,7 +75,7 @@ class FakeCommandInvoker implements CommandInvoker {
     return {
       stdout: `simulated ${invocation.args.join(" ")}`,
       stderr: "",
-      exitCode: 0
+      exitCode: 0,
     };
   }
 }

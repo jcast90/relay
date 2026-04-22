@@ -59,15 +59,13 @@ async function linearGraphql<T>(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: deps.apiKey
+      Authorization: deps.apiKey,
     },
-    body: JSON.stringify({ query, variables })
+    body: JSON.stringify({ query, variables }),
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(
-      `Linear API HTTP ${res.status}: ${body.slice(0, 200)}`
-    );
+    throw new Error(`Linear API HTTP ${res.status}: ${body.slice(0, 200)}`);
   }
   const payload = (await res.json()) as {
     data?: T;
@@ -157,10 +155,7 @@ export function mirrorTicketId(issueId: string): string {
   return `${MIRROR_TICKET_PREFIX}${issueId}`;
 }
 
-export function toMirrorTicket(
-  issue: LinearIssueNode,
-  now: string
-): TicketLedgerEntry {
+export function toMirrorTicket(issue: LinearIssueNode, now: string): TicketLedgerEntry {
   return {
     ticketId: mirrorTicketId(issue.id),
     title: `${issue.identifier} ${issue.title}`,
@@ -182,7 +177,7 @@ export function toMirrorTicket(
     linearIssueId: issue.id,
     linearIdentifier: issue.identifier,
     linearState: issue.state.name,
-    linearUrl: issue.url
+    linearUrl: issue.url,
   };
 }
 
@@ -202,6 +197,6 @@ export async function mirrorLinearProject(
   const merged = await deps.store.upsertChannelTickets(channelId, mirrors);
   return {
     fetched: issues.length,
-    mirrored: merged.filter((t) => t.source === "linear")
+    mirrored: merged.filter((t) => t.source === "linear"),
   };
 }

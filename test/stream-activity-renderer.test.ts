@@ -1,8 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  createStreamActivityRenderer,
-  isQuietMode
-} from "../src/cli/stream-activity-renderer.js";
+import { createStreamActivityRenderer, isQuietMode } from "../src/cli/stream-activity-renderer.js";
 
 describe("isQuietMode", () => {
   const originalQuiet = process.env.RELAY_QUIET;
@@ -41,8 +38,8 @@ describe("createStreamActivityRenderer", () => {
     JSON.stringify({
       type: "assistant",
       message: {
-        content: [{ type: "tool_use", ...toolUse }]
-      }
+        content: [{ type: "tool_use", ...toolUse }],
+      },
     });
 
   it("renders tool_use events through the write sink", () => {
@@ -66,7 +63,7 @@ describe("createStreamActivityRenderer", () => {
     r.onLine(
       JSON.stringify({
         type: "assistant",
-        message: { content: [{ type: "text", text: "thinking" }] }
+        message: { content: [{ type: "text", text: "thinking" }] },
       })
     );
     r.flush();

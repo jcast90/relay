@@ -93,7 +93,7 @@ export async function startHttpMcpServer(
           res.end(
             JSON.stringify({
               error: "payload_too_large",
-              error_detail: `body exceeded ${error.limit} byte limit (received ${error.byteCount} bytes)`
+              error_detail: `body exceeded ${error.limit} byte limit (received ${error.byteCount} bytes)`,
             })
           );
         } else {
@@ -160,7 +160,8 @@ export async function startHttpMcpServer(
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
       // Force-close any idle keep-alive sockets so close() resolves promptly.
-      const maybeCloseAll = (server as Server & { closeAllConnections?: () => void }).closeAllConnections;
+      const maybeCloseAll = (server as Server & { closeAllConnections?: () => void })
+        .closeAllConnections;
       if (typeof maybeCloseAll === "function") {
         maybeCloseAll.call(server);
       }
@@ -171,7 +172,7 @@ export async function startHttpMcpServer(
     stop,
     url: `http://${host}:${boundPort}/sse`,
     port: boundPort,
-    host
+    host,
   };
 }
 
@@ -230,7 +231,7 @@ async function handleSse(
     response: res,
     handler,
     cleanup: sessionCleanup,
-    inflight: new Set()
+    inflight: new Set(),
   };
   sessions.set(sessionId, session);
 
@@ -299,8 +300,8 @@ async function handleMessagePost(
           id: message.id ?? null,
           error: {
             code: -32603,
-            message: error instanceof Error ? error.message : "Internal error"
-          }
+            message: error instanceof Error ? error.message : "Internal error",
+          },
         },
         sessionId
       );

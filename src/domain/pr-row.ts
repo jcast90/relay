@@ -24,14 +24,14 @@ export const TrackedPrRowSchema = z.object({
   ci: z.string().nullable(),
   review: z.string().nullable(),
   prState: z.string().nullable(),
-  updatedAt: z.string()
+  updatedAt: z.string(),
 });
 
 export type TrackedPrRow = z.infer<typeof TrackedPrRowSchema>;
 
 export const TrackedPrFileSchema = z.object({
   updatedAt: z.string(),
-  rows: z.array(TrackedPrRowSchema)
+  rows: z.array(TrackedPrRowSchema),
 });
 
 export type TrackedPrFile = z.infer<typeof TrackedPrFileSchema>;

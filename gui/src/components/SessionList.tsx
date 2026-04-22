@@ -9,12 +9,7 @@ type Props = {
   refreshTick: number;
 };
 
-export function SessionList({
-  channelId,
-  selectedSessionId,
-  onSelect,
-  refreshTick,
-}: Props) {
+export function SessionList({ channelId, selectedSessionId, onSelect, refreshTick }: Props) {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -56,9 +51,7 @@ export function SessionList({
       {sessions.map((s) => (
         <div
           key={s.sessionId}
-          className={`session-row ${
-            s.sessionId === selectedSessionId ? "active" : ""
-          }`}
+          className={`session-row ${s.sessionId === selectedSessionId ? "active" : ""}`}
           onClick={() => onSelect(s.sessionId)}
         >
           <div className="session-title">{s.title}</div>
