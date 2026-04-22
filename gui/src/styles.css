@@ -649,6 +649,27 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-sm);
 }
+.composer-warn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  font-size: var(--font-size-xs);
+  color: var(--color-accent-amber);
+  background: rgba(232, 154, 43, 0.10);
+  border: 1px solid rgba(232, 154, 43, 0.25);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
+}
+.composer-warn button {
+  font-size: var(--font-size-xs);
+  padding: 2px var(--space-3);
+  background: var(--color-accent-amber);
+  color: #fff;
+  border-color: var(--color-accent-amber);
+  border-radius: var(--radius-sm);
+}
+.composer-warn button:hover:not(:disabled) { filter: brightness(0.95); }
 .mention-popover {
   position: absolute;
   bottom: calc(100% + var(--space-2));
