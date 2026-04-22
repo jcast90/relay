@@ -194,9 +194,7 @@ export function CenterPane({
         </>
       )}
       {!isDm && tab === "board" && <BoardView tickets={tickets} settings={settings} />}
-      {!isDm && tab === "decisions" && (
-        <DecisionsView decisions={decisions} channel={channel} />
-      )}
+      {!isDm && tab === "decisions" && <DecisionsView decisions={decisions} channel={channel} />}
       {settingsOpen && !isDm && (
         <ChannelSettingsDrawer
           channel={channel}
@@ -242,8 +240,8 @@ function DmBanner({
         }}
       >
         <span style={{ flex: 1 }}>
-          <strong style={{ color: "var(--color-text-primary)" }}>Kickoff surface.</strong>{" "}
-          You're 1:1 with this agent. Promote to a full channel when the work is real — try{" "}
+          <strong style={{ color: "var(--color-text-primary)" }}>Kickoff surface.</strong> You're
+          1:1 with this agent. Promote to a full channel when the work is real — try{" "}
           <code
             style={{
               padding: "1px 6px",

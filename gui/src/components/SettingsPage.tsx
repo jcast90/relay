@@ -216,10 +216,7 @@ function AppearanceSection() {
         <p className="help">How agent avatars render across message feeds and the header stack.</p>
         <div className="settings-radio-group">
           {avatarStyles.map((s) => (
-            <label
-              key={s.value}
-              className={appearance.avatarStyle === s.value ? "selected" : ""}
-            >
+            <label key={s.value} className={appearance.avatarStyle === s.value ? "selected" : ""}>
               <input
                 type="radio"
                 name="avatar-style"
@@ -241,10 +238,7 @@ function AppearanceSection() {
         <p className="help">Spacing scale for rails, messages, and drawers.</p>
         <div className="settings-radio-group">
           {densities.map((d) => (
-            <label
-              key={d.value}
-              className={appearance.density === d.value ? "selected" : ""}
-            >
+            <label key={d.value} className={appearance.density === d.value ? "selected" : ""}>
               <input
                 type="radio"
                 name="density"

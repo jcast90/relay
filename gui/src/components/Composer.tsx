@@ -50,7 +50,10 @@ export function Composer({
   // row in the mention popover. Silently empty on failure; worst case we
   // just don't offer the "Attach @foo?" affordance.
   useEffect(() => {
-    api.listWorkspaces().then(setWorkspaces).catch(() => setWorkspaces([]));
+    api
+      .listWorkspaces()
+      .then(setWorkspaces)
+      .catch(() => setWorkspaces([]));
   }, []);
 
   const aliases = channel.repoAssignments.map((r) => r.alias);
@@ -73,19 +76,18 @@ export function Composer({
   // registered workspace that's NOT currently attached to this channel,
   // surface an inline "Attach @foo" action so they don't have to open the
   // settings drawer. Empty query → no suggestion.
-  const attachedWorkspaceIds = new Set(
-    channel.repoAssignments.map((r) => r.workspaceId)
-  );
-  const attachCandidate = mention && mention.query
-    ? workspaces.find((w) => {
-        if (attachedWorkspaceIds.has(w.workspaceId)) return false;
-        const alias = basename(w.repoPath)
-          .replace(/[^a-z0-9-]/gi, "")
-          .toLowerCase()
-          .slice(0, 12);
-        return alias.startsWith(mention.query.toLowerCase());
-      })
-    : undefined;
+  const attachedWorkspaceIds = new Set(channel.repoAssignments.map((r) => r.workspaceId));
+  const attachCandidate =
+    mention && mention.query
+      ? workspaces.find((w) => {
+          if (attachedWorkspaceIds.has(w.workspaceId)) return false;
+          const alias = basename(w.repoPath)
+            .replace(/[^a-z0-9-]/gi, "")
+            .toLowerCase()
+            .slice(0, 12);
+          return alias.startsWith(mention.query.toLowerCase());
+        })
+      : undefined;
   const attachAlias = attachCandidate
     ? basename(attachCandidate.repoPath)
         .replace(/[^a-z0-9-]/gi, "")
@@ -252,8 +254,7 @@ export function Composer({
   };
 
   const disabled = busy || streaming;
-  const showMentions =
-    !!mention && (filteredAliases.length > 0 || !!attachCandidate);
+  const showMentions = !!mention && (filteredAliases.length > 0 || !!attachCandidate);
 
   return (
     <div className="composer">
@@ -273,9 +274,7 @@ export function Composer({
             index={mention!.index}
             onPick={applyMention}
             attachCandidate={
-              attachCandidate
-                ? { alias: attachAlias, path: attachCandidate.repoPath }
-                : undefined
+              attachCandidate ? { alias: attachAlias, path: attachCandidate.repoPath } : undefined
             }
             attaching={attaching === attachCandidate?.workspaceId}
             onAttach={attachNow}
