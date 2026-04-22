@@ -306,6 +306,23 @@ describe("RepoAdminSession", () => {
     }
   });
 
+  it("takeNextPendingTicket dequeues FIFO and rejects on stopped sessions (AL-14)", async () => {
+    const { session, spawner } = buildSession();
+    await session.start();
+
+    await session.dispatchTicket(buildLedgerEntry("t-1", "frontend"));
+    await session.dispatchTicket(buildLedgerEntry("t-2", "frontend"));
+
+    expect(session.takeNextPendingTicket()?.ticketId).toBe("t-1");
+    expect(session.takeNextPendingTicket()?.ticketId).toBe("t-2");
+    expect(session.takeNextPendingTicket()).toBeNull();
+
+    const stopP = session.stop("test");
+    spawner.last().emitExit(0, "SIGTERM");
+    await stopP;
+    expect(() => session.takeNextPendingTicket()).toThrow(/after stop/);
+  });
+
   it("dispatchTicket is idempotent on duplicate ticketIds (AL-13)", async () => {
     const { session } = buildSession();
     await session.start();

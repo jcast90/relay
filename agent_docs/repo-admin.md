@@ -118,34 +118,64 @@ enforcement.
 
 ## Activation status
 
-The pool is **built but not yet wired into production runs**. AL-13 will
-define the admin handshake protocol + flip this flag to on.
+The autonomous-loop driver (`src/orchestrator/autonomous-loop.ts`) gates
+pool + worker-drain behaviour behind **two** env flags. Both default to
+**off** so production `rly run --autonomous` invocations keep the pre-
+AL-12 behaviour (clean `killed / al-13-pending` exit) until an operator
+opts in.
 
-AL-12 ships the `RepoAdminPool` boot / restart / shutdown mechanics and
-tests them against a fake spawner, but the autonomous-loop driver
-(`src/orchestrator/autonomous-loop.ts`) gates pool construction behind
-the `RELAY_REPO_ADMIN_POOL_ENABLED` env var — defaulted **off**. When
-the flag is unset, the driver preserves the pre-AL-12 path: no pool is
-constructed, lifecycle transitions to `killed` with reason
-`"al-13-pending"`, and the CLI exits cleanly.
+### `RELAY_REPO_ADMIN_POOL_ENABLED`
+
+Gates AL-12's repo-admin pool (boot + restart-on-death + graceful
+shutdown) and AL-13's ticket router. When unset, no pool is constructed
+and the lifecycle transitions to `killed` with reason `"al-13-pending"`.
+When set (and `RELAY_AL14_WORKER_DRAIN` is unset), the pool boots, the
+router routes each ready ticket to its matching admin's pending queue,
+and the lifecycle transitions to `killed` with reason `"al-14-pending"`
+(no workers spawned, no worktrees created — this exercises boot +
+routing in isolation).
 
 Why the gate exists: the default spawner runs the real `claude` CLI,
 which today exits in milliseconds (no prompt wired up, stdin closed).
 Without AL-13's handshake protocol, enabling the pool in production
 would produce an immediate flap loop (each death respawns until the
 rapid-restart ceiling fires). Keeping the pool off by default lets the
-AL-12 code land and be exercised in isolation without that risk. AL-13
-flips the flag to on after wiring the handshake.
+AL-12 code land and be exercised in isolation without that risk.
 
-To exercise the pool locally (e.g. with a fake spawner injected from a
-test harness or a scripted stub):
+### `RELAY_AL14_WORKER_DRAIN`
+
+Gates AL-14's worker spawn + drain phase. Only has an effect when
+`RELAY_REPO_ADMIN_POOL_ENABLED` is also on. When set, for each admin
+whose session is live (`state === "ready"`), the driver constructs a
+`TicketRunner`, spawns workers in per-ticket git worktrees, monitors
+them until exit, and transitions tickets to `verifying` / `failed` on
+the channel board. Drains are serialized inside each admin and parallel
+across admins. The lifecycle transitions to `killed` with reason
+`"al-16-pending"` once every admin's queue is drained.
+
+**Known leak until AL-4 lands:** a ticket that reaches `awaiting-merge`
+state (worker exited 0 with a PR URL) leaves its worktree on disk until
+a merge event is plumbed to `TicketRunner.handlePrMerged`. AL-4 owns
+that plumbing. This is why the drain is gated behind its own flag —
+operators opt into the leak knowingly, rather than inheriting it by
+flipping the pool flag. The CLI log line names the leak explicitly
+when the drain is enabled.
+
+### Exercising the flags locally
 
 ```bash
+# Pool boot + router only (safe, no worker spawn, no worktree leak).
 RELAY_REPO_ADMIN_POOL_ENABLED=1 rly run --autonomous --channel <id>
+
+# Full AL-14: pool + router + worker drain.
+# (Be aware that any ticket that reaches `awaiting-merge` leaves a
+# worktree on disk until AL-4 ships.)
+RELAY_REPO_ADMIN_POOL_ENABLED=1 RELAY_AL14_WORKER_DRAIN=1 \
+  rly run --autonomous --channel <id>
 ```
 
-Recognised true-ish values: `1`, `true`, `yes`, `on` (case-insensitive).
-Anything else — including typos — is treated as off.
+Recognised true-ish values for both flags: `1`, `true`, `yes`, `on`
+(case-insensitive). Anything else — including typos — is treated as off.
 
 ## Spawner wiring
 
