@@ -273,6 +273,12 @@ pub struct HarnessConfig {
 // --- Data Loading ---
 
 pub fn harness_root() -> PathBuf {
+    // Tests override this so they can exercise `save_channel` /
+    // `save_gui_settings` against a tempdir without touching the user's
+    // real `~/.relay`.
+    if let Ok(override_root) = std::env::var("RELAY_HARNESS_ROOT") {
+        return PathBuf::from(override_root);
+    }
     let home = dirs::home_dir().unwrap_or_default();
     home.join(".relay")
 }
@@ -286,11 +292,34 @@ pub fn load_config() -> HarnessConfig {
 
 // --- GUI Settings ---
 
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+/// Ticketing provider selected on the global Settings page. `Unknown` is the
+/// forward-compat catch-all: if a future release writes a provider value
+/// this GUI doesn't understand, it deserializes as `Unknown` instead of
+/// breaking the whole settings load.
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TicketProvider {
+    Relay,
+    Linear,
+    None,
+    #[serde(other)]
+    Unknown,
+}
+
+impl Default for TicketProvider {
+    fn default() -> Self {
+        Self::Relay
+    }
+}
+
+pub const POLL_SECONDS_MIN: u32 = 10;
+pub const POLL_SECONDS_MAX: u32 = 3600;
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct GuiSettings {
-    #[serde(default = "default_ticket_provider")]
-    pub ticket_provider: String,
+    #[serde(default)]
+    pub ticket_provider: TicketProvider,
     #[serde(default)]
     pub linear_api_token: String,
     #[serde(default)]
@@ -301,33 +330,51 @@ pub struct GuiSettings {
     pub right_rail_open: bool,
 }
 
-fn default_ticket_provider() -> String { "relay".to_string() }
-fn default_poll_interval() -> u32 { 30 }
-fn default_right_rail_open() -> bool { true }
+impl Default for GuiSettings {
+    fn default() -> Self {
+        Self {
+            ticket_provider: TicketProvider::Relay,
+            linear_api_token: String::new(),
+            linear_workspace: String::new(),
+            linear_poll_seconds: default_poll_interval(),
+            right_rail_open: default_right_rail_open(),
+        }
+    }
+}
+
+fn default_poll_interval() -> u32 {
+    30
+}
+fn default_right_rail_open() -> bool {
+    true
+}
 
 pub fn gui_settings_path() -> PathBuf {
     harness_root().join("gui-settings.json")
 }
 
 pub fn load_gui_settings() -> GuiSettings {
-    load_json::<GuiSettings>(&gui_settings_path()).unwrap_or_else(|| GuiSettings {
-        ticket_provider: default_ticket_provider(),
-        linear_api_token: String::new(),
-        linear_workspace: String::new(),
-        linear_poll_seconds: default_poll_interval(),
-        right_rail_open: default_right_rail_open(),
-    })
+    load_json::<GuiSettings>(&gui_settings_path()).unwrap_or_default()
 }
 
 pub fn save_gui_settings(s: &GuiSettings) -> Result<(), String> {
+    // Clamp the poll interval before persisting. A runaway value (<10s or
+    // >1h) would either hammer Linear or silently neuter polling — neither
+    // is a state a user can intentionally land on through the UI.
+    let mut out = s.clone();
+    out.linear_poll_seconds = out.linear_poll_seconds.clamp(POLL_SECONDS_MIN, POLL_SECONDS_MAX);
+
     let path = gui_settings_path();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let content = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
+    let content = serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, &content).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    if let Err(e) = fs::rename(&tmp, &path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e.to_string());
+    }
     Ok(())
 }
 
@@ -409,7 +456,9 @@ pub fn load_channel(channel_id: &str) -> Option<Channel> {
 }
 
 /// Atomic write of a Channel record. Stamps `updated_at` to now before
-/// persisting so every mutator doesn't have to remember to bump it.
+/// persisting so every mutator doesn't have to remember to bump it. On
+/// rename failure the temp file is removed so a `.json.tmp` sibling
+/// doesn't haunt the channels directory across runs.
 pub fn save_channel(channel: &Channel) -> Result<(), String> {
     let mut ch = channel.clone();
     ch.updated_at = Some(chrono::Utc::now().to_rfc3339());
@@ -420,7 +469,10 @@ pub fn save_channel(channel: &Channel) -> Result<(), String> {
     let content = serde_json::to_string_pretty(&ch).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, &content).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    if let Err(e) = fs::rename(&tmp, &path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e.to_string());
+    }
     Ok(())
 }
 
@@ -1321,5 +1373,163 @@ mod tests {
         }"#;
         let res: Result<Channel, _> = serde_json::from_str(json);
         assert!(res.is_err(), "expected snake_case to be rejected");
+    }
+
+    // --- save_channel / load_channel round-trip ------------------------------
+
+    // Tests that mutate the `RELAY_HARNESS_ROOT` env var must not race each
+    // other — vitest-style parallel test runners share process state. Guard
+    // with a static mutex so the env override is scoped to one test at a time.
+    use std::sync::Mutex;
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct RootGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        _tmp: tempfile::TempDir,
+    }
+
+    fn scoped_root() -> RootGuard {
+        let lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("RELAY_HARNESS_ROOT", tmp.path());
+        RootGuard { _lock: lock, _tmp: tmp }
+    }
+
+    impl Drop for RootGuard {
+        fn drop(&mut self) {
+            std::env::remove_var("RELAY_HARNESS_ROOT");
+        }
+    }
+
+    fn fresh_channel(id: &str) -> Channel {
+        Channel {
+            channel_id: id.to_string(),
+            name: id.to_string(),
+            description: String::new(),
+            status: "active".to_string(),
+            members: vec![],
+            pinned_refs: vec![],
+            repo_assignments: vec![
+                RepoAssignment {
+                    alias: "ui".to_string(),
+                    workspace_id: "ws-ui".to_string(),
+                    repo_path: "/tmp/ui".to_string(),
+                },
+                RepoAssignment {
+                    alias: "be".to_string(),
+                    workspace_id: "ws-be".to_string(),
+                    repo_path: "/tmp/be".to_string(),
+                },
+            ],
+            primary_workspace_id: Some("ws-ui".to_string()),
+            linear_project_id: None,
+            tier: None,
+            starred: false,
+            full_access: None,
+            created_at: Some("2026-01-01T00:00:00Z".to_string()),
+            updated_at: Some("2026-01-01T00:00:00Z".to_string()),
+        }
+    }
+
+    #[test]
+    fn save_channel_round_trips_and_stamps_updated_at() {
+        let _guard = scoped_root();
+
+        let mut ch = fresh_channel("save-rt-1");
+        ch.updated_at = Some("2026-01-01T00:00:00Z".to_string());
+        save_channel(&ch).expect("save_channel ok");
+
+        let reloaded = load_channel(&ch.channel_id).expect("load_channel ok");
+        assert_eq!(reloaded.channel_id, ch.channel_id);
+        assert_eq!(reloaded.name, ch.name);
+        assert_eq!(reloaded.primary_workspace_id.as_deref(), Some("ws-ui"));
+        assert_eq!(reloaded.repo_assignments.len(), 2);
+        assert!(
+            reloaded.updated_at.as_deref() != Some("2026-01-01T00:00:00Z"),
+            "save_channel must stamp a fresh updated_at; got {:?}",
+            reloaded.updated_at
+        );
+
+    }
+
+    #[test]
+    fn save_channel_preserves_tier_and_starred() {
+        let _guard = scoped_root();
+
+        let mut ch = fresh_channel("save-tier-1");
+        ch.tier = Some(ChannelTier::FeatureLarge);
+        ch.starred = true;
+        save_channel(&ch).expect("save_channel ok");
+
+        let reloaded = load_channel(&ch.channel_id).expect("load_channel ok");
+        assert_eq!(reloaded.tier, Some(ChannelTier::FeatureLarge));
+        assert!(reloaded.starred);
+
+    }
+
+    // --- GuiSettings round-trip + clamp --------------------------------------
+
+    #[test]
+    fn gui_settings_round_trip() {
+        let _guard = scoped_root();
+
+        let s = GuiSettings {
+            ticket_provider: TicketProvider::Linear,
+            linear_api_token: "lin_tok".to_string(),
+            linear_workspace: "acme".to_string(),
+            linear_poll_seconds: 45,
+            right_rail_open: false,
+        };
+        save_gui_settings(&s).expect("save ok");
+
+        let reloaded = load_gui_settings();
+        assert_eq!(reloaded.ticket_provider, TicketProvider::Linear);
+        assert_eq!(reloaded.linear_api_token, "lin_tok");
+        assert_eq!(reloaded.linear_workspace, "acme");
+        assert_eq!(reloaded.linear_poll_seconds, 45);
+        assert!(!reloaded.right_rail_open);
+
+    }
+
+    #[test]
+    fn gui_settings_missing_file_returns_defaults() {
+        let _guard = scoped_root();
+
+        let loaded = load_gui_settings();
+        assert_eq!(loaded.ticket_provider, TicketProvider::Relay);
+        assert_eq!(loaded.linear_poll_seconds, 30);
+        assert!(loaded.right_rail_open);
+
+    }
+
+    #[test]
+    fn gui_settings_clamps_poll_interval() {
+        let _guard = scoped_root();
+
+        // Below min → clamped up.
+        let s = GuiSettings {
+            linear_poll_seconds: 1,
+            ..GuiSettings::default()
+        };
+        save_gui_settings(&s).expect("save ok");
+        assert_eq!(load_gui_settings().linear_poll_seconds, POLL_SECONDS_MIN);
+
+        // Above max → clamped down.
+        let s = GuiSettings {
+            linear_poll_seconds: 999_999,
+            ..GuiSettings::default()
+        };
+        save_gui_settings(&s).expect("save ok");
+        assert_eq!(load_gui_settings().linear_poll_seconds, POLL_SECONDS_MAX);
+
+    }
+
+    #[test]
+    fn ticket_provider_unknown_variant_is_catchall() {
+        // Simulates a future CLI writing a provider string this build doesn't
+        // know about. Deserialization must land on Unknown, not error.
+        let json = r#"{"ticketProvider":"jira","linearApiToken":"","linearWorkspace":"","linearPollSeconds":30,"rightRailOpen":true}"#;
+        let parsed: GuiSettings = serde_json::from_str(json).expect("parse ok");
+        assert_eq!(parsed.ticket_provider, TicketProvider::Unknown);
     }
 }

@@ -1400,12 +1400,13 @@ dependencies = [
 
 [[package]]
 name = "harness-data"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "dirs",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -3122,7 +3123,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "relay-gui"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "harness-data",
@@ -3136,7 +3137,7 @@ dependencies = [
 
 [[package]]
 name = "relay-tui"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "arboard",
  "chrono",
@@ -4133,6 +4134,19 @@ dependencies = [
  "dunce",
  "embed-resource",
  "toml 0.9.12+spec-1.1.0",
+]
+
+[[package]]
+name = "tempfile"
+version = "3.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
+dependencies = [
+ "fastrand",
+ "getrandom 0.4.2",
+ "once_cell",
+ "rustix 1.1.4",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
