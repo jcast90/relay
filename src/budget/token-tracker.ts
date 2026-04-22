@@ -11,8 +11,14 @@ import { getRelayDir } from "../cli/paths.js";
  *
  * Exported as a const tuple so callers (AL-3 scheduler, tests) can iterate
  * the canonical list instead of re-declaring it.
+ *
+ * The `60` entry exists primarily for AL-15's "memory-shed" cycle trigger:
+ * each repo-admin session owns its own tracker and subscribes to the 60%
+ * crossing to recycle its child process before the context window fills.
+ * Other subsystems are free to listen for 60 too; semantics are identical
+ * to the other tiers (single emit per upward crossing per tracker).
  */
-export const THRESHOLDS = [50, 85, 95, 100] as const;
+export const THRESHOLDS = [50, 60, 85, 95, 100] as const;
 
 export type ThresholdEvent = {
   sessionId: string;
