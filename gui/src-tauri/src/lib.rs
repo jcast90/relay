@@ -74,13 +74,15 @@ fn list_sessions(channel_id: String) -> Result<Vec<data::ChatSession>, String> {
     Ok(data::load_sessions(&channel_id))
 }
 
-/// Aggregate session counts across all active channels for the Sidebar's
-/// Threads row. One call instead of N `list_sessions` round-trips.
+/// Aggregate session counts for the Sidebar's Threads row. Counts only
+/// active, channel-kind entries — archived channels and DMs don't belong
+/// in a "threads across channels" metric. One call instead of N.
 #[tauri::command]
 fn list_session_counts() -> std::collections::HashMap<String, usize> {
-    let channels = data::load_channels_with_status(true);
+    let channels = data::load_channels_with_status(false);
     channels
         .into_iter()
+        .filter(|c| c.kind.as_deref() != Some("dm"))
         .map(|c| {
             let count = data::load_sessions(&c.channel_id).len();
             (c.channel_id, count)

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.1
+
+### Patch Changes
+
+- Tidewater polish:
+  - Sidebar **Threads** count now excludes archived channels and DM-kind channels — was inflating with historical DMs and retired channels. Only active, channel-kind entries count as threads.
+  - Sidebar **Running** row re-scoped from a counter (which always capped at 1 in a single-center-pane shell) to a presence signal — pulse dot when a stream is live, dimmed when idle.
+
 ## 0.5.0
 
 ### Minor Changes
