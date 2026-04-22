@@ -1,6 +1,7 @@
 import type { SessionLifecycle } from "../lifecycle/session-lifecycle.js";
 import type { TokenTracker } from "../budget/token-tracker.js";
 import type { Channel, RepoAssignment } from "../domain/channel.js";
+import { RepoAdminPool } from "./repo-admin-pool.js";
 
 /**
  * Options handed to {@link startAutonomousSession} by the CLI entrypoint
@@ -57,12 +58,34 @@ export interface StartAutonomousSessionOptions {
  * exit.
  */
 export async function startAutonomousSession(opts: StartAutonomousSessionOptions): Promise<void> {
-  const { sessionId, lifecycle, tracker } = opts;
+  const { sessionId, lifecycle, tracker, channel, allowedRepos } = opts;
 
   console.log(
-    `[autonomous-loop] driver not yet implemented — stub exits immediately. ` +
-      `Session ${sessionId} marked as killed with reason "al-4-pending".`
+    `[autonomous-loop] dispatcher not yet implemented — booting repo-admin ` +
+      `pool then exiting. Session ${sessionId} marked as killed with reason ` +
+      `"al-13-pending".`
   );
+
+  // AL-12 boots one repo-admin per allowed repoAssignment. AL-13 adds the
+  // ticket router that sends work to these sessions; until then we stand
+  // them up to exercise the boot/shutdown path and return.
+  const allowedAliases = allowedRepos.map((r) => r.alias);
+  const pool = new RepoAdminPool({
+    channel,
+    allowedAliases,
+    fullAccess: channel.fullAccess ?? false,
+    lifecycle,
+  });
+
+  try {
+    await pool.start();
+  } catch (err) {
+    console.warn(
+      `[autonomous-loop] repo-admin pool failed to boot: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+  }
 
   // Only transition if we're still in a non-terminal state. A concurrent
   // threshold crossing or watchdog fire could theoretically have already
@@ -72,7 +95,7 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
   const state = lifecycle.state;
   if (state !== "killed" && state !== "done") {
     try {
-      await lifecycle.transition("killed", "al-4-pending");
+      await lifecycle.transition("killed", "al-13-pending");
     } catch (err) {
       console.warn(
         `[autonomous-loop] failed to transition lifecycle to killed: ${
@@ -80,6 +103,18 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
         }`
       );
     }
+  }
+
+  // Terminal lifecycle transition triggers the pool's auto-stop, but also
+  // await it here so teardown happens before the CLI returns.
+  try {
+    await pool.stop();
+  } catch (err) {
+    console.warn(
+      `[autonomous-loop] repo-admin pool stop failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
   }
 
   // Close out resources. Any in-flight writes drain here; errors are
