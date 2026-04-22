@@ -92,10 +92,17 @@ jobs:
           version: 10.17.0
 
       - name: Setup Node.js (npm registry)
+        # Node 24 ships npm >= 11.5, which is the first line with native
+        # OIDC Trusted-Publisher support. Node 22 ships npm 10.x whose OIDC
+        # handling relies on pnpm's own exchange path — that path was the
+        # failure mode on the initial v0.1.0 tag (npm's token-exchange call
+        # silently no-op'd, the PUT landed unauthenticated, npm returned 404
+        # "@jcast90/relay@0.1.0 is not in this registry"). Matches npm's
+        # documented Trusted-Publishers workflow example.
         if: vars.NPM_PUBLISH_ENABLED == 'true'
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
           registry-url: "https://registry.npmjs.org"
 
@@ -108,13 +115,12 @@ jobs:
         run: pnpm build
 
       - name: Publish to npm
-        # Auth is OIDC via npm Trusted Publishers — the top-level
-        # `id-token: write` permission lets pnpm mint an OIDC token that npm
-        # exchanges for a short-lived publish credential. No NPM_TOKEN.
-        # `--provenance` attaches a signed build-provenance statement so
-        # consumers can verify the package was built in this workflow.
+        # Uses the npm CLI (not pnpm) for the actual publish — npm >= 11.5
+        # handles the OIDC → npm-token exchange natively, which pnpm 10.x
+        # does not do reliably for Trusted Publishers. `--provenance`
+        # attaches the sigstore attestation.
         if: vars.NPM_PUBLISH_ENABLED == 'true'
-        run: pnpm publish --no-git-checks --access public --provenance
+        run: npm publish --access public --provenance
 
       - name: Setup Node.js (GitHub Packages)
         if: vars.NPM_PUBLISH_ENABLED == 'true'
