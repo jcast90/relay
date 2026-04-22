@@ -62,7 +62,7 @@ Prefer multiple small commits with coherent titles over one `"wip"` blob squashe
 ## Style
 
 - Two-space indent, double quotes, semicolons, trailing commas where the language allows them.
-- No linter config is enforced in CI. Run your editor's built-in formatter on files you touch; leave untouched files alone (no drive-by reformats in a feature PR).
+- Prettier is enforced in CI via the `format-check` job. Run `pnpm format` before pushing (or `pnpm format:check` to verify). Leave files you didn't otherwise touch alone — no drive-by reformats in a feature PR.
 - Keep imports tidy — no unused, grouped roughly as node-builtin / dep / local.
 
 ## Changes that span the dashboards

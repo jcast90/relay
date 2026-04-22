@@ -18,3 +18,4 @@ gui/src-tauri/icons/ios/
 config.env
 config.env.*
 !config.env.template
+.claude/

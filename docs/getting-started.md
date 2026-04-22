@@ -10,7 +10,7 @@ Ten concrete steps. Assumes `GITHUB_TOKEN`, `HARNESS_LIVE=1`, and `RELAY_AUTO_AP
 
 1. **`cd /path/to/your/repo && rly up`** — registers the repo in `~/.relay/workspace-registry.json`. Expect: `registered workspace <hash> → <path>`.
 2. **`rly doctor`** — checks tokens, MCP wiring, binary paths. Expect a grid of green check marks. A red line here means stop and fix before step 3.
-3. **`rly claude`** — launches Claude with the Relay MCP server attached. Expect: Claude's banner, then the MCP toolbar showing 18 tools (6 harness / 7 channel / 5 crosslink).
+3. **`rly claude`** — launches Claude with the Relay MCP server attached. Expect: Claude's banner, then the MCP toolbar showing 17 tools (8 harness / 6 channel / 3 crosslink — run `rly inspect-mcp` for the live source of truth).
 4. **Paste a GitHub issue URL** as your first message — e.g. `https://github.com/your-org/your-repo/issues/42`. Expect: the classifier prints `resolved: <title>`, `tier: feature_small`, `suggestedBranch: feat/42-…`.
 5. **Planner runs** — you see a phased plan in the feed (`phase 1: scaffold`, `phase 2: wire`, `phase 3: tests`). No approval prompt on `feature_small`; `feature_large`/`architectural` would pause here.
 6. **Decomposer emits tickets** — watch the feed print `T-1 … T-4 ready`. Tickets with no `dependsOn` go `ready` immediately; others stay `blocked`.

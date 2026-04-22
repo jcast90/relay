@@ -1,9 +1,14 @@
 # Storage Injection
 
 Relay's persistent state lives behind a single interface, `HarnessStore`
-(`src/storage/store.ts`). Today the only implementation is
-`FileHarnessStore`, rooted at `~/.relay/`. A Postgres backend is planned for
-the cloud/pod deployment path and will slot in without touching call sites.
+(`src/storage/store.ts`). Two implementations ship today:
+
+- **`FileHarnessStore`** — rooted at `~/.relay/`, atomic JSON/JSONL writes. The
+  default, and the right choice for solo dev, CI, and single-host deployments.
+- **`PostgresHarnessStore`** — backed by your own Postgres. Use this for
+  multi-agent deployments where `LISTEN/NOTIFY` broadcasts and row-locked
+  decision writes matter. Select it via `HARNESS_STORE=postgres` +
+  `HARNESS_POSTGRES_URL`.
 
 ## Goal
 
