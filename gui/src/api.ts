@@ -6,6 +6,7 @@ import type {
   ChannelRunLink,
   ChatSession,
   Decision,
+  GuiSettings,
   PendingPlan,
   PersistedChatMessage,
   RewindResult,
@@ -65,6 +66,15 @@ export const api = {
     channelId: string,
     repos: { alias: string; workspaceId: string; repoPath: string }[]
   ) => invoke<unknown>("update_channel_repos", { channelId, repos }),
+  setChannelStarred: (channelId: string, starred: boolean) =>
+    invoke<void>("set_channel_starred", { channelId, starred }),
+  setChannelTier: (channelId: string, tier: string | null) =>
+    invoke<void>("set_channel_tier", { channelId, tier }),
+  setPrimaryRepo: (channelId: string, workspaceId: string) =>
+    invoke<void>("set_primary_repo", { channelId, workspaceId }),
+  getSettings: () => invoke<GuiSettings>("get_settings"),
+  updateSettings: (settings: GuiSettings) =>
+    invoke<void>("update_settings", { settings }),
   postToChannel: (channelId: string, content: string, from?: string, entryType?: string) =>
     invoke<unknown>("post_to_channel", {
       channelId,

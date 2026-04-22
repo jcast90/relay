@@ -375,6 +375,59 @@ fn update_channel_repos(
 }
 
 #[tauri::command]
+fn set_channel_starred(channel_id: String, starred: bool) -> Result<(), String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    let mut ch = data::load_channel(&channel_id)
+        .ok_or_else(|| format!("channel {} not found", channel_id))?;
+    ch.starred = starred;
+    data::save_channel(&ch)
+}
+
+#[tauri::command]
+fn set_channel_tier(channel_id: String, tier: Option<String>) -> Result<(), String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    let parsed = match tier.as_deref() {
+        None | Some("") => None,
+        Some("feature_large") => Some(data::ChannelTier::FeatureLarge),
+        Some("feature") => Some(data::ChannelTier::Feature),
+        Some("bugfix") => Some(data::ChannelTier::Bugfix),
+        Some("chore") => Some(data::ChannelTier::Chore),
+        Some("question") => Some(data::ChannelTier::Question),
+        Some(other) => return Err(format!("unknown tier: {}", other)),
+    };
+    let mut ch = data::load_channel(&channel_id)
+        .ok_or_else(|| format!("channel {} not found", channel_id))?;
+    ch.tier = parsed;
+    data::save_channel(&ch)
+}
+
+#[tauri::command]
+fn get_settings() -> data::GuiSettings {
+    data::load_gui_settings()
+}
+
+#[tauri::command]
+fn update_settings(settings: data::GuiSettings) -> Result<(), String> {
+    data::save_gui_settings(&settings)
+}
+
+#[tauri::command]
+fn set_primary_repo(channel_id: String, workspace_id: String) -> Result<(), String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    validate_id_segment(&workspace_id, "workspaceId")?;
+    let mut ch = data::load_channel(&channel_id)
+        .ok_or_else(|| format!("channel {} not found", channel_id))?;
+    if !ch.repo_assignments.iter().any(|r| r.workspace_id == workspace_id) {
+        return Err(format!(
+            "workspace {} is not attached to channel {}",
+            workspace_id, channel_id
+        ));
+    }
+    ch.primary_workspace_id = Some(workspace_id);
+    data::save_channel(&ch)
+}
+
+#[tauri::command]
 fn post_to_channel(
     channel_id: String,
     content: String,
@@ -1879,6 +1932,11 @@ pub fn run() {
             archive_channel,
             unarchive_channel,
             update_channel_repos,
+            set_channel_starred,
+            set_channel_tier,
+            set_primary_repo,
+            get_settings,
+            update_settings,
             post_to_channel,
             create_session,
             delete_session,

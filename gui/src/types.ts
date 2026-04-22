@@ -25,6 +25,16 @@ export type ChannelRef = {
   label: string;
 };
 
+export type ChannelTier = "feature_large" | "feature" | "bugfix" | "chore" | "question";
+
+export type GuiSettings = {
+  ticketProvider: "relay" | "linear" | "none";
+  linearApiToken: string;
+  linearWorkspace: string;
+  linearPollSeconds: number;
+  rightRailOpen: boolean;
+};
+
 export type Channel = {
   channelId: string;
   name: string;
@@ -37,6 +47,10 @@ export type Channel = {
   // for back-compat with older channel files; when unset, UI falls back to
   // the first entry in `repoAssignments`.
   primaryWorkspaceId?: string;
+  // Classifier-assigned tier. Optional — older channels omit.
+  tier?: ChannelTier;
+  // Pinned to the Starred section of the sidebar.
+  starred?: boolean;
   // ISO 8601; optional for back-compat with older channel files.
   createdAt?: string;
   updatedAt?: string;
