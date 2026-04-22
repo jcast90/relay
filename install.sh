@@ -100,7 +100,7 @@ pnpm build
 
 # ---------- global link ----------
 if [ "$SKIP_LINK" -eq 0 ]; then
-  log "Linking Relay globally (pnpm link --global) — exposes 'rly' and legacy 'agent-harness'"
+  log "Linking Relay globally (pnpm link --global) — exposes 'rly'"
   if ! pnpm link --global; then
     warn "pnpm link --global failed — this is usually a PNPM_HOME or permissions issue."
     warn "Try one of:"
@@ -125,14 +125,6 @@ fi
 
 # ---------- config scaffold ----------
 RELAY_DIR="${HOME}/.relay"
-LEGACY_DIR="${HOME}/.agent-harness"
-
-# Auto-migrate: if legacy dir exists and the new one doesn't, rename + back-compat symlink.
-if [ ! -d "$RELAY_DIR" ] && [ -d "$LEGACY_DIR" ]; then
-  log "Migrating ${LEGACY_DIR} -> ${RELAY_DIR} (a back-compat symlink will stay at the old path)"
-  mv "$LEGACY_DIR" "$RELAY_DIR"
-  ln -s "$RELAY_DIR" "$LEGACY_DIR" || warn "Could not create back-compat symlink at ${LEGACY_DIR}; continuing."
-fi
 
 mkdir -p "$RELAY_DIR"
 
@@ -182,7 +174,7 @@ fi
 BOX_LINE='────────────────────────────────────────────────────────────────────────'
 echo
 echo "┌${BOX_LINE}┐"
-printf "│ %-70s │\n" "Relay installed (CLI: rly — legacy alias: agent-harness)"
+printf "│ %-70s │\n" "Relay installed (CLI: rly)"
 echo "├${BOX_LINE}┤"
 printf "│ %-70s │\n" "Next steps:"
 printf "│ %-70s │\n" ""

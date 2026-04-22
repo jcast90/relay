@@ -9,8 +9,8 @@ import { FileHarnessStore } from "../src/storage/file-store.js";
 
 describe("phase ledger persistence", () => {
   it("writes a compact phase ledger per run", async () => {
-    const artifactRoot = await mkdtemp(join(tmpdir(), "agent-harness-ledger-"));
-    const storeRoot = await mkdtemp(join(tmpdir(), "agent-harness-ledger-hs-"));
+    const artifactRoot = await mkdtemp(join(tmpdir(), "relay-ledger-"));
+    const storeRoot = await mkdtemp(join(tmpdir(), "relay-ledger-hs-"));
     const store = new LocalArtifactStore(artifactRoot, new FileHarnessStore(storeRoot));
 
     try {

@@ -373,16 +373,11 @@ export async function resolveChannelRefs(input: {
 }
 
 export function findMcpConfig(repoPath?: string): string | null {
-  // Prefer the new .relay/ directory; fall back to legacy .agent-harness/
-  // so existing checkouts keep working until the user migrates.
-  const candidates = ["relay", "agent-harness"];
   const roots = [repoPath, process.cwd()].filter((r): r is string => Boolean(r));
 
   for (const root of roots) {
-    for (const dirName of candidates) {
-      const candidate = join(root, `.${dirName}`, "claude.mcp.json");
-      if (existsSync(candidate)) return candidate;
-    }
+    const candidate = join(root, ".relay", "claude.mcp.json");
+    if (existsSync(candidate)) return candidate;
   }
 
   return null;

@@ -12,7 +12,7 @@ export interface CommandInvocation {
    * Explicit key/value overrides layered on top of the sanitized parent env.
    * Keys here are NOT filtered by the secret regex — the caller has made an
    * explicit decision to set them. Use this for values the caller synthesizes
-   * (e.g. `AGENT_HARNESS_HOME`, per-invocation overlays).
+   * (e.g. `RELAY_HOME`, per-invocation overlays).
    */
   env?: Record<string, string | undefined>;
   /**
@@ -52,15 +52,13 @@ export const DEFAULT_ENV_WHITELIST: ReadonlySet<string> = new Set([
 
 /**
  * Prefix families whose members are forwarded verbatim. `LC_*` covers the
- * full locale family; `HARNESS_*` / `RELAY_*` / `AGENT_HARNESS_*` are the
- * harness's own namespace for wiring workspace paths + feature flags into
- * dispatched subprocesses.
+ * full locale family; `HARNESS_*` / `RELAY_*` are the harness's own namespace
+ * for wiring workspace paths + feature flags into dispatched subprocesses.
  */
 const DEFAULT_PREFIX_WHITELIST: readonly string[] = [
   "LC_",
   "HARNESS_",
-  "RELAY_",
-  "AGENT_HARNESS_"
+  "RELAY_"
 ];
 
 /**

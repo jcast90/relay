@@ -21,11 +21,9 @@ use std::time::{Duration, Instant};
 
 use data::*;
 
-/// Resolve the Relay CLI binary path (env: RELAY_BIN or legacy AGENT_HARNESS_BIN; default "rly")
+/// Resolve the Relay CLI binary path (env: RELAY_BIN; default "rly")
 fn cli_bin() -> String {
-    std::env::var("RELAY_BIN")
-        .or_else(|_| std::env::var("AGENT_HARNESS_BIN"))
-        .unwrap_or_else(|_| "rly".to_string())
+    std::env::var("RELAY_BIN").unwrap_or_else(|_| "rly".to_string())
 }
 
 /// Call the Relay CLI with given args and parse JSON output.

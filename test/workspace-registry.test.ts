@@ -27,7 +27,7 @@ describe("workspace registry", () => {
 
   it("workspace dir is under global root", () => {
     const dir = getWorkspaceDir("my-repo-abc123");
-    expect(dir).toMatch(/\.(relay|agent-harness)\/workspaces\/my-repo-abc123/);
+    expect(dir).toMatch(/\.relay\/workspaces\/my-repo-abc123/);
   });
 
   it("registers and resolves workspaces via file-backed registry", async () => {

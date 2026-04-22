@@ -313,7 +313,7 @@ export async function runWelcome(options: WelcomeOptions): Promise<number> {
     p(`  ${c.green}3.${c.reset} dispatches Claude / Codex per ticket with verification loops`);
     p(`  ${c.green}4.${c.reset} tracks PRs and turns CI-fail / review-requested into new tickets`);
     p("");
-    p(`CLI: ${c.bold}rly${c.reset} (or the legacy ${c.dim}agent-harness${c.reset} alias)`);
+    p(`CLI: ${c.bold}rly${c.reset}`);
     await pause(rl);
 
     // ── 2. Setup check ───────────────────────────────────────────────────

@@ -24,7 +24,7 @@ Relay turns a sentence, a GitHub issue URL, or a Linear ticket into a **running 
 
 The core idea: **you shouldn't keep agents' context in your head.** Plans, tickets, decisions, and cross-session messages all live in `~/.relay/` as JSON files + optional Postgres, readable by the CLI, the terminal TUI, and the desktop GUI.
 
-CLI: **`rly`** (or the legacy `agent-harness` alias — both binaries ship).
+CLI: **`rly`**.
 
 ## Table of contents
 
@@ -52,13 +52,11 @@ CLI: **`rly`** (or the legacy `agent-harness` alias — both binaries ship).
 ./install.sh
 ```
 
-Prereq checks (`node >= 20`, `pnpm`, `git`; plus `cargo` if you add `--with-tui` or `--with-gui`), `pnpm install && pnpm build`, links the `rly` + `agent-harness` binaries on your `$PATH`, scaffolds `~/.relay/config.env.template`. Safe to re-run.
+Prereq checks (`node >= 20`, `pnpm`, `git`; plus `cargo` if you add `--with-tui` or `--with-gui`), `pnpm install && pnpm build`, links the `rly` binary on your `$PATH`, scaffolds `~/.relay/config.env.template`. Safe to re-run.
 
 - `--with-tui` also builds the Rust dashboard.
 - `--with-gui` also builds the Tauri desktop app.
 - `--skip-link` skips the global link (useful in CI).
-
-Legacy users coming from the `agent-harness` name get `~/.agent-harness/` auto-migrated to `~/.relay/` on first run, with a back-compat symlink at the old path.
 
 ### Manual
 
@@ -277,8 +275,6 @@ Right pane shows repo assignments (with `PRIMARY` badge), pinned refs, and — w
 | `rly config <add-project-dir\|remove-project-dir>` | Global config |
 | `rly mcp-server --workspace <path>` | Run the MCP server (invoked by Claude/Codex automatically) |
 | `rly inspect-mcp` | Show the live MCP tool catalogue |
-
-The legacy `agent-harness <cmd>` alias is accepted for all commands so existing scripts keep working.
 
 ## MCP tools
 

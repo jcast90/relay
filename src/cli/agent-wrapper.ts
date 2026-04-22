@@ -24,10 +24,10 @@ export async function ensureClaudeMcpConfig(input: {
           input.cwd
         ],
         env: {
-          AGENT_HARNESS_HOME: input.paths.rootDir,
-          AGENT_HARNESS_ARTIFACTS_DIR: input.paths.artifactsDir,
-          AGENT_HARNESS_RUNS_INDEX: input.paths.runsIndexPath,
-          AGENT_HARNESS_PROVIDER: "claude"
+          RELAY_HOME: input.paths.rootDir,
+          RELAY_ARTIFACTS_DIR: input.paths.artifactsDir,
+          RELAY_RUNS_INDEX: input.paths.runsIndexPath,
+          RELAY_PROVIDER: "claude"
         }
       }
     }
@@ -105,7 +105,7 @@ export function buildCodexLaunchArgs(input: {
       input.cwd
     ])}`,
     "-c",
-    `mcp_servers.relay.env.AGENT_HARNESS_PROVIDER=${tomlString("codex")}`
+    `mcp_servers.relay.env.RELAY_PROVIDER=${tomlString("codex")}`
   ];
   if (input.autoApprove) {
     // Codex CLI's unattended mode. If your codex version rejects this flag,

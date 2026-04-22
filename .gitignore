@@ -2,7 +2,6 @@ node_modules
 coverage
 dist
 .relay
-.agent-harness
 tui/target/
 target/
 gui/dist/

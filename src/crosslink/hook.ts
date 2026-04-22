@@ -79,11 +79,8 @@ async function main() {
 
       if (raw.pid && isProcessAlive(raw.pid)) {
         // Check if this session's PID is an ancestor of our process
-        // or if it matches our RELAY_SESSION / AGENT_HARNESS_SESSION env
-        if (
-          process.env.RELAY_SESSION === raw.sessionId ||
-          process.env.AGENT_HARNESS_SESSION === raw.sessionId
-        ) {
+        // or if it matches our RELAY_SESSION env
+        if (process.env.RELAY_SESSION === raw.sessionId) {
           mySession = raw;
           break;
         }

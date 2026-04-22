@@ -153,7 +153,7 @@ abstract class CliAgentBase implements Agent {
 
 export class CodexCliAgent extends CliAgentBase {
   protected async invokeProvider(prompt: string): Promise<ParsedProviderResult> {
-    const tempDir = await mkdtemp(join(tmpdir(), "agent-harness-codex-"));
+    const tempDir = await mkdtemp(join(tmpdir(), "relay-codex-"));
     const schemaPath = join(tempDir, "schema.json");
     const outputPath = join(tempDir, "response.json");
 

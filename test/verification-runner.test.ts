@@ -37,8 +37,8 @@ describe("verification command selection", () => {
 
 describe("verification runner", () => {
   it("captures command results as artifacts", async () => {
-    const artifactRoot = await mkdtemp(join(tmpdir(), "agent-harness-artifacts-"));
-    const storeRoot = await mkdtemp(join(tmpdir(), "agent-harness-artifacts-hs-"));
+    const artifactRoot = await mkdtemp(join(tmpdir(), "relay-artifacts-"));
+    const storeRoot = await mkdtemp(join(tmpdir(), "relay-artifacts-hs-"));
     const artifactStore = new LocalArtifactStore(artifactRoot, new FileHarnessStore(storeRoot));
     const runner = new VerificationRunner(
       new FakeCommandInvoker(),

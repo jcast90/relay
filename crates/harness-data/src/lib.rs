@@ -250,19 +250,8 @@ pub struct HarnessConfig {
 // --- Data Loading ---
 
 pub fn harness_root() -> PathBuf {
-    // Prefer the new `.relay` path; fall back to the legacy `.agent-harness`
-    // path if that's what exists. The Node side auto-migrates on first run,
-    // so Rust readers naturally follow once a TS invocation has happened.
     let home = dirs::home_dir().unwrap_or_default();
-    let relay = home.join(".relay");
-    let legacy = home.join(".agent-harness");
-    if relay.exists() {
-        relay
-    } else if legacy.exists() {
-        legacy
-    } else {
-        relay
-    }
+    home.join(".relay")
 }
 
 pub fn load_config() -> HarnessConfig {
