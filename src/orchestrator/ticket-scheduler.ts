@@ -78,6 +78,20 @@ export class TicketScheduler {
   private readonly channelStore: ChannelStore | undefined;
 
   /**
+   * In-flight best-effort channel writes tracked so `executeAll` / `enqueue`
+   * can drain them before returning. Previously the scheduler fired these
+   * post-calls with `.catch(...)` and never awaited the resulting promise —
+   * tests that tore down the tmp channels dir immediately after
+   * `scheduler.executeAll(run)` would race the atomic tmp-rename inside
+   * `postEntry`, causing visible-before-readable flakes on the
+   * verification-override assertion and ENOENT warnings in the
+   * orchestrator-v2 stderr. Tracking them preserves "best-effort, log and
+   * continue" during the run while guaranteeing visibility before the
+   * caller moves on.
+   */
+  private pendingWrites: Promise<unknown>[] = [];
+
+  /**
    * Effective dispatch callback. When the caller supplies an `AgentExecutor`
    * via options, this is the adapter built in {@link buildExecutorDispatch}
    * that routes to `executor.start().wait()` and maps the `ExecutionResult`
@@ -260,7 +274,22 @@ export class TicketScheduler {
         this.activeRun = null;
         this.wakeResolve = null;
       }
+      // Drain tracked best-effort writes (verification-override feed posts,
+      // etc.) so readers see the final state before the caller proceeds.
+      await this.waitForPendingWrites();
     }
+  }
+
+  /**
+   * Drain all tracked best-effort writes. Uses `allSettled` so a single
+   * failure never short-circuits the drain, and clears the tracker on exit
+   * so a second invocation doesn't re-await already-settled promises.
+   */
+  private async waitForPendingWrites(): Promise<void> {
+    if (this.pendingWrites.length === 0) return;
+    const pending = this.pendingWrites;
+    this.pendingWrites = [];
+    await Promise.allSettled(pending);
   }
 
   /**
@@ -323,6 +352,7 @@ export class TicketScheduler {
     });
 
     await next;
+    await this.waitForPendingWrites();
   }
 
   private async drain(run: HarnessRun): Promise<boolean> {
@@ -637,28 +667,34 @@ export class TicketScheduler {
     // swapped out for allowlisted substitutes. Best-effort — a feed write
     // failure must not halt verification.
     if (selection.overridden && run.channelId && this.channelStore) {
-      this.channelStore
-        .postEntry(run.channelId, {
-          type: "status_update",
-          fromAgentId: null,
-          fromDisplayName: "Verifier",
-          content:
-            `Verification override: agent's proposed commands were not on the allowlist; ` +
-            `ran allowlisted substitutes instead.`,
-          metadata: {
-            runId: run.id,
-            ticketId,
-            verification: success ? "passed-with-override" : "failed-with-override",
-            rejectedCommands: selection.rejected,
-            substitutedCommands
-          }
-        })
-        .catch((err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err);
-          console.warn(
-            `[scheduler] verification-override feed post failed (runId=${run.id} ticketId=${ticketId}): ${message}`
-          );
-        });
+      // Track but don't await — the scheduler keeps moving so the run doesn't
+      // stall on a feed-write blip. The tracked promise is drained at
+      // `executeAll` completion so observers see the override entry before
+      // the caller inspects the feed (or tears down tmp dirs in tests).
+      this.pendingWrites.push(
+        this.channelStore
+          .postEntry(run.channelId, {
+            type: "status_update",
+            fromAgentId: null,
+            fromDisplayName: "Verifier",
+            content:
+              `Verification override: agent's proposed commands were not on the allowlist; ` +
+              `ran allowlisted substitutes instead.`,
+            metadata: {
+              runId: run.id,
+              ticketId,
+              verification: success ? "passed-with-override" : "failed-with-override",
+              rejectedCommands: selection.rejected,
+              substitutedCommands
+            }
+          })
+          .catch((err: unknown) => {
+            const message = err instanceof Error ? err.message : String(err);
+            console.warn(
+              `[scheduler] verification-override feed post failed (runId=${run.id} ticketId=${ticketId}): ${message}`
+            );
+          })
+      );
     }
 
     return {

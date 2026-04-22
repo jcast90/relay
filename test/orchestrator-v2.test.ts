@@ -14,6 +14,15 @@ import { VerificationRunner } from "../src/execution/verification-runner.js";
 import { OrchestratorV2 } from "../src/orchestrator/orchestrator-v2.js";
 import { ScriptedInvoker } from "../src/simulation/scripted-invoker.js";
 
+// Defensive tmp-dir cleanup. `force: true` alone swallows ENOENT but not
+// ENOTEMPTY, which can surface on Linux CI when an atomic tmp-rename lands
+// between rmdir's readdir scan and unlink. `maxRetries: 3` re-scans the
+// directory so any late-arriving file gets unlinked on the next pass. The
+// orchestrator now awaits its in-flight best-effort writes before returning
+// (see OrchestratorV2.waitForPendingWrites), so this is belt-and-suspenders
+// for the non-orchestrator writers (poller, scheduler tail, filesystem lag).
+const RM_OPTS = { recursive: true, force: true, maxRetries: 3, retryDelay: 50 } as const;
+
 function buildOrchestrator(
   cwd: string,
   artifactsDir: string,
@@ -80,7 +89,7 @@ describe("OrchestratorV2 integration", () => {
       expect(eventTypes).toContain("PlanGenerated");
       expect(eventTypes).toContain("TicketsCreated");
     } finally {
-      await rm(tmpDir, { recursive: true, force: true });
+      await rm(tmpDir, RM_OPTS);
     }
   }, 30_000);
 
@@ -103,7 +112,7 @@ describe("OrchestratorV2 integration", () => {
       expect(eventTypes).toContain("ClassificationComplete");
       expect(eventTypes).toContain("TicketsCreated");
     } finally {
-      await rm(tmpDir, { recursive: true, force: true });
+      await rm(tmpDir, RM_OPTS);
     }
   }, 30_000);
 
@@ -125,7 +134,7 @@ describe("OrchestratorV2 integration", () => {
       expect(run.classification!.tier).toBe("feature_small");
       expect(run.state).not.toBe("AWAITING_APPROVAL");
     } finally {
-      await rm(tmpDir, { recursive: true, force: true });
+      await rm(tmpDir, RM_OPTS);
     }
   }, 30_000);
 
@@ -155,7 +164,7 @@ describe("OrchestratorV2 integration", () => {
       const runs = await artifactStore.readRunsIndex();
       expect(runs.some((r) => r.runId === run.id)).toBe(true);
     } finally {
-      await rm(tmpDir, { recursive: true, force: true });
+      await rm(tmpDir, RM_OPTS);
     }
   }, 30_000);
 
@@ -184,7 +193,7 @@ describe("OrchestratorV2 integration", () => {
       const ledgerIds = run.ticketLedger.map((t) => t.ticketId).sort();
       expect(boardIds).toEqual(ledgerIds);
     } finally {
-      await rm(tmpDir, { recursive: true, force: true });
+      await rm(tmpDir, RM_OPTS);
     }
   }, 30_000);
 
@@ -207,7 +216,7 @@ describe("OrchestratorV2 integration", () => {
       expect(boardTickets.length).toBeGreaterThan(0);
       expect(boardTickets[0].runId).toBe(run.id);
     } finally {
-      await rm(tmpDir, { recursive: true, force: true });
+      await rm(tmpDir, RM_OPTS);
     }
   }, 30_000);
 
@@ -240,7 +249,7 @@ describe("OrchestratorV2 integration", () => {
       const boardTickets = await channelStore.readChannelTickets(run.channelId!);
       expect(boardTickets).toEqual([]);
     } finally {
-      await rm(tmpDir, { recursive: true, force: true });
+      await rm(tmpDir, RM_OPTS);
     }
   }, 30_000);
 });

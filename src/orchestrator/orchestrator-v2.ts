@@ -67,6 +67,18 @@ export class OrchestratorV2 {
 
   private readonly executor: AgentExecutor | null;
 
+  /**
+   * In-flight best-effort channel writes (postEntry / appendEvent) tracked so
+   * `run()` can await them before returning. Previously these were
+   * fire-and-forget via `.postEntry(...).catch(...)`, which caused teardown
+   * races in tests: `afterEach`/`finally` would `rm` the tmp dir while the
+   * orchestrator's atomic tmp-rename was still in flight, producing
+   * ENOENT/ENOTEMPTY errors on Linux CI. Tracking them here preserves the
+   * "non-blocking, log-and-continue" semantic during the run while still
+   * guaranteeing the writes settle before the caller moves on.
+   */
+  private pendingWrites: Promise<unknown>[] = [];
+
   constructor(
     private readonly registry: AgentRegistry,
     private readonly repoRoot: string,
@@ -267,6 +279,7 @@ export class OrchestratorV2 {
       if (!approvalResult) {
         // No approval yet — persist and return. Caller resumes after approval.
         await this.persistRunIndex(run);
+        await this.waitForPendingWrites();
         return run;
       }
 
@@ -275,6 +288,7 @@ export class OrchestratorV2 {
         run.completedAt = new Date().toISOString();
         run.updatedAt = run.completedAt;
         await this.persistRunIndex(run);
+        await this.waitForPendingWrites();
         return run;
       }
 
@@ -310,17 +324,19 @@ export class OrchestratorV2 {
     await this.persistRunIndex(run);
 
     if (run.channelId && this.channelStore) {
-      await this.channelStore
-        .postEntry(run.channelId, {
+      await this.trackChannelPost(
+        run,
+        this.channelStore.postEntry(run.channelId, {
           type: "run_completed",
           fromAgentId: null,
           fromDisplayName: "Orchestrator",
           content: `Run completed: ${run.state}`,
           metadata: { runId: run.id, state: run.state }
         })
-        .catch((err: unknown) => this.warnChannelPostFailed(run, err));
+      );
     }
 
+    await this.waitForPendingWrites();
     return run;
   }
 
@@ -387,17 +403,19 @@ export class OrchestratorV2 {
     await this.persistRunIndex(run);
 
     if (run.channelId && this.channelStore) {
-      await this.channelStore
-        .postEntry(run.channelId, {
+      await this.trackChannelPost(
+        run,
+        this.channelStore.postEntry(run.channelId, {
           type: "run_completed",
           fromAgentId: null,
           fromDisplayName: "Orchestrator",
           content: `Run completed: ${run.state}`,
           metadata: { runId: run.id, state: run.state }
         })
-        .catch((err: unknown) => this.warnChannelPostFailed(run, err));
+      );
     }
 
+    await this.waitForPendingWrites();
     return run;
   }
 
@@ -463,15 +481,16 @@ export class OrchestratorV2 {
       });
 
       if (run.channelId && this.channelStore) {
-        this.channelStore
-          .postEntry(run.channelId, {
+        this.trackChannelPost(
+          run,
+          this.channelStore.postEntry(run.channelId, {
             type: "message",
             fromAgentId: agent.id,
             fromDisplayName: agent.name,
             content: `Dispatched for ${input.kind}: ${input.title}`,
             metadata: { attempt: String(attempt) }
           })
-          .catch((err: unknown) => this.warnChannelPostFailed(run, err));
+        );
       }
 
       try {
@@ -536,15 +555,16 @@ export class OrchestratorV2 {
     await this.persistRunIndex(run);
 
     if (run.channelId && this.channelStore) {
-      this.channelStore
-        .postEntry(run.channelId, {
+      this.trackChannelPost(
+        run,
+        this.channelStore.postEntry(run.channelId, {
           type: "status_update",
           fromAgentId: null,
           fromDisplayName: "Orchestrator",
           content: `${eventType} → ${run.state}`,
           metadata: { runId: run.id, state: run.state, event: eventType }
         })
-        .catch((err: unknown) => this.warnChannelPostFailed(run, err));
+      );
     }
   }
 
@@ -562,12 +582,16 @@ export class OrchestratorV2 {
     };
 
     run.events.push(event);
-    this.artifactStore.appendEvent(run.id, event).catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
-      console.warn(
-        `[orchestrator] appendEvent failed (runId=${run.id} type=${type}): ${message}`
-      );
-    });
+    // Track the append so teardown doesn't race it — same rationale as
+    // channel writes (see trackChannelPost / waitForPendingWrites).
+    this.pendingWrites.push(
+      this.artifactStore.appendEvent(run.id, event).catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[orchestrator] appendEvent failed (runId=${run.id} type=${type}): ${message}`
+        );
+      })
+    );
   }
 
   private recordEvidence(run: HarnessRun, record: EvidenceRecord): void {
@@ -615,6 +639,38 @@ export class OrchestratorV2 {
     console.warn(
       `[orchestrator] channel post failed (runId=${run.id} channelId=${run.channelId}): ${message}`
     );
+  }
+
+  /**
+   * Register a best-effort async write (typically a `postEntry`) so
+   * {@link waitForPendingWrites} can drain it at run completion. The returned
+   * promise never rejects — failures are logged via `warnChannelPostFailed`
+   * but never halt the run. This preserves the historical log-and-continue
+   * semantic while preventing teardown races in tests and real callers who
+   * tear down the artifacts dir immediately after `run()` returns.
+   */
+  private trackChannelPost(
+    run: HarnessRun,
+    promise: Promise<unknown>
+  ): Promise<void> {
+    const tracked: Promise<void> = promise.then(
+      () => undefined,
+      (err: unknown) => this.warnChannelPostFailed(run, err)
+    );
+    this.pendingWrites.push(tracked);
+    return tracked;
+  }
+
+  /**
+   * Drain all tracked best-effort writes. Uses `allSettled` so a single
+   * failure never short-circuits the drain. Clears the tracker on exit so
+   * a second invocation doesn't re-await already-settled promises.
+   */
+  private async waitForPendingWrites(): Promise<void> {
+    if (this.pendingWrites.length === 0) return;
+    const pending = this.pendingWrites;
+    this.pendingWrites = [];
+    await Promise.allSettled(pending);
   }
 }
 
