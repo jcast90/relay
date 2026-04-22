@@ -5,9 +5,8 @@
 <h1 align="center">Relay</h1>
 
 <p align="center">
-  <b>Local-first orchestration for coding agents.</b><br/>
-  Classify a request, decompose it into parallel tickets, dispatch Claude / Codex to execute, verify, and track PRs —
-  all while you supervise from a dashboard.
+  <b>Orchestrate coding agents across repos. Local-first, self-hosted, runs inside your existing Claude / Codex CLI.</b><br/>
+  Relay turns a single request into a plan, decomposes it into tickets, dispatches them to agents across one or more repos, tracks long-running work, and keeps a durable decision log — all on your machine, with no hosted service required.
 </p>
 
 <p align="center">
@@ -22,13 +21,18 @@
 
 Relay turns a sentence, a GitHub issue URL, or a Linear ticket into a **running plan of AI-coded work** — with tickets, verification loops, live PR tracking, and optional human approval gates. Sessions run inside your normal Claude or Codex CLI; Relay wraps them with an MCP server that records everything into Slack-style **channels** you can query later.
 
-The core idea: **you shouldn't keep agents' context in your head.** Plans, tickets, decisions, and cross-session messages all live in `~/.relay/` as JSON files + optional Postgres, readable by the CLI, the terminal TUI, and the desktop GUI.
+**Suitable for individual developers and for teams working inside a company.** Relay runs entirely on your machine (or on infrastructure you control). There is no hosted Relay service, no telemetry, and no phone-home — state stays in `~/.relay/` on disk (optionally backed by your own Postgres). What it's built for:
+
+- **Agent orchestration** — classify, plan, decompose, dispatch, and verify. One request turns into a supervised workflow.
+- **Multi-repo coordination** — sessions running in different repos can discover each other, message, and share context via the crosslink MCP tools.
+- **Long-running work** — background PR tracking, plan-approval gates, and a durable decision log so you can step away and come back.
 
 CLI: **`rly`**.
 
 ## Table of contents
 
 - [Install](#install)
+  - [Install prerequisites (platform notes)](#install-prerequisites-platform-notes)
 - [Quickstart](#quickstart)
 - [How it works](#how-it-works)
 - [Key concepts](#key-concepts)
@@ -85,6 +89,26 @@ Download the `.dmg` / `.AppImage` / `.deb` / `.msi` from the [latest release](ht
 ```bash
 pnpm install && pnpm build && pnpm link --global
 ```
+
+### Install prerequisites (platform notes)
+
+**macOS**: Xcode Command Line Tools (`xcode-select --install`). Nothing else required.
+
+**Ubuntu / Debian** (needed for `--with-gui`): install the Tauri system deps first —
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  libglib2.0-dev \
+  libgtk-3-dev \
+  libwebkit2gtk-4.1-dev \
+  libsoup-3.0-dev \
+  libjavascriptcoregtk-4.1-dev \
+  libayatana-appindicator3-dev \
+  librsvg2-dev
+```
+
+**Windows**: no extra system deps for the CLI. The GUI needs [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) (usually pre-installed on Windows 11).
 
 ### How `rly` finds the source
 
@@ -377,7 +401,7 @@ Verification commands run through an `Executor` abstraction (`src/execution/exec
 | `GITHUB_TOKEN` | GitHub issues + PR watcher |
 | `LINEAR_API_KEY` (or `COMPOSIO_API_KEY`) | Linear issues |
 | `CLAUDE_BIN` | Override the `claude` binary path (default: `claude` on `$PATH`) |
-| `RELAY_QUIET=1` / `--quiet` / `--silent` | Suppress inline tool-use activity during `rly run` |
+| `RELAY_QUIET=1` / `HARNESS_QUIET=1` / `--quiet` / `--silent` | Suppress inline tool-use activity during `rly run` (both env vars honored) |
 | `--sequential` | Use the v1 sequential orchestrator instead of v2 ticket-based |
 | `--no-harness-mcp` | Launch Claude/Codex without attaching the Relay MCP server |
 
