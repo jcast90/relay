@@ -598,6 +598,22 @@ fn delete_session(
     ])
 }
 
+/// AL-9 — kill-switch wiring.
+///
+/// Shells out to `rly session stop <sessionId>`, which atomically drops
+/// a `STOP` file into `~/.relay/sessions/<sessionId>/`. The autonomous
+/// loop polls that path on each tick (≤20s default) and transitions
+/// the lifecycle to `winding_down` with reason `"user-stop-signal"`.
+///
+/// No force-kill: graceful wind-down respects in-flight workers. AL-10
+/// wires the actual "Kill session" button in the session-status header
+/// to this command; AL-9 ships just the Tauri surface + CLI plumbing.
+#[tauri::command]
+fn stop_session(session_id: String) -> Result<serde_json::Value, String> {
+    validate_id_segment(&session_id, "sessionId")?;
+    cli_json(&["session", "stop", &session_id])
+}
+
 #[tauri::command]
 fn append_session_message(
     channel_id: String,
@@ -2077,6 +2093,7 @@ pub fn run() {
             post_to_channel,
             create_session,
             delete_session,
+            stop_session,
             append_session_message,
             rewind_snapshot,
             rewind_apply,

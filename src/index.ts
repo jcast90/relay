@@ -1785,8 +1785,36 @@ async function handleSessionCommand(args: string[]): Promise<void> {
     return;
   }
 
+  if (sub === "stop") {
+    // AL-9: drop a STOP file into `~/.relay/sessions/<sessionId>/` so
+    // the autonomous-loop's next tick flips the lifecycle to
+    // `winding_down`. Positional-only — sessionId is the target of
+    // the stop. Works even if the session dir doesn't exist yet
+    // (writeStopFile creates it), so an operator can race the loop
+    // and still land the signal.
+    const sessionId = extractPositionals(args)[1];
+    if (!sessionId) {
+      console.error("Usage: rly session stop <sessionId>");
+      process.exitCode = 1;
+      return;
+    }
+    const { writeStopFile } = await import("./orchestrator/stop-file-watcher.js");
+    try {
+      const path = await writeStopFile(sessionId, { source: "cli" });
+      jsonOut({ ok: true, sessionId, stopFile: path });
+    } catch (err) {
+      console.error(
+        `Failed to write STOP file for session ${sessionId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   console.error(
-    "Usage: rly session <create|list|get|delete|update-claude-sid|append|update-last|messages>"
+    "Usage: rly session <create|list|get|delete|update-claude-sid|append|update-last|messages|stop>"
   );
   process.exitCode = 1;
 }
