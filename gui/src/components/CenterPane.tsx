@@ -826,6 +826,7 @@ function TicketDetailModal({
                     href={ticket.linearUrl}
                     target="_blank"
                     rel="noopener noreferrer"
+                    className="tracked-pr-link"
                   >
                     Open in Linear
                   </a>
