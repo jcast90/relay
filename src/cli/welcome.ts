@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createInterface, Interface } from "node:readline/promises";
 import { join } from "node:path";
 
@@ -37,6 +37,57 @@ export async function scaffoldConfigEnv(relayDir: string): Promise<ScaffoldResul
   await mkdir(relayDir, { recursive: true });
   await copyFile(template, target);
   return { status: "created", from: template, to: target };
+}
+
+export type WriteConfigEnvKeyResult =
+  | { status: "written"; mode: "replaced" | "appended" }
+  | { status: "missing-config" };
+
+/**
+ * Set `export KEY="value"` inside `~/.relay/config.env`. Prefers replacing an
+ * existing line (commented template line like `# export KEY=""` or a live
+ * `export KEY=...`); appends at the end as a fallback. Re-applies 0600 perms
+ * because the file holds API tokens.
+ *
+ * Exported for unit tests; `runWelcome` calls this per prompted key.
+ */
+export async function writeConfigEnvKey(
+  relayDir: string,
+  key: string,
+  value: string
+): Promise<WriteConfigEnvKeyResult> {
+  const target = join(relayDir, CONFIG_ENV);
+  if (!existsSync(target)) {
+    return { status: "missing-config" };
+  }
+  const escaped = value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\$/g, "\\$")
+    .replace(/`/g, "\\`");
+  const replacement = `export ${key}="${escaped}"`;
+  const lineRe = new RegExp(`^(\\s*#\\s*)?export\\s+${key}\\s*=.*$`);
+
+  const raw = await readFile(target, "utf8");
+  const lines = raw.split("\n");
+  let mode: "replaced" | "appended" = "appended";
+  let found = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (lineRe.test(lines[i])) {
+      lines[i] = replacement;
+      mode = "replaced";
+      found = true;
+      break;
+    }
+  }
+  let next = found ? lines.join("\n") : raw;
+  if (!found) {
+    if (!next.endsWith("\n")) next += "\n";
+    next += `${replacement}\n`;
+  }
+  await writeFile(target, next);
+  await chmod(target, 0o600).catch(() => undefined);
+  return { status: "written", mode };
 }
 
 // Catppuccin-ish ANSI for terminal output. Falls back gracefully on
@@ -109,6 +160,82 @@ async function ask(rl: Interface, prompt: string): Promise<string> {
 async function pause(rl: Interface | null): Promise<void> {
   if (!rl) return;
   await rl.question(`${c.dim}(press Enter to continue, or ^C to quit)${c.reset} `);
+}
+
+interface TokenPrompt {
+  key: string;
+  label: string;
+  url: string;
+  hint: string;
+  disabledCopy: string;
+}
+
+const TOKEN_PROMPTS: TokenPrompt[] = [
+  {
+    key: "GITHUB_TOKEN",
+    label: "GitHub personal access token",
+    url: "https://github.com/settings/tokens",
+    hint: "scopes: repo (private) or public_repo (public only)",
+    disabledCopy: "GitHub issue ingestion + PR watcher stay off; tickets live on the channel board"
+  },
+  {
+    key: "LINEAR_API_KEY",
+    label: "Linear API key",
+    url: "https://linear.app/settings/api",
+    hint: "personal API key — starts with lin_api_",
+    disabledCopy: "Linear issue resolution stays off; tickets live on the channel board"
+  }
+];
+
+async function promptForTokens(
+  rl: Interface,
+  relayDir: string,
+  alreadySet: { github: boolean; linear: boolean }
+): Promise<void> {
+  const missing = TOKEN_PROMPTS.filter((t) => {
+    if (t.key === "GITHUB_TOKEN") return !alreadySet.github;
+    if (t.key === "LINEAR_API_KEY") return !alreadySet.linear;
+    return true;
+  });
+  if (missing.length === 0) return;
+
+  p("");
+  const opener = (
+    await ask(
+      rl,
+      `Add API tokens now? (optional — skip any you don't have) [Y/n]`
+    )
+  ).toLowerCase();
+  if (opener !== "" && opener !== "y" && opener !== "yes") {
+    p(`  ${c.dim}Skipped — you can edit${c.reset} ${c.bold}~/.relay/config.env${c.reset} ${c.dim}later.${c.reset}`);
+    return;
+  }
+
+  p("");
+  p(`  ${c.dim}Note: tokens you paste are visible in this terminal. They're written to${c.reset}`);
+  p(`  ${c.dim}~/.relay/config.env (chmod 600).${c.reset}`);
+
+  for (const t of missing) {
+    p("");
+    p(`  ${c.bold}${t.label}${c.reset}  ${c.dim}${t.url}${c.reset}`);
+    p(`    ${c.dim}${t.hint}${c.reset}`);
+    const value = await ask(rl, `    paste ${t.key} (or press Enter to skip):`);
+    if (!value) {
+      p(`    ${c.dim}Skipped — ${t.disabledCopy}.${c.reset}`);
+      continue;
+    }
+    const result = await writeConfigEnvKey(relayDir, t.key, value);
+    if (result.status === "written") {
+      p(`    ${c.green}✓${c.reset} ${t.key} saved (${result.mode})`);
+    } else {
+      p(`    ${c.peach}!${c.reset} ~/.relay/config.env missing — run install.sh or rerun welcome.`);
+      return;
+    }
+  }
+
+  p("");
+  p(`  ${c.dim}When you're ready to use these in the current shell:${c.reset}`);
+  p(`  ${c.bold}source ~/.relay/config.env${c.reset}`);
 }
 
 async function readTokensFromConfig(): Promise<{
@@ -191,6 +318,7 @@ export async function runWelcome(options: WelcomeOptions): Promise<number> {
     // If config.env is missing, offer to scaffold it so the user doesn't
     // hit runtime errors later from a missing file. Interactive flows prompt;
     // non-interactive flows just print the cp command.
+    let configReady = configEnvExists;
     if (!configEnvExists) {
       if (rl) {
         const answer = (
@@ -203,10 +331,10 @@ export async function runWelcome(options: WelcomeOptions): Promise<number> {
           const result = await scaffoldConfigEnv(relayDir);
           if (result.status === "created") {
             p(`  ${c.green}✓${c.reset} Created ${result.to}`);
-            p(`    ${c.dim}Open it and fill in your tokens, then:${c.reset}`);
-            p(`    source ~/.relay/config.env    ${c.dim}# or add to ~/.zshrc${c.reset}`);
+            configReady = true;
           } else if (result.status === "already-exists") {
             p(`  ${c.dim}Already exists at ${result.path} — left untouched.${c.reset}`);
+            configReady = true;
           } else {
             p(`  ${c.peach}!${c.reset} Template not found at ${result.expectedTemplate}.`);
             p(`    ${c.dim}Re-run install.sh to drop it in, or create config.env by hand.${c.reset}`);
@@ -221,7 +349,11 @@ export async function runWelcome(options: WelcomeOptions): Promise<number> {
         p(`    ${c.dim}# fill in tokens${c.reset}`);
         p(`    source ~/.relay/config.env    ${c.dim}# or add to ~/.zshrc${c.reset}`);
       }
-    } else if (!tokens.github) {
+    }
+
+    if (rl && configReady && (!tokens.github || !tokens.linear)) {
+      await promptForTokens(rl, relayDir, tokens);
+    } else if (!rl && configReady && !tokens.github) {
       p(`  ${c.dim}To enable GitHub/Linear, open${c.reset} ${c.bold}~/.relay/config.env${c.reset} ${c.dim}and fill in tokens, then:${c.reset}`);
       p(`    source ~/.relay/config.env    ${c.dim}# or add to ~/.zshrc${c.reset}`);
     }
