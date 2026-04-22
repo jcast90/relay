@@ -260,7 +260,11 @@ Right pane shows repo assignments (with `PRIMARY` badge), pinned refs, and — w
 | `rly board <channelId>` | Kanban view of the ticket board |
 | `rly decisions <channelId>` | Decision history |
 | `rly pr-watch <url-or-#> [--branch <b>] [--ticket <id>] [--channel <id>]` | Manually track a PR |
-| `rly pr-status [--json]` | List tracked PRs with CI + review state |
+| `rly pr-status [--channel <id>] [--json]` | List tracked PRs with CI + review state (reads the on-disk mirror when no orchestrator is running) |
+| `rly approve <runId>` | Approve a pending plan (same code path as `harness_approve_plan` MCP tool) |
+| `rly reject <runId> [--feedback "…"]` | Reject a pending plan |
+| `rly pending-plans [--json]` | List runs awaiting plan-approval decisions |
+| `rly chat rewind --channel <id> --session <id> [--to <iso> \| --interactive]` | Roll repos + session transcript back to a rewindable user turn |
 | `rly crosslink status` | Active cross-session chatter |
 | `rly tui` | Terminal dashboard (auto-builds on first run) |
 | `rly gui [--dev] [--rebuild]` | Desktop dashboard |
@@ -378,6 +382,7 @@ Verification commands run through an `Executor` abstraction (`src/execution/exec
     feed.jsonl                # append-only feed
     tickets.json              # unified ticket board
     runs.json                 # linked orchestrator runs
+    tracked-prs.json          # PR-watcher mirror (read by TUI/GUI pr-status surfaces)
     decisions/<id>.json       # one file per decision (atomic writes)
     sessions/<sessionId>.jsonl
     spawns.json               # spawned-agent tracking (GUI, all platforms)

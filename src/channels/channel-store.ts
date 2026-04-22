@@ -16,6 +16,7 @@ import {
   type RepoAssignment
 } from "../domain/channel.js";
 import { buildDecisionId, type Decision } from "../domain/decision.js";
+import type { TrackedPrRow } from "../domain/pr-row.js";
 import type { TicketLedgerEntry } from "../domain/ticket.js";
 import { buildHarnessStore } from "../storage/factory.js";
 import { STORE_NS } from "../storage/namespaces.js";
@@ -478,6 +479,52 @@ export class ChannelStore {
     } catch {
       return [];
     }
+  }
+
+  // --- Tracked PRs (PR watcher mirror, channel-scoped) ---
+  //
+  // `PrPoller` holds tracked rows in-memory only. We mirror a snapshot to
+  // `channels/<channelId>/tracked-prs.json` (atomic tmp-rename) so the TUI
+  // and GUI can render the same `rly pr-status` columns without reaching
+  // into the live watcher. Writers are the CLI (pr-watcher-factory sink);
+  // readers are the Rust crate (`load_tracked_prs`) and the `pr-status`
+  // command when no active watcher is present.
+
+  async readTrackedPrs(channelId: string): Promise<TrackedPrRow[]> {
+    const path = join(this.channelsDir, channelId, "tracked-prs.json");
+    try {
+      const raw = await readFile(path, "utf8");
+      const parsed = JSON.parse(raw) as { rows?: TrackedPrRow[] };
+      return Array.isArray(parsed?.rows) ? parsed.rows : [];
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+      // Any other failure surfaces so a corrupt file isn't silently
+      // overwritten by the next snapshot.
+      throw new Error(
+        `Failed to read tracked-prs at ${path}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+  }
+
+  async writeTrackedPrs(
+    channelId: string,
+    rows: TrackedPrRow[]
+  ): Promise<void> {
+    const channelDir = join(this.channelsDir, channelId);
+    await mkdir(channelDir, { recursive: true });
+    const path = join(channelDir, "tracked-prs.json");
+    const tmpPath = `${path}.tmp.${process.pid}.${channelTicketsTmpCounter++}`;
+    await writeFile(
+      tmpPath,
+      JSON.stringify(
+        { updatedAt: new Date().toISOString(), rows },
+        null,
+        2
+      )
+    );
+    await rename(tmpPath, path);
   }
 
   // --- Ticket board (channel-scoped, unified across chat + orchestrator) ---

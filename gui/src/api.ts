@@ -6,12 +6,14 @@ import type {
   ChannelRunLink,
   ChatSession,
   Decision,
+  PendingPlan,
   PersistedChatMessage,
   RewindResult,
   RewindSnapshot,
   RunIndexEntry,
   Spawn,
   TicketLedgerEntry,
+  TrackedPrRow,
   WorkspaceEntry,
   AgentNameEntry,
 } from "./types";
@@ -145,6 +147,17 @@ export const api = {
     invoke<Spawn[]>("list_spawns", { channelId }),
   killSpawnedAgent: (channelId: string, alias: string) =>
     invoke<void>("kill_spawned_agent", { channelId, alias }),
+
+  // OSS-05: Parity commands — tracked-PR mirror + plan approval. These
+  // shell out to the same `rly approve` / `rly reject` commands the CLI
+  // uses, so there's exactly one code path that writes approval records.
+  listTrackedPrs: (channelId: string) =>
+    invoke<TrackedPrRow[]>("list_tracked_prs", { channelId }),
+  listPendingPlans: () => invoke<PendingPlan[]>("list_pending_plans"),
+  approvePlan: (runId: string) =>
+    invoke<unknown>("approve_plan", { runId }),
+  rejectPlan: (runId: string, feedback?: string) =>
+    invoke<unknown>("reject_plan", { runId, feedback }),
 };
 
 export type ChatEvent =

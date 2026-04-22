@@ -54,6 +54,47 @@ function scriptedScm(series: Array<Map<string, EnrichedPR>>): HarnessScm {
 }
 
 describe("PrPoller", () => {
+  it("fires onSnapshot sink on track/untrack and after tick (OSS-05)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pr-poller-snapshot-"));
+    const store = new ChannelStore(dir);
+    try {
+      const channel = await store.createChannel({ name: "#pr-snap", description: "" });
+      const enqueueFollowUp = vi.fn<(req: FollowUpRequest) => Promise<string>>(
+        async () => "followup-id"
+      );
+      const scheduler: FollowUpDispatcher = { enqueueFollowUp };
+      const scm = scriptedScm([
+        new Map([["acme/widgets#42", seed({ ci: "passing" })]])
+      ]);
+      const snapshots: Array<ReadonlyArray<unknown>> = [];
+      const poller = new PrPoller({
+        scm,
+        channelStore: store,
+        scheduler,
+        onSnapshot: (rows) => {
+          snapshots.push([...rows]);
+        }
+      });
+      poller.track(makeTracked(channel.channelId));
+      expect(snapshots.length).toBeGreaterThanOrEqual(1);
+      expect(snapshots[snapshots.length - 1]).toHaveLength(1);
+
+      await poller.tick();
+      const afterTick = snapshots[snapshots.length - 1] as Array<{
+        ticketId: string;
+        last: unknown;
+      }>;
+      expect(afterTick).toHaveLength(1);
+      expect(afterTick[0].ticketId).toBe("T-1");
+      expect(afterTick[0].last).not.toBeNull();
+
+      poller.untrack("T-1");
+      expect(snapshots[snapshots.length - 1]).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("first tick seeds state without firing events or enqueuing follow-ups", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pr-poller-seed-"));
     const store = new ChannelStore(dir);

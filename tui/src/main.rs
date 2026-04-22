@@ -59,6 +59,8 @@ pub enum Tab {
     Chat,
     Board,
     Decisions,
+    /// Tracked PRs for the selected channel — mirrors `rly pr-status` output.
+    Prs,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -70,6 +72,10 @@ pub enum InputMode {
     RepoSelect,
     /// Browsing chat session history
     SessionSelect,
+    /// Picking a message to rewind to (from the active session)
+    RewindSelect,
+    /// Confirm-approve the currently-selected pending plan
+    ApprovePlan,
 }
 
 #[derive(Clone, Debug)]
@@ -315,6 +321,26 @@ pub struct App {
     pub active_session: Option<data::ChatSession>,
     pub session_list: Vec<data::ChatSession>,
     pub session_cursor: usize,
+
+    // Rewind picker state (list of rewindable user messages for the active session)
+    pub rewind_candidates: Vec<(usize, data::PersistedChatMessage)>,
+    pub rewind_cursor: usize,
+
+    // PR watcher mirror — tracked PRs for the selected channel
+    pub tracked_prs: Vec<data::TrackedPrRow>,
+    pub prs_scroll: usize,
+
+    // Pending plans (runs in AWAITING_APPROVAL state with no approval record)
+    pub pending_plans: Vec<PendingPlan>,
+    pub pending_plan_cursor: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct PendingPlan {
+    pub run_id: String,
+    pub workspace_id: String,
+    pub feature_request: String,
+    pub channel_id: Option<String>,
 }
 
 impl App {
@@ -364,6 +390,12 @@ impl App {
             active_session: None,
             session_list: Vec::new(),
             session_cursor: 0,
+            rewind_candidates: Vec::new(),
+            rewind_cursor: 0,
+            tracked_prs: Vec::new(),
+            prs_scroll: 0,
+            pending_plans: Vec::new(),
+            pending_plan_cursor: 0,
         }
     }
 
@@ -593,6 +625,7 @@ impl App {
         if let Some(ch) = selected {
             self.feed = load_channel_feed(&ch.channel_id, 200);
             self.decisions = load_channel_decisions(&ch.channel_id);
+            self.tracked_prs = data::load_tracked_prs(&ch.channel_id);
 
             self.tickets.clear();
             // Load tickets from orchestrator runs
@@ -608,15 +641,28 @@ impl App {
             self.feed.clear();
             self.tickets.clear();
             self.decisions.clear();
+            self.tracked_prs.clear();
         }
 
         self.active_runs.clear();
+        self.pending_plans.clear();
         let mut seen_run_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
         for ws in load_workspaces() {
             for run in load_runs_for_workspace(&ws.workspace_id) {
                 // Skip runs that have completed_at set — they finished (or crashed) even if state wasn't updated
                 let truly_active = is_active_state(&run.state) && run.completed_at.is_none();
                 if truly_active && seen_run_ids.insert(run.run_id.clone()) {
+                    // A run is pending approval if its state says so AND no
+                    // approval record has been written yet (otherwise it's
+                    // decided, the orchestrator just hasn't tocked).
+                    if data::is_awaiting_approval(&run) {
+                        self.pending_plans.push(PendingPlan {
+                            run_id: run.run_id.clone(),
+                            workspace_id: ws.workspace_id.clone(),
+                            feature_request: run.feature_request.clone(),
+                            channel_id: run.channel_id.clone(),
+                        });
+                    }
                     self.active_runs.push(ActiveRun {
                         run_id: run.run_id,
                         state: run.state,
@@ -630,6 +676,9 @@ impl App {
                     });
                 }
             }
+        }
+        if self.pending_plan_cursor >= self.pending_plans.len() {
+            self.pending_plan_cursor = 0;
         }
 
         // Clamp scroll positions after data refresh
@@ -907,6 +956,7 @@ impl App {
             Tab::Chat => self.chat_messages.len(),
             Tab::Board => self.sorted_ticket_indices().len(),
             Tab::Decisions => self.decisions.len(),
+            Tab::Prs => self.tracked_prs.len(),
         }
     }
 
@@ -915,6 +965,7 @@ impl App {
             Tab::Chat => self.chat_scroll,
             Tab::Board => self.board_scroll,
             Tab::Decisions => self.decisions_scroll,
+            Tab::Prs => self.prs_scroll,
         }
     }
 
@@ -923,6 +974,7 @@ impl App {
             Tab::Chat => self.chat_scroll = val,
             Tab::Board => self.board_scroll = val,
             Tab::Decisions => self.decisions_scroll = val,
+            Tab::Prs => self.prs_scroll = val,
         }
     }
 
@@ -946,7 +998,12 @@ impl App {
     }
 
     fn handle_mouse(&mut self, event: MouseEvent) {
-        if self.show_detail || self.input_mode == InputMode::NewChannel || self.input_mode == InputMode::RepoSelect || self.input_mode == InputMode::SessionSelect {
+        if self.show_detail
+            || self.input_mode == InputMode::NewChannel
+            || self.input_mode == InputMode::RepoSelect
+            || self.input_mode == InputMode::SessionSelect
+            || self.input_mode == InputMode::RewindSelect
+            || self.input_mode == InputMode::ApprovePlan {
             return;
         }
 
@@ -979,6 +1036,11 @@ impl App {
                             Tab::Decisions => {
                                 if self.decisions_scroll < self.decisions.len().saturating_sub(1) {
                                     self.decisions_scroll += 1;
+                                }
+                            }
+                            Tab::Prs => {
+                                if self.prs_scroll < self.tracked_prs.len().saturating_sub(1) {
+                                    self.prs_scroll += 1;
                                 }
                             }
                         }
@@ -1016,6 +1078,9 @@ impl App {
                             }
                             Tab::Decisions => {
                                 self.decisions_scroll = self.decisions_scroll.saturating_sub(1);
+                            }
+                            Tab::Prs => {
+                                self.prs_scroll = self.prs_scroll.saturating_sub(1);
                             }
                         }
                     }
@@ -1218,6 +1283,18 @@ impl App {
         // Repo selection popup
         if self.input_mode == InputMode::RepoSelect {
             self.handle_repo_select_key(code);
+            return;
+        }
+
+        // Rewind picker
+        if self.input_mode == InputMode::RewindSelect {
+            self.handle_rewind_select_key(code);
+            return;
+        }
+
+        // Approve plan confirm
+        if self.input_mode == InputMode::ApprovePlan {
+            self.handle_approve_plan_key(code);
             return;
         }
 
@@ -1485,19 +1562,22 @@ impl App {
                 self.active_tab = match self.active_tab {
                     Tab::Chat => Tab::Board,
                     Tab::Board => Tab::Decisions,
-                    Tab::Decisions => Tab::Chat,
+                    Tab::Decisions => Tab::Prs,
+                    Tab::Prs => Tab::Chat,
                 };
             }
             KeyCode::BackTab => {
                 self.active_tab = match self.active_tab {
-                    Tab::Chat => Tab::Decisions,
+                    Tab::Chat => Tab::Prs,
                     Tab::Board => Tab::Chat,
                     Tab::Decisions => Tab::Board,
+                    Tab::Prs => Tab::Decisions,
                 };
             }
             KeyCode::Char('1') => self.active_tab = Tab::Chat,
             KeyCode::Char('2') => self.active_tab = Tab::Board,
             KeyCode::Char('3') => self.active_tab = Tab::Decisions,
+            KeyCode::Char('4') => self.active_tab = Tab::Prs,
 
             // Open detail
             KeyCode::Enter => self.open_detail(),
@@ -1516,6 +1596,23 @@ impl App {
             // Add/edit repos on current channel
             KeyCode::Char('r') => {
                 self.open_repo_editor();
+            }
+
+            // Rewind picker for the active session (Shift+r so it stays
+            // a single key for users and doesn't clash with 'r' for repo
+            // editor).
+            KeyCode::Char('R') => {
+                self.open_rewind_picker();
+            }
+
+            // Approve the currently-selected pending plan (if any). Non-blocking
+            // — shells out to `rly approve <runId>` so the same code path as the
+            // CLI and MCP tool is used. 'A' opens an in-panel confirm dialog so
+            // a single stray keypress doesn't approve by accident.
+            KeyCode::Char('a') => {
+                if !self.pending_plans.is_empty() {
+                    self.input_mode = InputMode::ApprovePlan;
+                }
             }
 
             // Session history
@@ -1937,6 +2034,120 @@ impl App {
             filtering: false,
         });
         self.input_mode = InputMode::RepoSelect;
+    }
+
+    /// Load the list of user messages from the active session that carry a
+    /// `rewindKey` metadata tag — those are the only ones `rewindApply` can
+    /// actually restore. Opens the picker on top of the current view.
+    fn open_rewind_picker(&mut self) {
+        let ch_id = match self.current_channel_id() {
+            Some(id) => id,
+            None => return,
+        };
+        let session_id = match self.active_session.as_ref().map(|s| s.session_id.clone()) {
+            Some(id) => id,
+            None => return,
+        };
+        let messages = data::load_session_chat(&ch_id, &session_id, 500);
+        let candidates: Vec<(usize, data::PersistedChatMessage)> = messages
+            .into_iter()
+            .enumerate()
+            .filter(|(_, m)| {
+                m.role == "user" && m.metadata.get("rewindKey").is_some()
+            })
+            .collect();
+        if candidates.is_empty() {
+            return;
+        }
+        self.rewind_cursor = candidates.len().saturating_sub(1);
+        self.rewind_candidates = candidates;
+        self.input_mode = InputMode::RewindSelect;
+    }
+
+    fn handle_rewind_select_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.input_mode = InputMode::Normal;
+                self.rewind_candidates.clear();
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                if self.rewind_cursor < self.rewind_candidates.len().saturating_sub(1) {
+                    self.rewind_cursor += 1;
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if self.rewind_cursor > 0 {
+                    self.rewind_cursor -= 1;
+                }
+            }
+            KeyCode::Enter => {
+                let (ch_id, session_id) = match (
+                    self.current_channel_id(),
+                    self.active_session.as_ref().map(|s| s.session_id.clone()),
+                ) {
+                    (Some(c), Some(s)) => (c, s),
+                    _ => {
+                        self.input_mode = InputMode::Normal;
+                        return;
+                    }
+                };
+                let target = match self.rewind_candidates.get(self.rewind_cursor) {
+                    Some(t) => t.1.clone(),
+                    None => {
+                        self.input_mode = InputMode::Normal;
+                        return;
+                    }
+                };
+                // Shell out to the CLI so the same code path as `rly chat rewind`
+                // is exercised. Non-interactive form keeps the TUI from blocking
+                // on a prompt. We ignore the output — a refresh picks up the new
+                // state.
+                cli_json(&[
+                    "chat",
+                    "rewind",
+                    "--channel",
+                    &ch_id,
+                    "--session",
+                    &session_id,
+                    "--to",
+                    &target.timestamp,
+                ]);
+                // After rewind, Claude session IDs are cleared; drop workers
+                // so the next message starts a fresh conversation.
+                self.workers.clear();
+                self.active_worker_alias = None;
+                self.input_mode = InputMode::Normal;
+                self.rewind_candidates.clear();
+                self.load_chat_for_channel();
+                self.respawn_workers_with_session();
+                self.refresh();
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_approve_plan_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('n') => {
+                self.input_mode = InputMode::Normal;
+            }
+            KeyCode::Char('y') | KeyCode::Enter => {
+                if let Some(plan) = self.pending_plans.get(self.pending_plan_cursor).cloned() {
+                    cli_json(&["approve", &plan.run_id]);
+                }
+                self.input_mode = InputMode::Normal;
+                self.refresh();
+            }
+            KeyCode::Char('r') => {
+                // Reject (no feedback from the TUI — that's a CLI-only flag).
+                if let Some(plan) = self.pending_plans.get(self.pending_plan_cursor).cloned() {
+                    cli_json(&["reject", &plan.run_id]);
+                }
+                self.input_mode = InputMode::Normal;
+                self.refresh();
+            }
+            _ => {}
+        }
     }
 
     fn open_session_picker(&mut self) {

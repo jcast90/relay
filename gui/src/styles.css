@@ -789,3 +789,83 @@ button.primary { background: var(--accent-dim); border-color: var(--accent); }
   border-color: var(--error);
   background: rgba(243, 139, 168, 0.08);
 }
+
+/* --- OSS-05 parity additions --- */
+
+/* Plan-approval CTA card shown above tabs in CenterPane */
+.plan-cta {
+  border-bottom: 1px solid var(--border);
+  background: rgba(249, 226, 175, 0.08);
+  padding: 8px 12px;
+}
+.plan-cta-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+}
+.plan-cta-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.plan-cta-feature {
+  font-size: 12px;
+  color: var(--text);
+}
+.plan-cta-meta {
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.plan-cta-buttons {
+  display: flex;
+  gap: 6px;
+}
+.plan-cta-buttons button {
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
+/* Tracked-PR strip in RightPane */
+.tracked-pr-row {
+  align-items: center;
+}
+.tracked-pr-ticket {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.tracked-pr-link {
+  color: var(--accent, #89b4fa);
+  text-decoration: none;
+  font-weight: 600;
+}
+.tracked-pr-link:hover {
+  text-decoration: underline;
+}
+.tracked-pr-badges {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.pr-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+.pr-state-open { background: #a6e3a1; }
+.pr-state-merged { background: #cba6f7; }
+.pr-state-closed { background: var(--text-dim); }
+.pr-ci-passing { background: #a6e3a1; }
+.pr-ci-failing { background: #f38ba8; }
+.pr-ci-pending { background: #f9e2af; }
+.pr-ci-none { background: var(--text-dim); }
+.pr-review-approved { background: #a6e3a1; }
+.pr-review-changes_requested { background: #f38ba8; }
+.pr-review-pending { background: #f9e2af; }
+.pr-review-none { background: var(--text-dim); }

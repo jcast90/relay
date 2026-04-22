@@ -172,6 +172,54 @@ pub struct ChannelRunLink {
     pub workspace_id: String,
 }
 
+// --- Tracked PRs ---
+//
+// Written by the CLI's PR watcher (see `src/cli/pr-watcher-factory.ts`
+// `persistSnapshot`) to `channels/<channel_id>/tracked-prs.json` on every
+// poll tick. Shape mirrors `TrackedPrRowSchema` in
+// `src/domain/pr-row.ts` — keep these in sync. Optional CI/review/state
+// fields are null when the row has been tracked but not yet polled.
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackedPrRow {
+    pub ticket_id: String,
+    pub channel_id: String,
+    pub owner: String,
+    pub name: String,
+    pub number: u64,
+    pub url: String,
+    pub branch: String,
+    pub ci: Option<String>,
+    pub review: Option<String>,
+    pub pr_state: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TrackedPrFile {
+    #[serde(default)]
+    pub rows: Vec<TrackedPrRow>,
+}
+
+// --- Run Approval Record ---
+//
+// Mirrors what `submitApproval()` writes via the artifact store — a
+// `<runId>__approval.json` under `run-artifacts/` in the global relay root
+// (see `storage/file-store.ts`). When present it means someone has already
+// decided on the plan; absent + run state `AWAITING_APPROVAL` means a plan
+// is pending.
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalRecord {
+    pub run_id: String,
+    pub decision: String,
+    #[serde(default)]
+    pub feedback: Option<String>,
+    pub timestamp: String,
+}
+
 // --- Global Config ---
 
 #[derive(Debug, Deserialize)]
@@ -327,6 +375,35 @@ pub fn load_channel_run_links(channel_id: &str) -> Vec<ChannelRunLink> {
         .join(channel_id)
         .join("runs.json");
     load_json::<Vec<ChannelRunLink>>(&path).unwrap_or_default()
+}
+
+/// Load the persisted tracked-PR snapshot for a channel.
+/// Returns an empty vec when the file is missing or malformed — callers
+/// treat "no file" and "no tracked rows" identically.
+pub fn load_tracked_prs(channel_id: &str) -> Vec<TrackedPrRow> {
+    let path = harness_root()
+        .join("channels")
+        .join(channel_id)
+        .join("tracked-prs.json");
+    load_json::<TrackedPrFile>(&path)
+        .map(|f| f.rows)
+        .unwrap_or_default()
+}
+
+/// Load the approval record for a run, if one has been written. Returns
+/// None when no decision has been recorded.
+pub fn load_approval_record(run_id: &str) -> Option<ApprovalRecord> {
+    let path = harness_root()
+        .join("run-artifacts")
+        .join(format!("{}__approval.json", run_id));
+    load_json::<ApprovalRecord>(&path)
+}
+
+/// Is this run waiting on a plan-approval decision? True when the run's
+/// state is `AWAITING_APPROVAL` *and* no approval record has been written
+/// yet. Matches the CLI's `rly pending-plans` semantics.
+pub fn is_awaiting_approval(run: &RunIndexEntry) -> bool {
+    run.state == "AWAITING_APPROVAL" && load_approval_record(&run.run_id).is_none()
 }
 
 pub fn load_channel_decisions(channel_id: &str) -> Vec<Decision> {

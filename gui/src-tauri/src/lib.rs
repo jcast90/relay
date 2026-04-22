@@ -121,6 +121,68 @@ fn list_agent_names() -> Vec<data::AgentNameEntry> {
     data::load_agent_names()
 }
 
+#[tauri::command]
+fn list_tracked_prs(channel_id: String) -> Result<Vec<data::TrackedPrRow>, String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    Ok(data::load_tracked_prs(&channel_id))
+}
+
+/// Entries returned from `list_pending_plans`. Optional `channel_id` is
+/// surfaced so the GUI can filter per-channel without re-reading the runs
+/// index.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingPlan {
+    run_id: String,
+    workspace_id: String,
+    feature_request: String,
+    channel_id: Option<String>,
+    state: String,
+    updated_at: String,
+}
+
+#[tauri::command]
+fn list_pending_plans() -> Vec<PendingPlan> {
+    let mut out = Vec::new();
+    for ws in data::load_workspaces() {
+        for run in data::load_runs_for_workspace(&ws.workspace_id) {
+            if data::is_awaiting_approval(&run) {
+                out.push(PendingPlan {
+                    run_id: run.run_id.clone(),
+                    workspace_id: ws.workspace_id.clone(),
+                    feature_request: run.feature_request.clone(),
+                    channel_id: run.channel_id.clone(),
+                    state: run.state.clone(),
+                    updated_at: run.updated_at.clone(),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Approve a pending plan by shelling out to `rly approve <runId>`. Surfaces
+/// the CLI's JSON output directly so the GUI can render errors.
+#[tauri::command]
+fn approve_plan(run_id: String) -> Result<serde_json::Value, String> {
+    validate_id_segment(&run_id, "runId")?;
+    cli_json(&["approve", &run_id])
+}
+
+#[tauri::command]
+fn reject_plan(
+    run_id: String,
+    feedback: Option<String>,
+) -> Result<serde_json::Value, String> {
+    validate_id_segment(&run_id, "runId")?;
+    let mut args: Vec<&str> = vec!["reject", &run_id];
+    if let Some(ref fb) = feedback {
+        args.push("--feedback");
+        args.push(fb);
+    }
+    cli_json(&args)
+}
+
 #[derive(Serialize)]
 struct CliResult {
     success: bool,
@@ -1820,6 +1882,10 @@ pub fn run() {
             spawn_agent,
             kill_spawned_agent,
             list_spawns,
+            list_tracked_prs,
+            list_pending_plans,
+            approve_plan,
+            reject_plan,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
