@@ -27,6 +27,7 @@ export const api = {
   listFeed: (channelId: string, limit = 200) =>
     invoke<ChannelEntry[]>("list_feed", { channelId, limit }),
   listSessions: (channelId: string) => invoke<ChatSession[]>("list_sessions", { channelId }),
+  listSessionCounts: () => invoke<Record<string, number>>("list_session_counts"),
   loadSession: (channelId: string, sessionId: string, limit = 500) =>
     invoke<PersistedChatMessage[]>("load_session", {
       channelId,

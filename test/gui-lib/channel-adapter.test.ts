@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  aliasToWorkspaceId,
+  channelAliases,
   humanizeRelative,
+  mentionContext,
   primaryAlias,
   toUiChannel,
-  aliasToWorkspaceId,
   workspaceIdToAlias,
 } from "../../gui/src/lib/channel";
 import type { Channel } from "../../gui/src/types";
@@ -56,14 +58,19 @@ describe("primaryAlias", () => {
 describe("toUiChannel", () => {
   it("lowercases aliases so mention lookup is case-insensitive end-to-end", () => {
     const ui = toUiChannel(baseChannel);
-    expect(ui.repos).toEqual(["be", "ui"]);
+    expect(channelAliases(ui)).toEqual(["be", "ui"]);
     expect(ui.primaryRepo).toBe("be");
   });
 
   it("orders repos with primary first", () => {
     const c: Channel = { ...baseChannel, primaryWorkspaceId: "ws-ui" };
     const ui = toUiChannel(c);
-    expect(ui.repos[0]).toBe("ui");
+    expect(channelAliases(ui)[0]).toBe("ui");
+  });
+
+  it("mentionContext returns just the fields renderWithMentions consumes", () => {
+    const ctx = mentionContext(toUiChannel(baseChannel));
+    expect(ctx).toEqual({ repos: ["be", "ui"], primaryRepo: "be" });
   });
 
   it("projects description to topic and populates humanized activeAt", () => {

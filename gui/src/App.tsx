@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
+import { useAppearance } from "./lib/appearance";
 import type { Channel, GuiSettings } from "./types";
 import { CenterPane } from "./components/CenterPane";
 import { NewChannelModal } from "./components/NewChannelModal";
@@ -28,6 +29,9 @@ export function App() {
       return true;
     }
   });
+  const [sessionCounts, setSessionCounts] = useState<Record<string, number>>({});
+  const [runningStreams, setRunningStreams] = useState<number>(0);
+  const [appearance] = useAppearance();
 
   // Stable identity so effects that depend on it (CenterPane's chat-event
   // subscription) don't tear down on every parent render — we also run a
@@ -79,13 +83,24 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    // Session counts power the Sidebar Threads row. Polled on the same
+    // refresh cadence as channels; silently empty on failure.
+    api
+      .listSessionCounts()
+      .then(setSessionCounts)
+      .catch(() => setSessionCounts({}));
+  }, [refreshTick]);
+
+  useEffect(() => {
     setSessionId(null);
   }, [selectedId]);
 
   const selected = channels.find((c) => c.channelId === selectedId) ?? null;
 
   return (
-    <div className={`app ${rightRailOpen ? "" : "rail-collapsed"}`}>
+    <div
+      className={`app density-${appearance.density} ${rightRailOpen ? "" : "rail-collapsed"}`}
+    >
       <WorkspaceRail onOpenSettings={() => setSettingsOpen(true)} />
       {settingsOpen && settings ? (
         <div style={{ gridColumn: "2 / -1", display: "flex", minHeight: 0 }}>
@@ -101,6 +116,8 @@ export function App() {
             channels={channels}
             selectedId={selectedId}
             includeArchived={includeArchived}
+            sessionCounts={sessionCounts}
+            runningStreams={runningStreams}
             onSelect={setSelectedId}
             onNewChannel={() => setModalOpen(true)}
             onNewDm={() => setDmModalOpen(true)}
@@ -116,6 +133,7 @@ export function App() {
             onToggleRail={() => setRightRailOpen((v) => !v)}
             onRefresh={refresh}
             onSessionCreated={setSessionId}
+            onStreamingChanged={setRunningStreams}
             onChannelRemoved={(id) => {
               if (selectedId === id) setSelectedId(null);
               refresh();

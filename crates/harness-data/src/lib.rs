@@ -100,6 +100,29 @@ pub enum ChannelTier {
     Question,
 }
 
+/// Heuristic tier classifier — keyword match over name + description. Runs
+/// inline (no LLM round-trip) so `create_channel` can stamp a default tier
+/// immediately; the user can override via the About tab, and the real
+/// orchestrator classifier can refine it later.
+pub fn classify_tier_heuristic(name: &str, description: &str) -> ChannelTier {
+    let hay = format!("{} {}", name, description).to_lowercase();
+    let has = |needles: &[&str]| needles.iter().any(|n| hay.contains(n));
+
+    if hay.contains('?') || has(&["question", "help ", "how do", "what is", "why does"]) {
+        return ChannelTier::Question;
+    }
+    if has(&["bug", "fix", "regression", "crash", "error", "broken", "hotfix"]) {
+        return ChannelTier::Bugfix;
+    }
+    if has(&["chore", "refactor", "cleanup", "clean up", "deps", "dependency", "upgrade", "lint"]) {
+        return ChannelTier::Chore;
+    }
+    if has(&["rewrite", "redesign", "overhaul", "migration", "rebuild", "v2", "v3", "major"]) {
+        return ChannelTier::FeatureLarge;
+    }
+    ChannelTier::Feature
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Channel {
@@ -1432,6 +1455,7 @@ mod tests {
             tier: None,
             starred: false,
             full_access: None,
+            kind: None,
             created_at: Some("2026-01-01T00:00:00Z".to_string()),
             updated_at: Some("2026-01-01T00:00:00Z".to_string()),
         }
@@ -1537,5 +1561,59 @@ mod tests {
         let json = r#"{"ticketProvider":"jira","linearApiToken":"","linearWorkspace":"","linearPollSeconds":30,"rightRailOpen":true}"#;
         let parsed: GuiSettings = serde_json::from_str(json).expect("parse ok");
         assert_eq!(parsed.ticket_provider, TicketProvider::Unknown);
+    }
+
+    // --- tier heuristic -------------------------------------------------------
+
+    #[test]
+    fn tier_heuristic_classifies_bugs() {
+        assert_eq!(
+            classify_tier_heuristic("login-bug", "fix the crash on signin"),
+            ChannelTier::Bugfix
+        );
+        assert_eq!(
+            classify_tier_heuristic("regression", ""),
+            ChannelTier::Bugfix
+        );
+    }
+
+    #[test]
+    fn tier_heuristic_classifies_chores() {
+        assert_eq!(
+            classify_tier_heuristic("bump-deps", "upgrade axios dependency"),
+            ChannelTier::Chore
+        );
+        assert_eq!(
+            classify_tier_heuristic("cleanup", "refactor the store"),
+            ChannelTier::Chore
+        );
+    }
+
+    #[test]
+    fn tier_heuristic_classifies_questions() {
+        assert_eq!(
+            classify_tier_heuristic("help", "how do I plug this in?"),
+            ChannelTier::Question
+        );
+    }
+
+    #[test]
+    fn tier_heuristic_classifies_large_features() {
+        assert_eq!(
+            classify_tier_heuristic("tidewater-rewrite", "full UI rewrite"),
+            ChannelTier::FeatureLarge
+        );
+        assert_eq!(
+            classify_tier_heuristic("auth-v2", "new auth flow"),
+            ChannelTier::FeatureLarge
+        );
+    }
+
+    #[test]
+    fn tier_heuristic_defaults_to_feature() {
+        assert_eq!(
+            classify_tier_heuristic("oauth-api-users", "ship the new endpoint"),
+            ChannelTier::Feature
+        );
     }
 }

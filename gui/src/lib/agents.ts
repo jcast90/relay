@@ -25,10 +25,17 @@ export type AgentAvatar = {
   color: string;
 };
 
-export function agentAvatar(agentId: string, displayName?: string): AgentAvatar {
+export function agentAvatar(
+  agentId: string,
+  displayName?: string,
+  style: "glyph" | "initial" = "glyph"
+): AgentAvatar {
   const seed = agentId || displayName || "agent";
   const h = hash(seed);
-  const glyph = GLYPHS[h % GLYPHS.length];
+  const glyph =
+    style === "initial"
+      ? (displayName ?? agentId ?? "?").trim().slice(0, 1).toUpperCase() || "?"
+      : GLYPHS[h % GLYPHS.length];
   const hue = HUES[(h >>> 4) % HUES.length];
   return {
     glyph,

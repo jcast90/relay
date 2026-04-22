@@ -3,11 +3,13 @@ import type { Channel, ChannelMember, ChannelTier, RepoAssignment } from "../typ
 /**
  * UI-facing projection of a Channel. Collapses the backend's workspaceId-
  * centric shape into the alias-centric shape the Tidewater design uses
- * throughout: `repos: string[]` of aliases, `primaryRepo: string` alias,
- * `topic` instead of `description`, etc.
+ * throughout: `primaryRepo: string` alias, `topic` instead of `description`,
+ * humanized `activeAt`, etc.
  *
- * Keep all rename churn in this file so components consume UiChannel
- * directly and don't deal with both spellings.
+ * The source of truth for attached aliases is `repoAssignments`. Callers
+ * that want a flat alias list use `channelAliases(ui)`; the derived list
+ * used to live on this type as `repos: string[]` but was removed to avoid
+ * the implicit invariant that the two representations stay in sync.
  */
 export type UiChannel = {
   id: string;
@@ -16,7 +18,6 @@ export type UiChannel = {
   tier?: ChannelTier;
   starred: boolean;
   status: string;
-  repos: string[];
   primaryRepo: string;
   primaryWorkspaceId?: string;
   agents: string[];
@@ -33,12 +34,10 @@ export function toUiChannel(c: Channel, now: Date = new Date()): UiChannel {
       c.repoAssignments.find((r) => r.workspaceId === c.primaryWorkspaceId)) ||
     c.repoAssignments[0];
   // Aliases are case-insensitive throughout the UI (mention lookup, routing,
-  // render chips). Lowercasing here keeps one convention end-to-end even if a
-  // user types `UI` in the alias input.
+  // render chips). Lowercasing the primary keeps one convention end-to-end
+  // even if a user typed `UI` in the alias input.
   const primaryRepo = primaryAssignment?.alias.toLowerCase() ?? "";
-  const repos = sortPrimaryFirst(c.repoAssignments, primaryAssignment?.alias ?? "").map((r) =>
-    r.alias.toLowerCase()
-  );
+  const repoAssignments = sortPrimaryFirst(c.repoAssignments, primaryAssignment?.alias ?? "");
   return {
     id: c.channelId,
     name: c.name,
@@ -46,16 +45,38 @@ export function toUiChannel(c: Channel, now: Date = new Date()): UiChannel {
     tier: c.tier,
     starred: c.starred ?? false,
     status: c.status,
-    repos,
     primaryRepo,
     primaryWorkspaceId: c.primaryWorkspaceId,
     agents: c.members.map((m) => m.agentId),
     members: c.members,
-    repoAssignments: c.repoAssignments,
+    repoAssignments,
     activeAt: humanizeRelative(c.updatedAt ?? c.createdAt, now),
     createdAt: c.createdAt,
     updatedAt: c.updatedAt,
   };
+}
+
+/**
+ * Lowercase alias list derived from `repoAssignments`. Callers that want
+ * to pass mention context to `renderWithMentions` or check attachment
+ * should use this rather than indexing into `repoAssignments` by hand.
+ */
+export function channelAliases(ui: UiChannel): string[] {
+  return ui.repoAssignments.map((r) => r.alias.toLowerCase());
+}
+
+/**
+ * Shape accepted by `renderWithMentions` to classify `@alias` chips. Built
+ * from a UiChannel via `mentionContext(ui)`; decoupled from UiChannel so
+ * tests can pass in fixtures without instantiating the full channel.
+ */
+export type MentionContext = {
+  repos: string[];
+  primaryRepo: string;
+};
+
+export function mentionContext(ui: UiChannel): MentionContext {
+  return { repos: channelAliases(ui), primaryRepo: ui.primaryRepo };
 }
 
 export function primaryAlias(c: Channel): string | null {

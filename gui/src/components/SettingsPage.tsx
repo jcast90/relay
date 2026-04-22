@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { api } from "../api";
 import type { GuiSettings } from "../types";
+import { useAppearance, type AvatarStyle, type Density } from "../lib/appearance";
 
-type Section = "ticketing" | "general";
+type Section = "ticketing" | "appearance" | "general";
 
 type Props = {
   settings: GuiSettings;
@@ -41,6 +42,12 @@ export function SettingsPage({ settings, onSaved, onClose }: Props) {
           Ticketing
         </button>
         <button
+          className={`settings-nav-item ${section === "appearance" ? "active" : ""}`}
+          onClick={() => setSection("appearance")}
+        >
+          Appearance
+        </button>
+        <button
           className={`settings-nav-item ${section === "general" ? "active" : ""}`}
           onClick={() => setSection("general")}
         >
@@ -54,6 +61,7 @@ export function SettingsPage({ settings, onSaved, onClose }: Props) {
         {section === "ticketing" && (
           <TicketingSection draft={draft} onChange={save} saving={saving} error={error} />
         )}
+        {section === "appearance" && <AppearanceSection />}
         {section === "general" && <GeneralSection />}
       </div>
     </div>
@@ -175,6 +183,83 @@ function GeneralSection() {
           Relay runs coding agents across your registered workspaces. Channels are repo-scoped
           execution contexts; each (channel, repo) pair has its own agent instance.
         </p>
+      </div>
+    </>
+  );
+}
+
+function AppearanceSection() {
+  const [appearance, setAppearance] = useAppearance();
+  const avatarStyles: Array<{ value: AvatarStyle; title: string; desc: string }> = [
+    {
+      value: "glyph",
+      title: "Glyph",
+      desc: "Deterministic symbols (◆ ▲ ● ■) hashed from each agent's id.",
+    },
+    {
+      value: "initial",
+      title: "Initial",
+      desc: "First letter of the agent's display name. Simpler, less distinctive.",
+    },
+  ];
+  const densities: Array<{ value: Density; title: string; desc: string }> = [
+    { value: "compact", title: "Compact", desc: "Tighter padding for small windows." },
+    { value: "medium", title: "Medium", desc: "Default — Slack-equivalent spacing." },
+    { value: "spacious", title: "Spacious", desc: "Airier for larger displays." },
+  ];
+
+  return (
+    <>
+      <h2>Appearance</h2>
+      <div className="settings-section">
+        <h3>Avatar style</h3>
+        <p className="help">How agent avatars render across message feeds and the header stack.</p>
+        <div className="settings-radio-group">
+          {avatarStyles.map((s) => (
+            <label
+              key={s.value}
+              className={appearance.avatarStyle === s.value ? "selected" : ""}
+            >
+              <input
+                type="radio"
+                name="avatar-style"
+                checked={appearance.avatarStyle === s.value}
+                onChange={() => setAppearance({ ...appearance, avatarStyle: s.value })}
+              />
+              <span>
+                <span className="settings-radio-title">{s.title}</span>
+                <span className="settings-radio-desc" style={{ display: "block" }}>
+                  {s.desc}
+                </span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
+      <div className="settings-section">
+        <h3>Density</h3>
+        <p className="help">Spacing scale for rails, messages, and drawers.</p>
+        <div className="settings-radio-group">
+          {densities.map((d) => (
+            <label
+              key={d.value}
+              className={appearance.density === d.value ? "selected" : ""}
+            >
+              <input
+                type="radio"
+                name="density"
+                checked={appearance.density === d.value}
+                onChange={() => setAppearance({ ...appearance, density: d.value })}
+              />
+              <span>
+                <span className="settings-radio-title">{d.title}</span>
+                <span className="settings-radio-desc" style={{ display: "block" }}>
+                  {d.desc}
+                </span>
+              </span>
+            </label>
+          ))}
+        </div>
       </div>
     </>
   );

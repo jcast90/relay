@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { Channel, ChannelEntry, PersistedChatMessage } from "../types";
 import { renderWithMentions } from "../lib/mentions";
-import { toUiChannel } from "../lib/channel";
+import { mentionContext, toUiChannel, type MentionContext } from "../lib/channel";
 import { agentAvatar } from "../lib/agents";
+import { useAppearance } from "../lib/appearance";
 import type { ActiveStream } from "./Composer";
 
 const ACTIVITY_TOP_N = 3;
@@ -30,7 +31,7 @@ export function MessageList({
   onRewound,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const ui = toUiChannel(channel);
+  const ui = mentionContext(toUiChannel(channel));
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -63,7 +64,7 @@ function FeedView({
   channel,
 }: {
   entries: ChannelEntry[];
-  channel: ReturnType<typeof toUiChannel>;
+  channel: MentionContext;
 }) {
   if (entries.length === 0) return <div className="chat-empty">No activity yet</div>;
   return (
@@ -99,7 +100,7 @@ function SessionMessages({
   streamId: number | null;
   onRewound: () => void;
 }) {
-  const ui = toUiChannel(channel);
+  const ui = mentionContext(toUiChannel(channel));
   const [rewindTarget, setRewindTarget] = useState<PersistedChatMessage | null>(null);
 
   if (messages.length === 0)
@@ -265,7 +266,7 @@ function StreamCard({
   onToggleExpanded,
 }: {
   stream: ActiveStream;
-  channel: ReturnType<typeof toUiChannel>;
+  channel: MentionContext;
   onToggleExpanded: () => void;
 }) {
   const total = stream.activity.length;
@@ -324,7 +325,8 @@ function formatTime(iso: string): string {
 }
 
 function MsgAvatar({ seed }: { seed: string }) {
-  const av = agentAvatar(seed);
+  const [appearance] = useAppearance();
+  const av = agentAvatar(seed, undefined, appearance.avatarStyle);
   return (
     <div
       className="msg-avatar"
