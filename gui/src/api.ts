@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  ApprovalQueueRecord,
   Channel,
   ChannelEntry,
   ChannelRunLink,
@@ -162,6 +163,15 @@ export const api = {
   approvePlan: (runId: string) => invoke<unknown>("approve_plan", { runId }),
   rejectPlan: (runId: string, feedback?: string) =>
     invoke<unknown>("reject_plan", { runId, feedback }),
+
+  // AL-7/AL-8 approvals queue. Distinct from plan-approval above — these
+  // drain per-session queue.jsonl files rather than run artifacts.
+  listPendingApprovals: (sessionId?: string) =>
+    invoke<ApprovalQueueRecord[]>("list_pending_approvals", { sessionId }),
+  approveQueueEntry: (id: string) => invoke<unknown>("approve_queue_entry", { id }),
+  rejectQueueEntry: (id: string, feedback?: string) =>
+    invoke<unknown>("reject_queue_entry", { id, feedback }),
+  approveQueueAll: (sessionId?: string) => invoke<unknown>("approve_queue_all", { sessionId }),
 };
 
 export type ChatEvent =

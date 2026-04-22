@@ -59,6 +59,10 @@ pub enum Tab {
     Decisions,
     /// Tracked PRs for the selected channel — mirrors `rly pr-status` output.
     Prs,
+    /// AL-7/AL-8 approvals queue view. Lists pending records across every
+    /// session and lets the user drive approve/reject without dropping back
+    /// to the CLI.
+    Approvals,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -74,6 +78,10 @@ pub enum InputMode {
     RewindSelect,
     /// Confirm-approve the currently-selected pending plan
     ApprovePlan,
+    /// Confirm-approve the currently-selected AL-7/AL-8 queue record.
+    /// Distinct from `ApprovePlan` because the confirmation payload is
+    /// the queue entry id + session, not a run id.
+    ApproveQueue,
 }
 
 #[derive(Clone, Debug)]
@@ -331,6 +339,12 @@ pub struct App {
     // Pending plans (runs in AWAITING_APPROVAL state with no approval record)
     pub pending_plans: Vec<PendingPlan>,
     pub pending_plan_cursor: usize,
+
+    // AL-7/AL-8 approvals queue: pending records across every session.
+    // Populated by `refresh()` from `~/.relay/approvals/<sessionId>/queue.jsonl`.
+    pub pending_approvals: Vec<data::ApprovalQueueRecord>,
+    pub approvals_cursor: usize,
+    pub approvals_scroll: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -394,6 +408,9 @@ impl App {
             prs_scroll: 0,
             pending_plans: Vec::new(),
             pending_plan_cursor: 0,
+            pending_approvals: Vec::new(),
+            approvals_cursor: 0,
+            approvals_scroll: 0,
         }
     }
 
@@ -679,8 +696,33 @@ impl App {
             self.pending_plan_cursor = 0;
         }
 
+        // AL-8: refresh the approvals queue. Cheap (just walks
+        // `~/.relay/approvals/`), so no need to debounce — runs on every
+        // tick alongside the rest of the dashboard state.
+        self.pending_approvals = data::load_all_pending_approvals();
+        if self.approvals_cursor >= self.pending_approvals.len() {
+            self.approvals_cursor = self.pending_approvals.len().saturating_sub(1);
+        }
+
         // Clamp scroll positions after data refresh
         self.clamp_scrolls();
+    }
+
+    /// Decide a single pending approval by id. Shells out through the
+    /// canonical CLI path (`rly approve <id>` / `rly reject <id>`) so every
+    /// surface goes through the same queue-mutation code — exactly the
+    /// "three surfaces, one queue" invariant AL-8 asks for.
+    fn decide_approval(&mut self, id: &str, decision: &str, feedback: Option<&str>) {
+        let cmd = if decision == "approved" { "approve" } else { "reject" };
+        let mut args: Vec<&str> = vec![cmd, id, "--json"];
+        if let Some(fb) = feedback {
+            args.push("--feedback");
+            args.push(fb);
+        }
+        let _ = cli_json(&args);
+        // Refresh immediately so the row disappears without waiting for the
+        // next dashboard tick.
+        self.refresh();
     }
 
     /// Ensure per-repo workers exist for the currently selected channel's repos.
@@ -947,6 +989,11 @@ impl App {
         } else {
             self.runs_scroll = 0;
         }
+        if !self.pending_approvals.is_empty() {
+            self.approvals_scroll = self.approvals_scroll.min(self.pending_approvals.len() - 1);
+        } else {
+            self.approvals_scroll = 0;
+        }
     }
 
     fn center_item_count(&self) -> usize {
@@ -955,6 +1002,7 @@ impl App {
             Tab::Board => self.sorted_ticket_indices().len(),
             Tab::Decisions => self.decisions.len(),
             Tab::Prs => self.tracked_prs.len(),
+            Tab::Approvals => self.pending_approvals.len(),
         }
     }
 
@@ -964,6 +1012,7 @@ impl App {
             Tab::Board => self.board_scroll,
             Tab::Decisions => self.decisions_scroll,
             Tab::Prs => self.prs_scroll,
+            Tab::Approvals => self.approvals_scroll,
         }
     }
 
@@ -973,6 +1022,7 @@ impl App {
             Tab::Board => self.board_scroll = val,
             Tab::Decisions => self.decisions_scroll = val,
             Tab::Prs => self.prs_scroll = val,
+            Tab::Approvals => self.approvals_scroll = val,
         }
     }
 
@@ -1001,7 +1051,8 @@ impl App {
             || self.input_mode == InputMode::RepoSelect
             || self.input_mode == InputMode::SessionSelect
             || self.input_mode == InputMode::RewindSelect
-            || self.input_mode == InputMode::ApprovePlan {
+            || self.input_mode == InputMode::ApprovePlan
+            || self.input_mode == InputMode::ApproveQueue {
             return;
         }
 
@@ -1039,6 +1090,13 @@ impl App {
                             Tab::Prs => {
                                 if self.prs_scroll < self.tracked_prs.len().saturating_sub(1) {
                                     self.prs_scroll += 1;
+                                }
+                            }
+                            Tab::Approvals => {
+                                if self.approvals_scroll
+                                    < self.pending_approvals.len().saturating_sub(1)
+                                {
+                                    self.approvals_scroll += 1;
                                 }
                             }
                         }
@@ -1079,6 +1137,9 @@ impl App {
                             }
                             Tab::Prs => {
                                 self.prs_scroll = self.prs_scroll.saturating_sub(1);
+                            }
+                            Tab::Approvals => {
+                                self.approvals_scroll = self.approvals_scroll.saturating_sub(1);
                             }
                         }
                     }
@@ -1293,6 +1354,12 @@ impl App {
         // Approve plan confirm
         if self.input_mode == InputMode::ApprovePlan {
             self.handle_approve_plan_key(code);
+            return;
+        }
+
+        // N: explicit confirmation before mutating the AL-7/AL-8 queue.
+        if self.input_mode == InputMode::ApproveQueue {
+            self.handle_approve_queue_key(code);
             return;
         }
 
@@ -1561,21 +1628,24 @@ impl App {
                     Tab::Chat => Tab::Board,
                     Tab::Board => Tab::Decisions,
                     Tab::Decisions => Tab::Prs,
-                    Tab::Prs => Tab::Chat,
+                    Tab::Prs => Tab::Approvals,
+                    Tab::Approvals => Tab::Chat,
                 };
             }
             KeyCode::BackTab => {
                 self.active_tab = match self.active_tab {
-                    Tab::Chat => Tab::Prs,
+                    Tab::Chat => Tab::Approvals,
                     Tab::Board => Tab::Chat,
                     Tab::Decisions => Tab::Board,
                     Tab::Prs => Tab::Decisions,
+                    Tab::Approvals => Tab::Prs,
                 };
             }
             KeyCode::Char('1') => self.active_tab = Tab::Chat,
             KeyCode::Char('2') => self.active_tab = Tab::Board,
             KeyCode::Char('3') => self.active_tab = Tab::Decisions,
             KeyCode::Char('4') => self.active_tab = Tab::Prs,
+            KeyCode::Char('5') => self.active_tab = Tab::Approvals,
 
             // Open detail
             KeyCode::Enter => self.open_detail(),
@@ -1607,8 +1677,23 @@ impl App {
             // — shells out to `rly approve <runId>` so the same code path as the
             // CLI and MCP tool is used. 'A' opens an in-panel confirm dialog so
             // a single stray keypress doesn't approve by accident.
+            //
+            // On the Approvals tab the same key approves the currently-selected
+            // AL-8 queue record instead of the run-level plan; 'd' rejects it.
+            // (We borrow 'a'/'d' here because they're already in the Normal-mode
+            // namespace — 'r' is taken by the repo editor.)
             KeyCode::Char('a') => {
-                if !self.pending_plans.is_empty() {
+                if self.active_tab == Tab::Approvals {
+                    // N: require explicit confirmation before approving —
+                    // the approve path mutates the queue irreversibly, and
+                    // a stray `a` from a distracted operator shouldn't
+                    // cause a merge. Mirror the plan-approval flow: flip
+                    // to ApproveQueue mode, the overlay renders a y/n
+                    // prompt in `render_approve_queue_confirm`.
+                    if self.pending_approvals.get(self.approvals_scroll).is_some() {
+                        self.input_mode = InputMode::ApproveQueue;
+                    }
+                } else if !self.pending_plans.is_empty() {
                     self.input_mode = InputMode::ApprovePlan;
                 }
             }
@@ -1618,9 +1703,15 @@ impl App {
                 self.open_session_picker();
             }
 
-            // Delete channel
+            // Delete channel — or on the Approvals tab, reject the
+            // currently-selected AL-8 queue record. The verb differs but
+            // the mental model is the same: "remove this from the list."
             KeyCode::Char('d') => {
-                if self.focus == FocusPanel::Sidebar {
+                if self.active_tab == Tab::Approvals {
+                    if let Some(rec) = self.pending_approvals.get(self.approvals_scroll).cloned() {
+                        self.decide_approval(&rec.id, "rejected", None);
+                    }
+                } else if self.focus == FocusPanel::Sidebar {
                     self.delete_current_channel();
                 }
             }
@@ -2143,6 +2234,29 @@ impl App {
                 }
                 self.input_mode = InputMode::Normal;
                 self.refresh();
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_approve_queue_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('n') => {
+                self.input_mode = InputMode::Normal;
+            }
+            KeyCode::Char('y') | KeyCode::Enter => {
+                if let Some(rec) = self.pending_approvals.get(self.approvals_scroll).cloned() {
+                    self.decide_approval(&rec.id, "approved", None);
+                }
+                self.input_mode = InputMode::Normal;
+            }
+            KeyCode::Char('r') => {
+                // Reject without operator-supplied feedback from the TUI.
+                // Use the CLI if you want `--feedback "text"` to round-trip.
+                if let Some(rec) = self.pending_approvals.get(self.approvals_scroll).cloned() {
+                    self.decide_approval(&rec.id, "rejected", None);
+                }
+                self.input_mode = InputMode::Normal;
             }
             _ => {}
         }

@@ -213,3 +213,21 @@ export type PendingPlan = {
   state: string;
   updatedAt: string;
 };
+
+// AL-7/AL-8 approvals queue record. Mirrors `src/approvals/queue.ts`
+// `ApprovalRecord` and the Rust `ApprovalQueueRecord` in
+// `crates/harness-data/src/lib.rs`. `payload` is intentionally opaque so
+// the GUI can render new kinds without a schema bump.
+export type ApprovalQueueRecord = {
+  id: string;
+  sessionId: string;
+  kind: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+  status: "pending" | "approved" | "rejected";
+  decidedAt?: string | null;
+  feedback?: string | null;
+  // AL-7 god-mode marker. Present on records auto-approved by the trust
+  // gate without an operator in the loop. Only value today is "god-mode".
+  autoApprovedBy?: string | null;
+};
