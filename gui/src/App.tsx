@@ -49,7 +49,7 @@ export function App() {
         onSelect={setSelectedId}
         onNewChannel={() => setModalOpen(true)}
         onToggleIncludeArchived={setIncludeArchived}
-        onChannelArchived={(id) => {
+        onArchived={(id) => {
           // If the archived channel was selected, drop the selection so the
           // center pane doesn't keep rendering a stale channel.
           if (selectedId === id) setSelectedId(null);

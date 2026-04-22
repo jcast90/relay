@@ -9,7 +9,7 @@ type Props = {
   onSelect: (id: string) => void;
   onNewChannel: () => void;
   onToggleIncludeArchived: (next: boolean) => void;
-  onChannelArchived: (id: string) => void;
+  onArchived: (id: string) => void;
   onRefresh: () => void;
 };
 
@@ -40,7 +40,7 @@ export function Sidebar({
   onSelect,
   onNewChannel,
   onToggleIncludeArchived,
-  onChannelArchived,
+  onArchived,
   onRefresh,
 }: Props) {
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -56,7 +56,10 @@ export function Sidebar({
         await api.unarchiveChannel(c.channelId);
       } else {
         await api.archiveChannel(c.channelId);
-        onChannelArchived(c.channelId);
+        // Intentionally only on archive — unarchive never needs to drop the
+        // selection since the row stays visible (either under the
+        // "Show archived" toggle or after it becomes active again).
+        onArchived(c.channelId);
       }
       onRefresh();
     } catch (err) {
