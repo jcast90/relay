@@ -276,6 +276,18 @@ export async function main(): Promise<void> {
     return;
   }
 
+  // `rly run --autonomous <channelId> ...` (AL-3) is a distinct sub-command:
+  // instead of classify-plan-execute on a feature request, it boots an
+  // autonomous session against an existing channel's ticket board. Handled
+  // here, at the top of the run handler, so the default ("feature request")
+  // code path below never sees a channelId as its first positional.
+  if (command === "run" && args.includes("--autonomous")) {
+    const { handleRunAutonomous } = await import("./cli/run-autonomous.js");
+    const result = await handleRunAutonomous(args);
+    process.exitCode = result.exitCode;
+    return;
+  }
+
   const sequential = args.includes("--sequential");
   const featureRequest = args
     .filter((a) => !a.startsWith("--"))
@@ -2194,6 +2206,7 @@ async function printTopLevelHelp(): Promise<void> {
     "",
     "Runs & approval:",
     "  run <request>            Classify + plan + execute a feature request",
+    "  run --autonomous <ch>    Start an autonomous session against a channel's ticket board (AL-3)",
     "  approve <runId>          Approve a pending plan",
     "  reject <runId> [--feedback <text>]  Reject a pending plan",
     "  pending-plans [--json]   List runs awaiting plan-approval decisions",
