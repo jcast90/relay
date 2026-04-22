@@ -39,6 +39,9 @@ importers:
       '@types/pg':
         specifier: ^8.20.0
         version: 8.20.0
+      prettier:
+        specifier: ^3.8.3
+        version: 3.8.3
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -828,6 +831,11 @@ packages:
   prettier@2.8.8:
     resolution: {integrity: sha512-tdN8qQGvNjw4CHbY+XXk0JgCXn9QiF21a55rBe5LJAU+kDyC4WQn4+awm2Xfk2lQMk5fKup9XgzTZtGkjBdP9Q==}
     engines: {node: '>=10.13.0'}
+    hasBin: true
+
+  prettier@3.8.3:
+    resolution: {integrity: sha512-7igPTM53cGHMW8xWuVTydi2KO233VFiTNyF5hLJqpilHfmn8C8gPf+PS7dUT64YcXFbiMGZxS9pCSxL/Dxm/Jw==}
+    engines: {node: '>=14'}
     hasBin: true
 
   quansync@0.2.11:
@@ -1791,6 +1799,8 @@ snapshots:
       xtend: 4.0.2
 
   prettier@2.8.8: {}
+
+  prettier@3.8.3: {}
 
   quansync@0.2.11: {}
 

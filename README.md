@@ -468,7 +468,7 @@ bin/rly.mjs                   # CLI launcher (tsx by default, dist with RELAY_US
 install.sh                    # one-command installer
 ```
 
-- `docs/` — human-facing deeper walkthroughs (getting started, cloud execution, storage injection).
+- `docs/` — human-facing deeper walkthroughs (getting started, storage injection).
 - `agent_docs/` — agent-targeted reference (architecture, data model, testing) for coding agents working in the repo.
 
 ## Development
