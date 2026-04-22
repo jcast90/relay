@@ -1,5 +1,5 @@
 {
-  "name": "relay",
+  "name": "@jcast90/relay",
   "version": "0.1.0",
   "description": "Local-first orchestration for coding agents — classify, decompose, dispatch Claude/Codex, and supervise from a dashboard.",
   "license": "MIT",

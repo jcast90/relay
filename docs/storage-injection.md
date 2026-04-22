@@ -1,21 +1,23 @@
 # Storage Injection
 
 Relay's persistent state lives behind a single interface, `HarnessStore`
-(`src/storage/store.ts`). Two implementations ship today:
+(`src/storage/store.ts`). **Today, File backend only.**
 
-- **`FileHarnessStore`** — rooted at `~/.relay/`, atomic JSON/JSONL writes. The
-  default, and the right choice for solo dev, CI, and single-host deployments.
-- **`PostgresHarnessStore`** — backed by your own Postgres. Use this for
-  multi-agent deployments where `LISTEN/NOTIFY` broadcasts and row-locked
-  decision writes matter. Select it via `HARNESS_STORE=postgres` +
-  `HARNESS_POSTGRES_URL`.
+- **`FileHarnessStore`** — rooted at `~/.relay/`, atomic JSON/JSONL writes.
+  The default, and the only implementation wired into the factory.
+
+A `PostgresHarnessStore` stub lives at `src/storage/postgres-store.ts` for
+future multi-agent coordination (`LISTEN/NOTIFY` cross-agent decision
+broadcasts, row-locked decision writes), but it isn't wired through the
+factory. See the [Roadmap](../README.md#roadmap).
 
 ## Goal
 
-Let the harness run against a local filesystem during development and
-against Postgres in shared deployments by changing an environment variable,
-not by editing handlers. All backend selection flows through one place:
-`buildHarnessStore()` in `src/storage/factory.ts`.
+Let the harness run against a local filesystem today without forcing every
+handler to know how the state is stored. All backend selection flows
+through one place: `buildHarnessStore()` in `src/storage/factory.ts`. The
+single-interface shape keeps a future backend drop-in work rather than a
+handler rewrite.
 
 ## Composition root
 
@@ -33,11 +35,17 @@ global side-effect.
 
 ## Environment
 
-| `HARNESS_STORE` | Behavior                                                    |
-| --------------- | ----------------------------------------------------------- |
-| unset / `file`  | `FileHarnessStore` at `getRelayDir()` (usually `~/.relay/`) |
-| `postgres`      | Throws `NotImplementedError` until T-402 lands              |
-| `sqlite`        | Throws `NotImplementedError` (no tracking ticket yet)       |
+| `HARNESS_STORE`          | Behavior                                                    |
+| ------------------------ | ----------------------------------------------------------- |
+| unset / `file`           | `FileHarnessStore` at `getRelayDir()` (usually `~/.relay/`) |
+| `postgres` / `sqlite`    | Warns once, falls back to the file backend (see below)      |
+| any other value          | Silently falls back to the file backend                     |
+
+The factory never throws on an unsupported backend — old docs and user
+scripts still reference `HARNESS_STORE=postgres`, and crashing those
+callers on startup would be a worse experience than quietly degrading. A
+one-line `console.warn` fires when a recognized-but-unimplemented kind is
+requested, so operators see the degradation.
 
 ## Legacy stores (unmigrated)
 
@@ -68,14 +76,24 @@ Other `node:fs/promises` importers in `src/` (bootstrap, config, agent
 wrapper, MCP server, scripted invoker, etc.) are not storage backends —
 they don't migrate and aren't part of the allowlist.
 
-## Adding a new backend
+## Future work
+
+The `PostgresHarnessStore` stub at `src/storage/postgres-store.ts` would,
+when wired:
+
+- Replace mtime polling in `watch` with `LISTEN/NOTIFY` so multiple agents
+  (same host or different) see decision writes without filesystem tailing.
+- Use Postgres advisory locks instead of the in-process promise mutex in
+  `mutate`, so cross-process coordination is a first-class primitive.
+
+Postgres here is not a cloud requirement — it runs fine locally
+(`brew install postgresql && createdb relay`). The value is multi-agent
+coordination, not cloud. Wiring this up is tracked in the
+[Roadmap](../README.md#roadmap).
+
+## Adding a new backend (for reference)
 
 1. Implement `HarnessStore` in a new file under `src/storage/`.
 2. Widen `StoreKind` in `factory.ts` if a new env value is needed.
 3. Wire it into `buildHarnessStore()` behind its `StoreKind`.
-4. Replace the `NotImplementedError` throw.
-
-The Postgres impl (T-402) will use `LISTEN/NOTIFY` instead of mtime polling
-for `watch`, and Postgres advisory locks instead of the in-process promise
-mutex for `mutate`. The interface contract is designed to accommodate both
-without changes.
+4. Drop the warn-and-fallback branch for that kind.

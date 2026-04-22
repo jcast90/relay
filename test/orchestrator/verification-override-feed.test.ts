@@ -4,6 +4,38 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+/**
+ * Poll `fn` until it returns a defined / truthy value, or `timeoutMs`
+ * elapses. Used to make feed-observation assertions deterministic in the
+ * face of scheduler best-effort writes: `TicketScheduler` drains its own
+ * tracked post-calls via `waitForPendingWrites` before `executeAll`
+ * resolves (OSS-11), but the atomic tmp-rename underneath `postEntry` can
+ * still take a tick for the rename to appear to a directory-read on Linux
+ * CI. Rather than chain `setImmediate` hacks, poll the observable and
+ * fail with a crisp timeout message if the entry never lands.
+ */
+async function waitFor<T>(
+  fn: () => Promise<T | undefined> | T | undefined,
+  opts: { timeoutMs?: number; intervalMs?: number; label?: string } = {}
+): Promise<T> {
+  const timeoutMs = opts.timeoutMs ?? 2000;
+  const intervalMs = opts.intervalMs ?? 20;
+  const deadline = Date.now() + timeoutMs;
+
+  while (true) {
+    const value = await fn();
+    if (value !== undefined && value !== null && value !== false) {
+      return value as T;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `waitFor timed out after ${timeoutMs}ms${opts.label ? `: ${opts.label}` : ""}`
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
 import { NodeCommandInvoker } from "../../src/agents/command-invoker.js";
 import { createLiveAgents } from "../../src/agents/factory.js";
 import { AgentRegistry } from "../../src/agents/registry.js";
@@ -157,21 +189,29 @@ describe("TicketScheduler verification override surfaces to channel feed", () =>
     await scheduler.executeAll(run);
 
     // `executeAll` drains the scheduler's tracked best-effort writes before
-    // returning (see TicketScheduler.waitForPendingWrites), so the override
-    // feed entry is visible here without a sleep workaround.
-    const entries = await channelStore.readFeed(channel.channelId);
-    const override = entries.find(
-      (e) => e.type === "status_update" && e.content.startsWith("Verification override")
+    // returning (see TicketScheduler.waitForPendingWrites, OSS-11), but the
+    // tmp-rename underneath `postEntry` can still take a moment to appear to
+    // a fresh `readFeed` on Linux CI. Poll the feed instead of snapshotting
+    // it once — the assertion is still tight (2s budget) but deterministic
+    // across the OSS-21 flake window.
+    const override = await waitFor(
+      async () => {
+        const entries = await channelStore.readFeed(channel.channelId);
+        return entries.find(
+          (e) => e.type === "status_update" && e.content.startsWith("Verification override")
+        );
+      },
+      { timeoutMs: 2000, intervalMs: 20, label: "verification override feed entry" }
     );
-    expect(override).toBeDefined();
-    expect(override!.fromDisplayName).toBe("Verifier");
-    expect(override!.metadata.runId).toBe(run.id);
-    expect(override!.metadata.ticketId).toBe("t_override");
+
+    expect(override.fromDisplayName).toBe("Verifier");
+    expect(override.metadata.runId).toBe(run.id);
+    expect(override.metadata.ticketId).toBe("t_override");
     // The verifier tag encodes both the pass/fail state and the override.
-    expect(String(override!.metadata.verification)).toMatch(
+    expect(String(override.metadata.verification)).toMatch(
       /passed-with-override|failed-with-override/
     );
-    expect(override!.metadata.rejectedCommands).toEqual(["rm -rf /tmp/nope"]);
-    expect(override!.metadata.substitutedCommands).toEqual(["echo allowlisted"]);
+    expect(override.metadata.rejectedCommands).toEqual(["rm -rf /tmp/nope"]);
+    expect(override.metadata.substitutedCommands).toEqual(["echo allowlisted"]);
   }, 30_000);
 });

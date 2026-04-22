@@ -21,7 +21,7 @@
 
 Relay turns a sentence, a GitHub issue URL, or a Linear ticket into a **running plan of AI-coded work** — with tickets, verification loops, live PR tracking, and optional human approval gates. Sessions run inside your normal Claude or Codex CLI; Relay wraps them with an MCP server that records everything into Slack-style **channels** you can query later.
 
-**Suitable for individual developers and for teams working inside a company.** Relay runs entirely on your machine (or on infrastructure you control). There is no hosted Relay service, no telemetry, and no phone-home — state stays in `~/.relay/` on disk (optionally backed by your own Postgres). What it's built for:
+**Suitable for individual developers and for teams working inside a company.** Relay runs entirely on your machine. There is no hosted Relay service, no telemetry, and no phone-home — all state stays in `~/.relay/` on disk. What it's built for:
 
 - **Agent orchestration** — classify, plan, decompose, dispatch, and verify. One request turns into a supervised workflow.
 - **Multi-repo coordination** — sessions running in different repos can discover each other, message, and share context via the crosslink MCP tools.
@@ -46,6 +46,8 @@ CLI: **`rly`**.
 - [Architecture](#architecture)
 - [Development](#development)
 - [Contributing](#contributing)
+- [Known limits](#known-limits)
+- [Roadmap](#roadmap)
 - [License](#license)
 
 ## Install
@@ -55,15 +57,19 @@ CLI: **`rly`**.
 Once `v0.1.0` ships to npm, this will be the one-liner:
 
 ```bash
-npm install -g rly
+npm install -g @jcast90/relay
 rly welcome
 ```
 
 …or without globally installing:
 
 ```bash
-npx rly@latest welcome
+npx @jcast90/relay welcome
 ```
+
+The npm package is published under the `@jcast90` scope because both
+unscoped `relay` and `rly` were already taken on npm when Relay shipped.
+The binary exposed on `$PATH` is still `rly`.
 
 ### From source _(available today)_
 
@@ -233,7 +239,7 @@ Statuses: `pending | blocked | ready | executing | verifying | retry | completed
 
 ### Decisions
 
-First-class records with rationale + alternatives, written to `channels/<id>/decisions/<id>.json`. Each write is atomic (temp-rename) and also mirrored through the `HarnessStore` coordination layer so Postgres `LISTEN/NOTIFY` consumers can observe new decisions without tailing the filesystem.
+First-class records with rationale + alternatives, written to `channels/<id>/decisions/<id>.json`. Each write is atomic (temp-rename) — readers (TUI, GUI, other CLI invocations) see a consistent file or the previous version, never a torn one.
 
 ### Named agents
 
@@ -376,14 +382,11 @@ One-off: `rly claude --yolo` or `rly claude --auto-approve`.
 
 ## Storage & execution backends
 
-### HarnessStore (pluggable)
+### Storage
 
-All state — runs, tickets, decisions, crosslink messages, agent-names, workspace registry, session transcripts — goes through a single `HarnessStore` interface (`src/storage/store.ts`). Today:
+Relay stores everything in `~/.relay/` as JSON/JSONL files (atomic writes via tmp+rename). One backend, no DB required. All state — runs, tickets, decisions, crosslink messages, agent-names, workspace registry, session transcripts — goes through a single `HarnessStore` interface (`src/storage/store.ts`) so a future backend can slot in without rewriting handlers.
 
-- **FileHarnessStore** — default. JSON / JSONL under `~/.relay/`.
-- **PostgresHarnessStore** — opt-in via config (T-402). Adds `LISTEN/NOTIFY` for cross-agent coordination.
-
-The interface is intentionally small (docs, changefeeds, logs, blobs) so adding a third backend is bounded work.
+File backend is all that ships today. A Postgres backend (`src/storage/postgres-store.ts`) is **stubbed in-tree** for future multi-agent coordination — `LISTEN/NOTIFY` decision broadcasts and row-locked writes — but **not wired yet**; `HARNESS_STORE=postgres` currently warns and falls back to the file backend. See the [Roadmap](#roadmap).
 
 ### Executor
 
@@ -511,11 +514,23 @@ See [`AGENTS.md`](./AGENTS.md) for the coding-agent conventions.
 
 A **`CLAUDE.md`** at the repo root (when present) tells any Claude agent working in this codebase — including `rly claude` itself — what conventions to follow.
 
-## Known limits / roadmap
+## Known limits
 
 - **Spawn is cross-platform but lightly tested off macOS.** macOS is daily-driven; Linux and Windows branches are compile-checked and unit-tested but real-device integration testing is still the gate before tagging a release.
 - **Cost guardrails not yet implemented.** Token usage isn't tracked or capped. Use `RELAY_AUTO_APPROVE=1` with care.
-- **Postgres backend is opt-in, file-only is default.** The coordination features (`LISTEN/NOTIFY` cross-agent decision broadcasts) activate when Postgres is configured.
+
+## Roadmap
+
+Honest snapshot — most of these haven't started. Order is rough priority, not commitment.
+
+- **Postgres backend for multi-agent coordination** _(exploratory, stubbed)_ — the file backend serializes writes per-host via tmp+rename atomics. A Postgres-backed `HarnessStore` would let multiple agents (same box or different) share state through `LISTEN/NOTIFY` cross-agent decision broadcasts and row-locked decision writes. Postgres here runs locally (`brew install postgresql && createdb relay`) or remote — this isn't a cloud-only feature. Source stub lives at `src/storage/postgres-store.ts`; not wired into the factory and the integration tests are skipped.
+- **Pod executor (Kubernetes)** _(exploratory)_ — verification runs off the dev box in per-ticket pods. Prototype was removed in OSS-08 until it's wired end-to-end again.
+- **S3 artifacts** _(exploratory)_ — moving ticket evidence off the local filesystem so it survives pod/host churn. Pairs with the pod executor.
+- **Distribution: Homebrew tap + winget manifest** _(planned)_ — for one-line `brew install rly` / `winget install rly` after the first tagged release.
+- **Code signing + notarization** _(planned)_ — macOS `.dmg` (Developer ID + `notarytool`) and Windows `.msi` (Authenticode) so downloads don't need right-click-open / SmartScreen bypass. Requires paid certificates and a secret-management pass in the release workflow.
+- **npm publish** _(planned, name resolved)_ — the package is published as `@jcast90/relay` once an admin toggles the `NPM_PUBLISH_ENABLED` repo variable. Unscoped `relay` and `rly` are both taken on npm so the scope is permanent.
+- **Cost guardrails** _(in design)_ — token usage tracking per run, per ticket, per channel, with a soft cap that pauses scheduling when hit. Prerequisite to making `RELAY_AUTO_APPROVE=1` safer for multi-hour runs.
+- **Integration test coverage off macOS** _(in progress)_ — Linux and Windows spawn paths are compile-checked but only smoke-tested; promoting them to the fast CI tier is the gate to tagging cross-platform releases.
 
 ## License
 

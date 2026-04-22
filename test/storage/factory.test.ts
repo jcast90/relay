@@ -2,10 +2,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FileHarnessStore } from "../../src/storage/file-store.js";
-import { buildHarnessStore, NotImplementedError } from "../../src/storage/factory.js";
+import { buildHarnessStore } from "../../src/storage/factory.js";
 import { getHarnessStore } from "../../src/index.js";
 
 describe("buildHarnessStore", () => {
@@ -38,59 +38,87 @@ describe("buildHarnessStore", () => {
     expect(store).toBeInstanceOf(FileHarnessStore);
   });
 
-  it("throws NotImplementedError pointing at T-402 when HARNESS_STORE=postgres", () => {
-    process.env["HARNESS_STORE"] = "postgres";
-    expect(() => buildHarnessStore()).toThrow(NotImplementedError);
-    expect(() => buildHarnessStore()).toThrow(/T-402/);
+  it("warns and falls back to FileHarnessStore when HARNESS_STORE=postgres", () => {
+    // OSS-21: Postgres moved to Roadmap; setting the env should warn + degrade
+    // rather than throw so old scripts don't crash.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      process.env["HARNESS_STORE"] = "postgres";
+      const store = buildHarnessStore();
+      expect(store).toBeInstanceOf(FileHarnessStore);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toMatch(/HARNESS_STORE='postgres' ignored/);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
-  it("throws NotImplementedError mentioning sqlite when HARNESS_STORE=sqlite", () => {
-    process.env["HARNESS_STORE"] = "sqlite";
-    expect(() => buildHarnessStore()).toThrow(NotImplementedError);
-    expect(() => buildHarnessStore()).toThrow(/sqlite/i);
+  it("warns and falls back to FileHarnessStore when HARNESS_STORE=sqlite", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      process.env["HARNESS_STORE"] = "sqlite";
+      const store = buildHarnessStore();
+      expect(store).toBeInstanceOf(FileHarnessStore);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toMatch(/HARNESS_STORE='sqlite' ignored/);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
-  it("throws NotImplementedError for explicit opts.kind=sqlite (same guard path)", () => {
-    expect(() => buildHarnessStore({ kind: "sqlite" })).toThrow(NotImplementedError);
-    expect(() => buildHarnessStore({ kind: "sqlite" })).toThrow(/sqlite/i);
+  it("warns and falls back for explicit opts.kind=sqlite", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const store = buildHarnessStore({ kind: "sqlite" });
+      expect(store).toBeInstanceOf(FileHarnessStore);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
-  it("throws NotImplementedError for explicit opts.kind=postgres with postgresUrl (same guard path)", () => {
-    // Proves env-driven and opts-driven paths both flow through the same
-    // NotImplementedError guard — not a separate opts-only branch.
-    expect(() =>
-      buildHarnessStore({
+  it("warns and falls back for explicit opts.kind=postgres (env + opts both degrade through the same branch)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const store = buildHarnessStore({
         kind: "postgres",
         postgresUrl: "postgres://example/db",
-      })
-    ).toThrow(NotImplementedError);
-    expect(() =>
-      buildHarnessStore({
-        kind: "postgres",
-        postgresUrl: "postgres://example/db",
-      })
-    ).toThrow(/T-402/);
+      });
+      expect(store).toBeInstanceOf(FileHarnessStore);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("falls through to file default when HARNESS_STORE is an unrecognized value", () => {
     // Pins current behavior: `HARNESS_STORE=garbage` silently falls back to
-    // "file" rather than throwing. If a future refactor tightens this to
-    // throw-on-unknown, updating this test should be a conscious decision.
+    // "file" without a warning — unrecognized values are treated as "user
+    // didn't set the var" rather than "user asked for an unimplemented
+    // backend". If a future refactor tightens this to warn-on-unknown,
+    // updating this test should be a conscious decision.
     process.env["HARNESS_STORE"] = "garbage";
     const store = buildHarnessStore();
     expect(store).toBeInstanceOf(FileHarnessStore);
   });
 
-  it("explicit opts.kind overrides env and opts.fileRoot roots the store there", async () => {
+  it("explicit opts.kind=file with fileRoot overrides env and roots the store there", async () => {
     process.env["HARNESS_STORE"] = "postgres";
-    const store = buildHarnessStore({ kind: "file", fileRoot: tmpRoot });
-    expect(store).toBeInstanceOf(FileHarnessStore);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const store = buildHarnessStore({ kind: "file", fileRoot: tmpRoot });
+      expect(store).toBeInstanceOf(FileHarnessStore);
 
-    // Confirm fileRoot actually landed — a round-trip write shows up on disk
-    // under tmpRoot rather than the default relay dir.
-    await store.putDoc("canary", "probe", { ok: true });
-    const loaded = await store.getDoc<{ ok: boolean }>("canary", "probe");
-    expect(loaded).toEqual({ ok: true });
+      // Confirm fileRoot actually landed — a round-trip write shows up on disk
+      // under tmpRoot rather than the default relay dir.
+      await store.putDoc("canary", "probe", { ok: true });
+      const loaded = await store.getDoc<{ ok: boolean }>("canary", "probe");
+      expect(loaded).toEqual({ ok: true });
+      // opts.kind="file" wins over env, so no warning should fire.
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 
