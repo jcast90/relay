@@ -3,6 +3,7 @@ import { api } from "./api";
 import type { Channel, GuiSettings } from "./types";
 import { CenterPane } from "./components/CenterPane";
 import { NewChannelModal } from "./components/NewChannelModal";
+import { NewDmModal } from "./components/NewDmModal";
 import { RightPane } from "./components/RightPane";
 import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar } from "./components/Sidebar";
@@ -16,6 +17,7 @@ export function App() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
   const [modalOpen, setModalOpen] = useState(false);
+  const [dmModalOpen, setDmModalOpen] = useState(false);
   const [includeArchived, setIncludeArchived] = useState(false);
   const [settings, setSettings] = useState<GuiSettings | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -101,6 +103,7 @@ export function App() {
             includeArchived={includeArchived}
             onSelect={setSelectedId}
             onNewChannel={() => setModalOpen(true)}
+            onNewDm={() => setDmModalOpen(true)}
             onToggleIncludeArchived={setIncludeArchived}
             onRefresh={refresh}
           />
@@ -133,6 +136,14 @@ export function App() {
       <NewChannelModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
+        onCreated={(id) => {
+          setSelectedId(id);
+          refresh();
+        }}
+      />
+      <NewDmModal
+        open={dmModalOpen}
+        onClose={() => setDmModalOpen(false)}
         onCreated={(id) => {
           setSelectedId(id);
           refresh();
