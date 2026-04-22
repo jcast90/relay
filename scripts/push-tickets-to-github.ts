@@ -44,33 +44,20 @@ type Args = {
   dryRun: boolean;
 };
 
-// Project #3 (Relay) static field ids — discovered once via the GraphQL
-// schema query and hard-coded so the happy path doesn't round-trip
-// discovery on every run. The `Repo` and `Admin` fields are resolved
-// lazily below (see `discoverTwoAxisFields`) because those are created by
-// this script the first time it runs against a fresh project.
-const FIELDS = {
-  status: {
-    id: "PVTSSF_lAHOAPon-c4BVZUpzhQ1aBc",
-    options: {
-      todo: "f75ad846",
-      inProgress: "47fc9ee4",
-      done: "98236657",
-    },
-  },
-  relayId: "PVTF_lAHOAPon-c4BVZUpzhQ2Jgs",
-  effort: {
-    id: "PVTSSF_lAHOAPon-c4BVZUpzhQ2Jg0",
-    options: { S: "73175763", M: "3eaa7fc6", L: "5f8d4460" },
-  },
-  dependsOn: "PVTF_lAHOAPon-c4BVZUpzhQ2Jik",
-};
+// Field names on the project. Everything is discovered at runtime by
+// name (see `discoverFields`) so the script isn't pinned to Project #3's
+// specific field ids — pass `--project-id`/`--project-number` to run it
+// against a different project with the same field names.
+const STATUS_FIELD_NAME = "Status";
+const RELAY_ID_FIELD_NAME = "Relay ID";
+const EFFORT_FIELD_NAME = "Effort";
+const DEPENDS_ON_FIELD_NAME = "Depends on";
 
 // Two-axis routing field names — the script creates-or-reuses these on
 // Project #3. Names are matched case-sensitively against the project's
-// existing field list. GitHub reserves the literal `Repo` / `Repository`
-// field name (there's already a built-in Repository column), so the
-// single-select field is called `Target Repo` instead.
+// existing field list.
+// Named "Target Repo" to avoid visual confusion with GitHub's built-in
+// Repository column in the project view.
 const REPO_FIELD_NAME = "Target Repo";
 const ADMIN_FIELD_NAME = "Admin";
 
@@ -79,15 +66,30 @@ const ADMIN_FIELD_NAME = "Admin";
 // populated field doesn't end up all-gray.
 const OPTION_COLORS = ["BLUE", "GREEN", "PURPLE", "ORANGE", "PINK", "YELLOW", "RED"] as const;
 
-type TwoAxisFields = {
+type ProjectFields = {
+  // Four pre-existing fields on the project. Discovered by name rather
+  // than hard-coded so `--project-id` can point at any project that has
+  // these field names.
+  status: {
+    id: string;
+    options: { todo: string; inProgress: string; done: string };
+  };
+  relayId: { id: string };
+  effort: {
+    id: string;
+    options: { S: string; M: string; L: string };
+  };
+  dependsOn: { id: string };
+  // Two-axis routing fields. Created by this script on first run if
+  // absent, otherwise reused by name.
   repoFieldId: string;
   adminFieldId: string;
-  // Map from alias → option id for the `Repo` single-select field.
+  // Map from alias → option id for the `Target Repo` single-select field.
   repoOptions: Map<string, string>;
   // Full option list (name + color + description) so we can round-trip it
   // through `updateProjectV2Field` when we need to append a new alias —
   // GitHub's mutation replaces the option set wholesale.
-  repoOptionDefs: Array<{ id?: string; name: string; color: string; description: string }>;
+  repoOptionDefs: Array<{ id: string; name: string; color: string; description: string }>;
 };
 
 function parseArgs(argv: string[]): Args {
@@ -437,25 +439,75 @@ function pickOptionColor(index: number): string {
 }
 
 /**
- * Look up the `Repo` + `Admin` fields on the project, creating them when
- * they don't exist yet. Safe to call on re-runs — creation is guarded by
- * a name match against the field list we fetched first.
+ * Look up every project field this script writes to. The four base
+ * fields (`Status`, `Relay ID`, `Effort`, `Depends on`) must already
+ * exist — the script errors out if they don't. The two routing fields
+ * (`Target Repo`, `Admin`) are created lazily on first run and reused
+ * by name on subsequent runs.
  */
-function discoverTwoAxisFields(
+function discoverFields(
   projectId: string,
   owner: string,
   projectNumber: number,
   seedAliases: string[]
-): TwoAxisFields {
+): ProjectFields {
   const nodes = listProjectFields(owner, projectNumber);
-  let repo = nodes.find(
-    (n): n is Extract<ProjectFieldNode, { __typename: "ProjectV2SingleSelectField" }> =>
-      n.__typename === "ProjectV2SingleSelectField" && n.name === REPO_FIELD_NAME
-  );
-  let admin = nodes.find(
-    (n): n is Extract<ProjectFieldNode, { __typename: "ProjectV2Field" }> =>
-      n.__typename === "ProjectV2Field" && n.name === ADMIN_FIELD_NAME
-  );
+
+  const findSingleSelect = (name: string) =>
+    nodes.find(
+      (n): n is Extract<ProjectFieldNode, { __typename: "ProjectV2SingleSelectField" }> =>
+        n.__typename === "ProjectV2SingleSelectField" && n.name === name
+    );
+  const findText = (name: string) =>
+    nodes.find(
+      (n): n is Extract<ProjectFieldNode, { __typename: "ProjectV2Field" }> =>
+        n.__typename === "ProjectV2Field" && n.name === name
+    );
+
+  const statusField = findSingleSelect(STATUS_FIELD_NAME);
+  if (!statusField) {
+    throw new Error(`Project is missing required single-select field "${STATUS_FIELD_NAME}"`);
+  }
+  const statusOptionId = (label: string): string => {
+    const opt = statusField.options.find((o) => o.name.toLowerCase() === label.toLowerCase());
+    if (!opt) {
+      throw new Error(
+        `"${STATUS_FIELD_NAME}" field missing expected option "${label}" (have: ${statusField.options
+          .map((o) => o.name)
+          .join(", ")})`
+      );
+    }
+    return opt.id;
+  };
+
+  const relayIdField = findText(RELAY_ID_FIELD_NAME);
+  if (!relayIdField) {
+    throw new Error(`Project is missing required text field "${RELAY_ID_FIELD_NAME}"`);
+  }
+
+  const effortField = findSingleSelect(EFFORT_FIELD_NAME);
+  if (!effortField) {
+    throw new Error(`Project is missing required single-select field "${EFFORT_FIELD_NAME}"`);
+  }
+  const effortOptionId = (label: "S" | "M" | "L"): string => {
+    const opt = effortField.options.find((o) => o.name === label);
+    if (!opt) {
+      throw new Error(
+        `"${EFFORT_FIELD_NAME}" field missing expected option "${label}" (have: ${effortField.options
+          .map((o) => o.name)
+          .join(", ")})`
+      );
+    }
+    return opt.id;
+  };
+
+  const dependsOnField = findText(DEPENDS_ON_FIELD_NAME);
+  if (!dependsOnField) {
+    throw new Error(`Project is missing required text field "${DEPENDS_ON_FIELD_NAME}"`);
+  }
+
+  let repo = findSingleSelect(REPO_FIELD_NAME);
+  let admin = findText(ADMIN_FIELD_NAME);
 
   if (!repo) {
     const options = seedAliases.map((alias, i) => ({
@@ -498,7 +550,7 @@ function discoverTwoAxisFields(
   }
 
   const repoOptions = new Map<string, string>();
-  const repoOptionDefs: TwoAxisFields["repoOptionDefs"] = [];
+  const repoOptionDefs: ProjectFields["repoOptionDefs"] = [];
   for (const [i, opt] of repo.options.entries()) {
     repoOptions.set(opt.name, opt.id);
     repoOptionDefs.push({
@@ -510,6 +562,24 @@ function discoverTwoAxisFields(
   }
 
   return {
+    status: {
+      id: statusField.id,
+      options: {
+        todo: statusOptionId("Todo"),
+        inProgress: statusOptionId("In Progress"),
+        done: statusOptionId("Done"),
+      },
+    },
+    relayId: { id: relayIdField.id },
+    effort: {
+      id: effortField.id,
+      options: {
+        S: effortOptionId("S"),
+        M: effortOptionId("M"),
+        L: effortOptionId("L"),
+      },
+    },
+    dependsOn: { id: dependsOnField.id },
     repoFieldId: repo.id,
     adminFieldId: admin.id,
     repoOptions,
@@ -520,13 +590,14 @@ function discoverTwoAxisFields(
 /**
  * Add a new alias option to the existing `Repo` single-select field.
  * `updateProjectV2Field` replaces the option set wholesale, so we pass
- * every existing option (without ids — matching is by name) plus the new
- * one. If the replacement somehow drops ids for existing options GitHub
- * re-issues them; values on already-assigned items re-resolve by name.
+ * every existing option (with its `id` so GitHub preserves it — dropping
+ * the id causes GitHub to re-issue fresh ids, orphaning every already-
+ * assigned item) plus the new option (which has no id yet).
  */
-function addRepoOption(projectId: string, fields: TwoAxisFields, alias: string): string {
+function addRepoOption(projectId: string, fields: ProjectFields, alias: string): string {
   const next = [
     ...fields.repoOptionDefs.map((o) => ({
+      id: o.id,
       name: o.name,
       color: o.color || pickOptionColor(0),
       description: o.description ?? "",
@@ -659,10 +730,17 @@ query ItemFields($itemId: ID!) {
   return values;
 }
 
+// Sentinel signalling "intentionally leave Repo/Admin unset for this
+// ticket" (e.g. the ticket's assignedAlias doesn't match any
+// repoAssignment on the channel). Distinct from `undefined` which means
+// "no routing override — fall back to the channel's primary alias".
+const UNSET_ALIAS = null;
+type AssignedAliasValue = string | undefined | typeof UNSET_ALIAS;
+
 async function loadRunForChannel(channelId: string): Promise<{
   tickets: TicketDefinition[];
   relayStatusById: Map<string, string>;
-  assignedAliasById: Map<string, string | undefined>;
+  assignedAliasById: Map<string, AssignedAliasValue>;
   primaryAlias: string | null;
 }> {
   const channelStore = new ChannelStore();
@@ -675,13 +753,15 @@ async function loadRunForChannel(channelId: string): Promise<{
     throw new Error(`Channel ${channelId} has no tickets on its board`);
   }
   const relayStatusById = new Map(ledger.map((t) => [t.ticketId, t.status]));
-  const assignedAliasById = new Map<string, string | undefined>();
+  const assignedAliasById = new Map<string, AssignedAliasValue>();
   for (const t of ledger) {
     if (t.assignedAlias && !knownAliases.has(t.assignedAlias)) {
       console.error(
         `[AL-17] warning: ticket ${t.ticketId} has assignedAlias=${t.assignedAlias} but channel ${channelId} has no matching repoAssignment — leaving Repo/Admin unset for this ticket.`
       );
-      assignedAliasById.set(t.ticketId, undefined);
+      // Sentinel: the writer will skip Repo/Admin for this ticket
+      // rather than silently falling back to the primary alias.
+      assignedAliasById.set(t.ticketId, UNSET_ALIAS);
     } else {
       assignedAliasById.set(t.ticketId, t.assignedAlias);
     }
@@ -741,9 +821,9 @@ async function main(): Promise<void> {
     )
   );
 
-  const twoAxis = args.dryRun
+  const fields = args.dryRun
     ? null
-    : discoverTwoAxisFields(args.projectId, args.owner, args.projectNumber, seedAliases);
+    : discoverFields(args.projectId, args.owner, args.projectNumber, seedAliases);
 
   const rows: Array<{
     ticket: string;
@@ -779,12 +859,19 @@ async function main(): Promise<void> {
       action = "created";
     }
 
-    // Resolve the per-ticket routing axis. Falls back to the channel's
-    // primary repo alias when the ticket itself doesn't route.
-    const routedAlias = assignedAliasById.get(t.id) ?? primaryAlias ?? undefined;
+    // Resolve the per-ticket routing axis.
+    //  - `UNSET_ALIAS` (null): ticket had a bad assignedAlias — leave
+    //    Repo/Admin unwritten so the data drift is visible on the board.
+    //  - `undefined`: no per-ticket routing; fall back to the channel's
+    //    primary repo alias.
+    //  - `string`: explicit routing to that alias.
+    const rawAlias = assignedAliasById.get(t.id);
+    const routedAlias: string | undefined =
+      rawAlias === UNSET_ALIAS ? undefined : (rawAlias ?? primaryAlias ?? undefined);
+    const skipRepoAdminWrite = rawAlias === UNSET_ALIAS;
     const adminText = routedAlias ? `repo-admin-${routedAlias}` : undefined;
 
-    if (!args.dryRun && twoAxis) {
+    if (!args.dryRun && fields) {
       const itemId = addItemToProject(args.projectId, issueUrl);
       const current = getItemFieldValues(itemId);
 
@@ -792,37 +879,39 @@ async function main(): Promise<void> {
         setSingleSelectField(
           args.projectId,
           itemId,
-          FIELDS.status.id,
-          FIELDS.status.options[bucket]
+          fields.status.id,
+          fields.status.options[bucket]
         );
       }
       if (current.relayIdText !== t.id) {
-        setTextField(args.projectId, itemId, FIELDS.relayId, t.id);
+        setTextField(args.projectId, itemId, fields.relayId.id, t.id);
       }
       if (effort && current.effortOptionName !== effort) {
         setSingleSelectField(
           args.projectId,
           itemId,
-          FIELDS.effort.id,
-          FIELDS.effort.options[effort]
+          fields.effort.id,
+          fields.effort.options[effort]
         );
       }
       const depsText = t.dependsOn.length > 0 ? t.dependsOn.join(", ") : "";
       if (depsText && current.dependsOnText !== depsText) {
-        setTextField(args.projectId, itemId, FIELDS.dependsOn, depsText);
+        setTextField(args.projectId, itemId, fields.dependsOn.id, depsText);
       }
 
-      if (routedAlias) {
-        let optionId = twoAxis.repoOptions.get(routedAlias);
-        if (!optionId) {
-          optionId = addRepoOption(args.projectId, twoAxis, routedAlias);
+      if (!skipRepoAdminWrite) {
+        if (routedAlias) {
+          let optionId = fields.repoOptions.get(routedAlias);
+          if (!optionId) {
+            optionId = addRepoOption(args.projectId, fields, routedAlias);
+          }
+          if (current.repoOptionName !== routedAlias) {
+            setSingleSelectField(args.projectId, itemId, fields.repoFieldId, optionId);
+          }
         }
-        if (current.repoOptionName !== routedAlias) {
-          setSingleSelectField(args.projectId, itemId, twoAxis.repoFieldId, optionId);
+        if (adminText && current.adminText !== adminText) {
+          setTextField(args.projectId, itemId, fields.adminFieldId, adminText);
         }
-      }
-      if (adminText && current.adminText !== adminText) {
-        setTextField(args.projectId, itemId, twoAxis.adminFieldId, adminText);
       }
     }
 
@@ -841,11 +930,11 @@ async function main(): Promise<void> {
       {
         project: args.projectId,
         repo: args.repo,
-        twoAxisFields: twoAxis
+        twoAxisFields: fields
           ? {
-              repoFieldId: twoAxis.repoFieldId,
-              adminFieldId: twoAxis.adminFieldId,
-              repoOptions: Object.fromEntries(twoAxis.repoOptions),
+              repoFieldId: fields.repoFieldId,
+              adminFieldId: fields.adminFieldId,
+              repoOptions: Object.fromEntries(fields.repoOptions),
             }
           : null,
         rows,
