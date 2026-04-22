@@ -90,6 +90,16 @@ pub struct RepoAssignment {
     pub repo_path: String,    // absolute path to repo
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelTier {
+    FeatureLarge,
+    Feature,
+    Bugfix,
+    Chore,
+    Question,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Channel {
@@ -113,12 +123,17 @@ pub struct Channel {
     /// Absence means no Linear mirror is configured.
     #[serde(default)]
     pub linear_project_id: Option<String>,
+    /// Classifier-assigned tier surfaced as a pill in the channel header.
+    /// Back-compat via serde default; older channel files deserialize with None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<ChannelTier>,
+    /// Channel is pinned to the Starred section of the sidebar.
+    #[serde(default)]
+    pub starred: bool,
     /// Per-channel opt-in for unattended agent runs (AL-0). When `true`,
     /// agent subprocesses dispatched on behalf of this channel skip every
-    /// permission prompt (Claude `--dangerously-skip-permissions`, Codex
-    /// `--sandbox workspace-write --ask-for-approval never`). Optional +
-    /// `#[serde(default)]` so older channel files that predate the flag keep
-    /// deserializing as `false`.
+    /// permission prompt. Optional + `#[serde(default)]` so older channel
+    /// files that predate the flag keep deserializing as `false`.
     #[serde(default)]
     pub full_access: Option<bool>,
     /// ISO 8601 timestamps. Optional for back-compat with channel files
@@ -269,6 +284,53 @@ pub fn load_config() -> HarnessConfig {
     })
 }
 
+// --- GUI Settings ---
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiSettings {
+    #[serde(default = "default_ticket_provider")]
+    pub ticket_provider: String,
+    #[serde(default)]
+    pub linear_api_token: String,
+    #[serde(default)]
+    pub linear_workspace: String,
+    #[serde(default = "default_poll_interval")]
+    pub linear_poll_seconds: u32,
+    #[serde(default = "default_right_rail_open")]
+    pub right_rail_open: bool,
+}
+
+fn default_ticket_provider() -> String { "relay".to_string() }
+fn default_poll_interval() -> u32 { 30 }
+fn default_right_rail_open() -> bool { true }
+
+pub fn gui_settings_path() -> PathBuf {
+    harness_root().join("gui-settings.json")
+}
+
+pub fn load_gui_settings() -> GuiSettings {
+    load_json::<GuiSettings>(&gui_settings_path()).unwrap_or_else(|| GuiSettings {
+        ticket_provider: default_ticket_provider(),
+        linear_api_token: String::new(),
+        linear_workspace: String::new(),
+        linear_poll_seconds: default_poll_interval(),
+        right_rail_open: default_right_rail_open(),
+    })
+}
+
+pub fn save_gui_settings(s: &GuiSettings) -> Result<(), String> {
+    let path = gui_settings_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let content = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, &content).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Scan a directory for immediate child directories that contain a .git folder
 fn discover_repos_in(dir: &Path) -> Vec<WorkspaceEntry> {
     let mut repos = Vec::new();
@@ -334,6 +396,32 @@ pub fn load_agent_names() -> Vec<AgentNameEntry> {
 
 pub fn load_channels() -> Vec<Channel> {
     load_channels_with_status(false)
+}
+
+fn channel_json_path(channel_id: &str) -> PathBuf {
+    harness_root()
+        .join("channels")
+        .join(format!("{}.json", channel_id))
+}
+
+pub fn load_channel(channel_id: &str) -> Option<Channel> {
+    load_json::<Channel>(&channel_json_path(channel_id))
+}
+
+/// Atomic write of a Channel record. Stamps `updated_at` to now before
+/// persisting so every mutator doesn't have to remember to bump it.
+pub fn save_channel(channel: &Channel) -> Result<(), String> {
+    let mut ch = channel.clone();
+    ch.updated_at = Some(chrono::Utc::now().to_rfc3339());
+    let path = channel_json_path(&ch.channel_id);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let content = serde_json::to_string_pretty(&ch).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, &content).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 pub fn load_channels_with_status(include_archived: bool) -> Vec<Channel> {

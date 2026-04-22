@@ -25,6 +25,16 @@ export type ChannelRef = {
   label: string;
 };
 
+export type ChannelTier = "feature_large" | "feature" | "bugfix" | "chore" | "question";
+
+export type GuiSettings = {
+  ticketProvider: "relay" | "linear" | "none";
+  linearApiToken: string;
+  linearWorkspace: string;
+  linearPollSeconds: number;
+  rightRailOpen: boolean;
+};
+
 export type Channel = {
   channelId: string;
   name: string;
@@ -37,6 +47,10 @@ export type Channel = {
   // for back-compat with older channel files; when unset, UI falls back to
   // the first entry in `repoAssignments`.
   primaryWorkspaceId?: string;
+  // Classifier-assigned tier. Optional — older channels omit.
+  tier?: ChannelTier;
+  // Pinned to the Starred section of the sidebar.
+  starred?: boolean;
   // Per-channel opt-in for unattended agent runs (AL-0). When `true`, agent
   // subprocesses dispatched for this channel skip permission prompts.
   // Optional for back-compat; a missing field means "off".
@@ -147,9 +161,9 @@ export type AgentNameEntry = {
 };
 
 // An agent process launched into its own external terminal window via the
-// spawn flow. Mirrors the shape documented in Task #24's contract. Fields
-// other than alias/repoPath are populated best-effort by the platform
-// Terminal adapter and may be undefined when the adapter can't report them.
+// spawn flow. Fields other than alias/repoPath are populated best-effort by
+// the platform Terminal adapter and may be undefined when the adapter can't
+// report them.
 export type Spawn = {
   alias: string;
   repoPath: string;

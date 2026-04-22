@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { api } from "../api";
 import type { Channel } from "../types";
 
@@ -9,25 +9,17 @@ type Props = {
   onSelect: (id: string) => void;
   onNewChannel: () => void;
   onToggleIncludeArchived: (next: boolean) => void;
-  onArchived: (id: string) => void;
   onRefresh: () => void;
 };
 
-/**
- * Sort by most-recent activity (updatedAt desc) so the channel you're
- * actively working in — or last worked in — stays at the top. Falls back to
- * createdAt, then name. Channels missing both timestamps sink to the bottom.
- * Pure, safe to call every render.
- */
 function sortByActivity(channels: Channel[]): Channel[] {
-  const activityTs = (c: Channel): number => {
+  const ts = (c: Channel): number => {
     const raw = c.updatedAt ?? c.createdAt;
-    if (!raw) return 0;
-    const parsed = Date.parse(raw);
+    const parsed = raw ? Date.parse(raw) : NaN;
     return Number.isFinite(parsed) ? parsed : 0;
   };
   return [...channels].sort((a, b) => {
-    const diff = activityTs(b) - activityTs(a);
+    const diff = ts(b) - ts(a);
     if (diff !== 0) return diff;
     return a.name.localeCompare(b.name);
   });
@@ -40,92 +32,196 @@ export function Sidebar({
   onSelect,
   onNewChannel,
   onToggleIncludeArchived,
-  onArchived,
   onRefresh,
 }: Props) {
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const sorted = sortByActivity(channels);
+  const [starredOpen, setStarredOpen] = useState(true);
+  const [channelsOpen, setChannelsOpen] = useState(true);
 
-  const handleArchive = async (c: Channel) => {
-    if (busyId) return;
-    const label = c.status === "archived" ? "Unarchive" : "Archive";
-    if (!confirm(`${label} #${c.name}?`)) return;
-    setBusyId(c.channelId);
+  const sorted = useMemo(() => sortByActivity(channels), [channels]);
+  const starred = sorted.filter((c) => c.starred && c.status === "active");
+  const active = sorted.filter((c) => !c.starred && c.status === "active");
+  const archived = sorted.filter((c) => c.status === "archived");
+
+  const toggleStar = async (c: Channel) => {
     try {
-      if (c.status === "archived") {
-        await api.unarchiveChannel(c.channelId);
-      } else {
-        await api.archiveChannel(c.channelId);
-        // Intentionally only on archive — unarchive never needs to drop the
-        // selection since the row stays visible (either under the
-        // "Show archived" toggle or after it becomes active again).
-        onArchived(c.channelId);
-      }
+      await api.setChannelStarred(c.channelId, !c.starred);
       onRefresh();
     } catch (err) {
-      alert(`${label} failed: ${err}`);
-    } finally {
-      setBusyId(null);
+      alert(`Failed to ${c.starred ? "unstar" : "star"} #${c.name}: ${err}`);
     }
   };
 
   return (
-    <div className="panel">
-      <div className="panel-header">
-        <span>Channels</span>
-        <button onClick={onNewChannel} title="New channel">
-          +
-        </button>
+    <div className="sidebar">
+      <div className="sidebar-header">
+        <div className="ws-avatar">R</div>
+        <div>
+          <div className="ws-title">Relay</div>
+          <div className="ws-sub">local workspace</div>
+        </div>
       </div>
-      <label className="sidebar-toggle">
-        <input
-          type="checkbox"
-          checked={includeArchived}
-          onChange={(e) => onToggleIncludeArchived(e.target.checked)}
-        />
-        Show archived
-      </label>
-      <div className="list">
-        {sorted.length === 0 && (
-          <div className="empty">{includeArchived ? "No channels" : "No active channels"}</div>
-        )}
-        {sorted.map((c) => {
-          const archived = c.status === "archived";
-          return (
-            <div
-              key={c.channelId}
-              className={`list-item ${c.channelId === selectedId ? "active" : ""} ${
-                archived ? "archived" : ""
-              }`}
-              onClick={() => onSelect(c.channelId)}
-            >
-              <div className="list-item-row">
-                <div className="list-item-body">
-                  <div className="name">
-                    #{c.name}
-                    {archived && <span className="archived-badge">archived</span>}
-                  </div>
-                  <div className="meta">
-                    {c.members.length} agents · {c.repoAssignments.length} repos
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="channel-archive-btn"
-                  title={archived ? "Unarchive channel" : "Archive channel"}
-                  disabled={busyId === c.channelId}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleArchive(c);
-                  }}
-                >
-                  {archived ? "↺" : "✕"}
-                </button>
-              </div>
+
+      <div className="sidebar-scroll">
+        <ActivityBlock channels={active} />
+
+        <section className="sidebar-section">
+          <header
+            className="sidebar-section-head"
+            onClick={() => setStarredOpen((v) => !v)}
+            role="button"
+          >
+            <span>★ Starred</span>
+            <span className="count">{starred.length}</span>
+          </header>
+          {starredOpen && (
+            <div>
+              {starred.length === 0 && (
+                <div className="sidebar-empty">No starred channels</div>
+              )}
+              {starred.map((c) => (
+                <ChannelRow
+                  key={c.channelId}
+                  channel={c}
+                  active={c.channelId === selectedId}
+                  onSelect={() => onSelect(c.channelId)}
+                  onStarToggle={() => toggleStar(c)}
+                />
+              ))}
             </div>
-          );
-        })}
+          )}
+        </section>
+
+        <section className="sidebar-section">
+          <header
+            className="sidebar-section-head"
+            onClick={() => setChannelsOpen((v) => !v)}
+            role="button"
+          >
+            <span># Channels</span>
+            <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+              <span className="count">{active.length}</span>
+              <button
+                className="add-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onNewChannel();
+                }}
+                title="New channel"
+              >
+                +
+              </button>
+            </span>
+          </header>
+          {channelsOpen && (
+            <div>
+              {active.length === 0 && (
+                <div className="sidebar-empty">No active channels</div>
+              )}
+              {active.map((c) => (
+                <ChannelRow
+                  key={c.channelId}
+                  channel={c}
+                  active={c.channelId === selectedId}
+                  onSelect={() => onSelect(c.channelId)}
+                  onStarToggle={() => toggleStar(c)}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="sidebar-section">
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "6px 12px",
+              color: "var(--color-text-on-dark-muted)",
+              fontSize: "var(--font-size-xs)",
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={includeArchived}
+              onChange={(e) => onToggleIncludeArchived(e.target.checked)}
+            />
+            Show archived
+          </label>
+          {includeArchived &&
+            archived.map((c) => (
+              <ChannelRow
+                key={c.channelId}
+                channel={c}
+                active={c.channelId === selectedId}
+                onSelect={() => onSelect(c.channelId)}
+                onStarToggle={() => toggleStar(c)}
+                archived
+              />
+            ))}
+        </section>
       </div>
     </div>
+  );
+}
+
+function ChannelRow({
+  channel,
+  active,
+  onSelect,
+  onStarToggle,
+  archived,
+}: {
+  channel: Channel;
+  active: boolean;
+  onSelect: () => void;
+  onStarToggle: () => void;
+  archived?: boolean;
+}) {
+  return (
+    <div
+      className={`sidebar-item ${active ? "active" : ""} ${archived ? "archived" : ""}`}
+      onClick={onSelect}
+    >
+      <span className="ch-sigil">#</span>
+      <span className="ch-name">{channel.name}</span>
+      {channel.repoAssignments.length > 0 && (
+        <span className="ch-badge">{channel.repoAssignments.length}</span>
+      )}
+      <button
+        className="add-btn"
+        style={{ color: channel.starred ? "var(--color-accent-amber)" : undefined }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onStarToggle();
+        }}
+        title={channel.starred ? "Unstar" : "Star"}
+      >
+        {channel.starred ? "★" : "☆"}
+      </button>
+    </div>
+  );
+}
+
+function ActivityBlock({ channels }: { channels: Channel[] }) {
+  const recent = channels.slice(0, 3);
+  if (recent.length === 0) return null;
+  return (
+    <section className="sidebar-section">
+      <header className="sidebar-section-head">
+        <span>◔ Activity</span>
+      </header>
+      {recent.map((c) => (
+        <div
+          key={c.channelId}
+          className="sidebar-item"
+          style={{ cursor: "default", opacity: 0.85 }}
+        >
+          <span className="ch-sigil">#</span>
+          <span className="ch-name">{c.name}</span>
+        </div>
+      ))}
+    </section>
   );
 }

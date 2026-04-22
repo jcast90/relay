@@ -238,11 +238,11 @@ fn cli_json(args: &[&str]) -> Result<serde_json::Value, String> {
 
 /// Subcommands the renderer is allowed to invoke through `run_cli`.
 ///
-/// As of this commit, no call site in `gui/src/` uses `run_cli` — the
-/// frontend reaches the CLI through the typed wrappers (`create_channel`,
-/// `post_to_channel`, etc.). `run_cli` stays for escape-hatch diagnostics
-/// but is locked down to a short read-only list so a compromised renderer
-/// can't trigger destructive operations. Add entries here as the renderer
+/// The frontend reaches the CLI through the typed wrappers
+/// (`create_channel`, `post_to_channel`, etc.). `run_cli` stays for
+/// escape-hatch diagnostics but is locked down to a short read-only list
+/// so a compromised renderer can't trigger destructive operations. Add
+/// entries here as the renderer
 /// grows legitimate needs.
 const RUN_CLI_ALLOWED_SUBCOMMANDS: &[&[&str]] = &[
     &["channel", "list"],
@@ -397,6 +397,59 @@ fn update_channel_repos(
     }
     let repos = repos_arg(&repos);
     cli_json(&["channel", "update", &channel_id, "--repos", &repos, "--json"])
+}
+
+#[tauri::command]
+fn set_channel_starred(channel_id: String, starred: bool) -> Result<(), String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    let mut ch = data::load_channel(&channel_id)
+        .ok_or_else(|| format!("channel {} not found", channel_id))?;
+    ch.starred = starred;
+    data::save_channel(&ch)
+}
+
+#[tauri::command]
+fn set_channel_tier(channel_id: String, tier: Option<String>) -> Result<(), String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    let parsed = match tier.as_deref() {
+        None | Some("") => None,
+        Some("feature_large") => Some(data::ChannelTier::FeatureLarge),
+        Some("feature") => Some(data::ChannelTier::Feature),
+        Some("bugfix") => Some(data::ChannelTier::Bugfix),
+        Some("chore") => Some(data::ChannelTier::Chore),
+        Some("question") => Some(data::ChannelTier::Question),
+        Some(other) => return Err(format!("unknown tier: {}", other)),
+    };
+    let mut ch = data::load_channel(&channel_id)
+        .ok_or_else(|| format!("channel {} not found", channel_id))?;
+    ch.tier = parsed;
+    data::save_channel(&ch)
+}
+
+#[tauri::command]
+fn get_settings() -> data::GuiSettings {
+    data::load_gui_settings()
+}
+
+#[tauri::command]
+fn update_settings(settings: data::GuiSettings) -> Result<(), String> {
+    data::save_gui_settings(&settings)
+}
+
+#[tauri::command]
+fn set_primary_repo(channel_id: String, workspace_id: String) -> Result<(), String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    validate_id_segment(&workspace_id, "workspaceId")?;
+    let mut ch = data::load_channel(&channel_id)
+        .ok_or_else(|| format!("channel {} not found", channel_id))?;
+    if !ch.repo_assignments.iter().any(|r| r.workspace_id == workspace_id) {
+        return Err(format!(
+            "workspace {} is not attached to channel {}",
+            workspace_id, channel_id
+        ));
+    }
+    ch.primary_workspace_id = Some(workspace_id);
+    data::save_channel(&ch)
 }
 
 #[tauri::command]
@@ -910,7 +963,7 @@ fn cancel_chat_stream(stream_id: u64) -> Result<(), String> {
     Ok(())
 }
 
-// --- Terminal spawn/kill lifecycle (Task #24, OSS-10) ---
+// --- Terminal spawn/kill lifecycle ---
 //
 // Each channel tracks an associated-repo agent spawn in
 // `~/.relay/channels/<channelId>/spawns.json`.
@@ -1905,6 +1958,11 @@ pub fn run() {
             unarchive_channel,
             set_channel_full_access,
             update_channel_repos,
+            set_channel_starred,
+            set_channel_tier,
+            set_primary_repo,
+            get_settings,
+            update_settings,
             post_to_channel,
             create_session,
             delete_session,

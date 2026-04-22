@@ -1,71 +1,52 @@
-import { useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { useEffect, useState } from "react";
 import { api, subscribeChatEvents, type ChatEvent } from "../api";
 import type {
   Channel,
   ChannelEntry,
   ChatSession,
   Decision,
-  PendingPlan,
+  GuiSettings,
   PersistedChatMessage,
   TicketLedgerEntry,
 } from "../types";
-
-type Tab = "chat" | "board" | "decisions";
+import { BoardView } from "./BoardView";
+import { ChannelHeader, type ChannelTab } from "./ChannelHeader";
+import { ChannelSettingsDrawer } from "./ChannelSettingsDrawer";
+import { Composer, reduceStream, type ActiveStream } from "./Composer";
+import { DecisionsView } from "./DecisionsView";
+import { MessageList } from "./MessageList";
 
 type Props = {
   channel: Channel | null;
   sessionId: string | null;
   refreshTick: number;
+  rightRailOpen: boolean;
+  settings: GuiSettings | null;
+  onToggleRail: () => void;
   onRefresh: () => void;
   onSessionCreated: (sessionId: string) => void;
+  onChannelRemoved: (id: string) => void;
 };
-
-type ActivityEntry = { text: string; ts: number };
-
-type ActiveStream = {
-  streamId: number;
-  alias: string | null;
-  accum: string;
-  activity: ActivityEntry[];
-  expanded: boolean;
-};
-
-const ACTIVITY_STACK_MAX = 20;
-const ACTIVITY_TOP_N = 3;
-
-// Renders message text as Github-flavored markdown. Links open in a new tab so
-// they don't navigate the Tauri webview away from the app shell.
-function MessageMarkdown({ text }: { text: string }) {
-  return (
-    <div className="md">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          a: (props) => <a {...props} target="_blank" rel="noreferrer noopener" />,
-        }}
-      >
-        {text}
-      </ReactMarkdown>
-    </div>
-  );
-}
 
 export function CenterPane({
   channel,
   sessionId,
   refreshTick,
+  rightRailOpen,
+  settings,
+  onToggleRail,
   onRefresh,
   onSessionCreated,
+  onChannelRemoved,
 }: Props) {
-  const [tab, setTab] = useState<Tab>("chat");
+  const [tab, setTab] = useState<ChannelTab>("chat");
   const [feed, setFeed] = useState<ChannelEntry[]>([]);
   const [tickets, setTickets] = useState<TicketLedgerEntry[]>([]);
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [sessionMessages, setSessionMessages] = useState<PersistedChatMessage[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [stream, setStream] = useState<ActiveStream | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     if (!channel) return;
@@ -75,13 +56,18 @@ export function CenterPane({
       api.listChannelTickets(channel.channelId),
       api.listChannelDecisions(channel.channelId),
       api.listSessions(channel.channelId),
-    ]).then(([f, t, d, s]) => {
-      if (cancelled) return;
-      setFeed(f);
-      setTickets(t);
-      setDecisions(d);
-      setSessions(s);
-    });
+    ])
+      .then(([f, t, d, s]) => {
+        if (cancelled) return;
+        setFeed(f);
+        setTickets(t);
+        setDecisions(d);
+        setSessions(s);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("[center] batch fetch failed", err);
+      });
     return () => {
       cancelled = true;
     };
@@ -92,24 +78,44 @@ export function CenterPane({
       setSessionMessages([]);
       return;
     }
-    api.loadSession(channel.channelId, sessionId, 500).then(setSessionMessages);
+    let cancelled = false;
+    api
+      .loadSession(channel.channelId, sessionId, 500)
+      .then((ms) => {
+        if (!cancelled) setSessionMessages(ms);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("[center] loadSession failed", err);
+        setSessionMessages([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [channel?.channelId, sessionId, refreshTick]);
 
-  // Subscribe once to chat-event stream and route by streamId.
+  // Tauri's `subscribeChatEvents` returns an UnlistenFn asynchronously.
+  // If the effect unmounts before the promise resolves, we must still call
+  // the unlisten that arrives late — otherwise the channel listener leaks
+  // for the rest of the process lifetime.
   useEffect(() => {
+    let cancelled = false;
     let unlisten: (() => void) | undefined;
-    subscribeChatEvents((event) => {
+    subscribeChatEvents((event: ChatEvent) => {
       setStream((current) => {
         if (!current || event.streamId !== current.streamId) return current;
         return reduceStream(current, event);
       });
       if (event.kind === "done" || event.kind === "error") {
-        // Refresh persisted messages so the stored assistant text shows up.
         onRefresh();
         setStream((current) => (current && current.streamId === event.streamId ? null : current));
       }
-    }).then((u) => (unlisten = u));
+    }).then((u) => {
+      if (cancelled) u();
+      else unlisten = u;
+    });
     return () => {
+      cancelled = true;
       if (unlisten) unlisten();
     };
   }, [onRefresh]);
@@ -118,1015 +124,60 @@ export function CenterPane({
 
   if (!channel) {
     return (
-      <div className="panel">
-        <div className="empty">Select or create a channel</div>
+      <div className="center-pane">
+        <div className="center-empty">Select or create a channel</div>
       </div>
     );
   }
 
   return (
-    <div className="panel">
-      <PendingPlanCta channel={channel} refreshTick={refreshTick} onChanged={onRefresh} />
-      <ChannelHeader channel={channel} onRefresh={onRefresh} />
-      <div className="tabs">
-        <div className={`tab ${tab === "chat" ? "active" : ""}`} onClick={() => setTab("chat")}>
-          Chat
-        </div>
-        <div className={`tab ${tab === "board" ? "active" : ""}`} onClick={() => setTab("board")}>
-          Board ({tickets.length})
-        </div>
-        <div
-          className={`tab ${tab === "decisions" ? "active" : ""}`}
-          onClick={() => setTab("decisions")}
-        >
-          Decisions ({decisions.length})
-        </div>
-      </div>
+    <div className="center-pane">
+      <ChannelHeader
+        channel={channel}
+        tab={tab}
+        onTabChange={setTab}
+        rightRailOpen={rightRailOpen}
+        onToggleRail={onToggleRail}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onRefresh={onRefresh}
+      />
       {tab === "chat" && (
-        <ChatView
-          channel={channel}
-          sessionId={sessionId}
-          activeSession={activeSession}
-          sessionMessages={sessionMessages}
-          feed={feed}
-          stream={stream}
-          onStartStream={setStream}
-          onSessionCreated={onSessionCreated}
-          onRefresh={onRefresh}
-        />
-      )}
-      {tab === "board" && (
-        <div className="content board-content">
-          <BoardView tickets={tickets} />
-        </div>
-      )}
-      {tab === "decisions" && (
-        <div className="content">
-          <DecisionsView decisions={decisions} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-/**
- * Channel header strip — shows the channel name alongside channel-level
- * controls. Today that's the AL-0 full-access toggle. The toggle writes to
- * the CLI via `api.setChannelFullAccess`, which also records a decision
- * entry, so flipping the switch here surfaces in the Decisions tab on the
- * next refresh.
- */
-function ChannelHeader({ channel, onRefresh }: { channel: Channel; onRefresh: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // Local mirror of `channel.fullAccess` so the checkbox reflects the new
-  // value immediately after the invoke resolves — the parent refetches via
-  // `onRefresh`, but that round trip is async and the user expects instant
-  // feedback. When `channel` re-renders with updated data, this state is
-  // reseeded by the effect below.
-  const [current, setCurrent] = useState<boolean>(channel.fullAccess === true);
-  useEffect(() => {
-    setCurrent(channel.fullAccess === true);
-  }, [channel.channelId, channel.fullAccess]);
-
-  const toggle = async () => {
-    if (busy) return;
-    const next = !current;
-    // Confirm before flipping — full-access silences every permission prompt
-    // for every future subprocess this channel spawns, which is strictly
-    // more impactful than a normal archive. Matches the conversational tone
-    // of Sidebar's archive confirm() (`Archive #foo?`).
-    const prompt = next
-      ? `Enable full access for #${channel.name}? All subprocesses spawned from this channel will run without permission prompts until this is turned off.`
-      : `Disable full access for #${channel.name}? Permission prompts will return for new subprocesses.`;
-    if (!confirm(prompt)) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await api.setChannelFullAccess(channel.channelId, next);
-      setCurrent(next);
-      // Refresh so the Decisions tab picks up the audit entry the setter
-      // just wrote. Callers already debounce refreshes at the parent so
-      // this is safe to fire synchronously.
-      onRefresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="channel-header">
-      <span className="channel-header-name">{channel.name}</span>
-      <label
-        className="auto-approve"
-        title="Runs dispatched agents with workspace-write sandbox and no approval prompts for this channel only. Scoped per-channel; other channels are unaffected."
-      >
-        <input type="checkbox" checked={current} disabled={busy} onChange={toggle} />
-        Full access
-      </label>
-      {error && <span className="channel-header-error">{error}</span>}
-    </div>
-  );
-}
-
-function reduceStream(current: ActiveStream, event: ChatEvent): ActiveStream {
-  switch (event.kind) {
-    case "chunk":
-      return { ...current, accum: current.accum + event.text };
-    case "activity": {
-      // Cap BEFORE pushing so a runaway tool-use burst can't transiently
-      // queue thousands of entries before the slice kicks in.
-      const keep = current.activity.slice(-(ACTIVITY_STACK_MAX - 1));
-      return {
-        ...current,
-        activity: [...keep, { text: event.text, ts: Date.now() }],
-      };
-    }
-    default:
-      return current;
-  }
-}
-
-function ChatView({
-  channel,
-  sessionId,
-  activeSession,
-  sessionMessages,
-  feed,
-  stream,
-  onStartStream,
-  onSessionCreated,
-  onRefresh,
-}: {
-  channel: Channel;
-  sessionId: string | null;
-  activeSession: ChatSession | null;
-  sessionMessages: PersistedChatMessage[];
-  feed: ChannelEntry[];
-  stream: ActiveStream | null;
-  onStartStream: (s: ActiveStream | null) => void;
-  onSessionCreated: (sessionId: string) => void;
-  onRefresh: () => void;
-}) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [sessionMessages.length, feed.length, sessionId, stream?.accum.length]);
-
-  return (
-    <>
-      <div className="content" ref={scrollRef}>
-        {sessionId ? (
-          <SessionMessages
+        <>
+          <MessageList
             channel={channel}
             sessionId={sessionId}
-            messages={sessionMessages}
-            streaming={!!stream}
+            feed={feed}
+            sessionMessages={sessionMessages}
+            stream={stream}
             streamId={stream?.streamId ?? null}
+            onToggleStreamExpanded={() =>
+              setStream((s) => (s ? { ...s, expanded: !s.expanded } : s))
+            }
             onRewound={() => {
-              onStartStream(null);
+              setStream(null);
               onRefresh();
             }}
           />
-        ) : (
-          <FeedView entries={feed} />
-        )}
-        {stream && (
-          <ActivityStreamCard
-            stream={stream}
-            onToggleExpanded={() => onStartStream({ ...stream, expanded: !stream.expanded })}
-          />
-        )}
-      </div>
-      <Composer
-        channel={channel}
-        sessionId={sessionId}
-        activeSession={activeSession}
-        streaming={!!stream}
-        onStartStream={onStartStream}
-        onSessionCreated={onSessionCreated}
-      />
-    </>
-  );
-}
-
-function ActivityStreamCard({
-  stream,
-  onToggleExpanded,
-}: {
-  stream: ActiveStream;
-  onToggleExpanded: () => void;
-}) {
-  const total = stream.activity.length;
-  const visibleCount = stream.expanded ? total : Math.min(ACTIVITY_TOP_N, total);
-  const visible = total === 0 ? [] : stream.activity.slice(total - visibleCount);
-  const hiddenCount = total - visibleCount;
-  const agentBadge = stream.alias ? `@${stream.alias}` : "agent";
-  const latestTs = total > 0 ? stream.activity[total - 1].ts : null;
-
-  return (
-    <div className="feed-entry role-assistant streaming">
-      <div className="feed-header">
-        <span className="feed-author">{stream.alias ? `@${stream.alias}` : "assistant"}</span>
-        <span className="stream-status">
-          <span className="stream-dot" />
-          {stream.accum ? "writing response" : "thinking"}
-          {total > 0 ? ` · ${total} action${total === 1 ? "" : "s"}` : ""}
-        </span>
-      </div>
-      <div className={`stream-activity ${stream.expanded ? "expanded" : ""}`}>
-        {total === 0 ? (
-          <div className="stream-activity-empty">
-            <span className="activity-badge">{agentBadge}</span>
-            <span className="activity-icon">⚙</span>
-            <span className="activity-ellipsis">
-              {stream.accum ? "writing response…" : "thinking…"}
-            </span>
-          </div>
-        ) : (
-          <>
-            {visible.map((entry, i) => {
-              const isNewest = i === visible.length - 1;
-              return (
-                <div
-                  key={`${entry.ts}-${i}`}
-                  className={`stream-activity-line ${isNewest ? "newest" : ""}`}
-                  title={new Date(entry.ts).toLocaleTimeString()}
-                >
-                  {isNewest && <span className="activity-badge">{agentBadge}</span>}
-                  <span className="activity-icon">⚙</span>
-                  <span className="activity-text">{entry.text}</span>
-                </div>
-              );
-            })}
-            {hiddenCount > 0 && (
-              <button type="button" className="stream-activity-more" onClick={onToggleExpanded}>
-                +{hiddenCount} more
-              </button>
-            )}
-            {stream.expanded && total > ACTIVITY_TOP_N && (
-              <button type="button" className="stream-activity-more" onClick={onToggleExpanded}>
-                collapse
-              </button>
-            )}
-          </>
-        )}
-        {latestTs && (
-          <div className="stream-activity-meta">
-            last update {new Date(latestTs).toLocaleTimeString()}
-          </div>
-        )}
-      </div>
-      {stream.accum && (
-        <div className="feed-content">
-          <MessageMarkdown text={stream.accum} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SessionMessages({
-  channel,
-  sessionId,
-  messages,
-  streaming,
-  streamId,
-  onRewound,
-}: {
-  channel: Channel;
-  sessionId: string;
-  messages: PersistedChatMessage[];
-  streaming: boolean;
-  streamId: number | null;
-  onRewound: () => void;
-}) {
-  const [rewindTarget, setRewindTarget] = useState<PersistedChatMessage | null>(null);
-
-  if (messages.length === 0) return <div className="empty">No messages in this session yet</div>;
-  return (
-    <>
-      {messages.map((m, i) => {
-        const rewindKey = m.metadata?.rewindKey;
-        const canRewind = m.role === "user" && !!rewindKey && !streaming;
-        return (
-          <div key={i} className={`feed-entry role-${m.role}`}>
-            <div className="feed-header">
-              <span className="feed-author">{m.agentAlias ? `@${m.agentAlias}` : m.role}</span>
-              <span className="feed-header-right">
-                {formatTime(m.timestamp)}
-                {m.role === "user" && rewindKey && (
-                  <button
-                    type="button"
-                    className="rewind-btn"
-                    disabled={!canRewind}
-                    title={
-                      streaming
-                        ? "Finish the current stream before rewinding"
-                        : "Rewind repos + chat to this turn"
-                    }
-                    onClick={() => setRewindTarget(m)}
-                  >
-                    ⟲ Rewind
-                  </button>
-                )}
-              </span>
-            </div>
-            <div className="feed-content">
-              <MessageMarkdown text={m.content} />
-            </div>
-          </div>
-        );
-      })}
-      {rewindTarget && (
-        <RewindConfirmModal
-          channel={channel}
-          sessionId={sessionId}
-          target={rewindTarget}
-          streamId={streamId}
-          onClose={() => setRewindTarget(null)}
-          onDone={() => {
-            setRewindTarget(null);
-            onRewound();
-          }}
-        />
-      )}
-    </>
-  );
-}
-
-function RewindConfirmModal({
-  channel,
-  sessionId,
-  target,
-  streamId,
-  onClose,
-  onDone,
-}: {
-  channel: Channel;
-  sessionId: string;
-  target: PersistedChatMessage;
-  streamId: number | null;
-  onClose: () => void;
-  onDone: () => void;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const rewindKey = target.metadata?.rewindKey;
-
-  const apply = async () => {
-    if (!rewindKey) {
-      setError("Message has no rewindKey metadata — cannot rewind.");
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      // Gap #8: abort any in-flight stream BEFORE truncating the session
-      // log. Otherwise the Rust streaming thread can append a stale
-      // assistant turn after `rewind-apply` has already truncated + reset.
-      if (streamId !== null) {
-        try {
-          await api.cancelChatStream(streamId);
-        } catch (e) {
-          console.warn("[rewind] cancelChatStream failed:", e);
-        }
-      }
-      await api.rewindApply(channel.channelId, sessionId, rewindKey, target.timestamp);
-      onDone();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">Rewind to this turn?</div>
-        <div className="modal-body">
-          <p>
-            Each repo in this channel will be reset to the commit captured before this message. All
-            messages at or after this turn will be removed from the session, and Claude session IDs
-            will be cleared so the next message starts a fresh conversation.
-          </p>
-          <div className="rewind-repo-list">
-            {channel.repoAssignments.map((r) => (
-              <div key={r.alias} className="rewind-repo-row">
-                <code>@{r.alias}</code>
-                <span className="rewind-repo-path">{r.repoPath}</span>
-              </div>
-            ))}
-          </div>
-          <p className="rewind-warning">
-            <strong>Warning:</strong> this runs <code>git reset --hard</code>. Any uncommitted
-            changes in these repos will be lost. Shell side effects (API calls, spawned processes,
-            database writes) are <strong>not</strong> undone.
-          </p>
-          {error && <div className="composer-error">{error}</div>}
-        </div>
-        <div className="modal-footer">
-          <button type="button" onClick={onClose} disabled={busy}>
-            Cancel
-          </button>
-          <button type="button" className="primary" onClick={apply} disabled={busy || !rewindKey}>
-            {busy ? "Rewinding…" : "Rewind"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function FeedView({ entries }: { entries: ChannelEntry[] }) {
-  if (entries.length === 0) return <div className="empty">No activity yet</div>;
-  return (
-    <>
-      {entries.map((e) => (
-        <div key={e.entryId} className={`feed-entry role-${e.type}`}>
-          <div className="feed-header">
-            <span className="feed-author">{e.fromDisplayName ?? e.type}</span>
-            <span>{formatTime(e.createdAt)}</span>
-          </div>
-          <div className="feed-content">
-            <MessageMarkdown text={e.content} />
-          </div>
-        </div>
-      ))}
-    </>
-  );
-}
-
-function Composer({
-  channel,
-  sessionId,
-  activeSession,
-  streaming,
-  onStartStream,
-  onSessionCreated,
-}: {
-  channel: Channel;
-  sessionId: string | null;
-  activeSession: ChatSession | null;
-  streaming: boolean;
-  onStartStream: (s: ActiveStream | null) => void;
-  onSessionCreated: (sessionId: string) => void;
-}) {
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [autoApprove, setAutoApprove] = useState(true);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const [mention, setMention] = useState<{ start: number; query: string; index: number } | null>(
-    null
-  );
-
-  const aliases = channel.repoAssignments.map((r) => r.alias);
-  // Token being typed is a mention when it starts with `@` and sits at the
-  // beginning of the text or is preceded by whitespace — matches how the
-  // backend parses routing prefixes.
-  const detectMention = (value: string, caret: number) => {
-    const before = value.slice(0, caret);
-    const match = before.match(/(?:^|\s)@([a-zA-Z0-9_-]*)$/);
-    if (!match) return null;
-    const start = caret - match[1].length - 1;
-    return { start, query: match[1] };
-  };
-  const filteredAliases = mention
-    ? aliases.filter((a) => a.toLowerCase().startsWith(mention.query.toLowerCase()))
-    : [];
-
-  const applyMention = (alias: string) => {
-    if (!mention) return;
-    const ta = textareaRef.current;
-    const caret = ta?.selectionStart ?? text.length;
-    const before = text.slice(0, mention.start);
-    const after = text.slice(caret);
-    const insertion = `@${alias} `;
-    const next = before + insertion + after;
-    setText(next);
-    setMention(null);
-    const nextCaret = before.length + insertion.length;
-    requestAnimationFrame(() => {
-      const el = textareaRef.current;
-      if (!el) return;
-      el.focus();
-      el.setSelectionRange(nextCaret, nextCaret);
-    });
-  };
-
-  const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const value = e.target.value;
-    setText(value);
-    const next = detectMention(value, e.target.selectionStart ?? value.length);
-    setMention(next ? { ...next, index: 0 } : null);
-  };
-
-  const handleSelect = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
-    const el = e.currentTarget;
-    const next = detectMention(el.value, el.selectionStart ?? el.value.length);
-    setMention((prev) =>
-      next ? { ...next, index: prev && prev.start === next.start ? prev.index : 0 } : null
-    );
-  };
-
-  const send = async () => {
-    const raw = text.trim();
-    if (!raw) return;
-    setBusy(true);
-    setError(null);
-    try {
-      // Parse @alias prefix to route to a repo.
-      const { alias, body } = parseAliasPrefix(raw, aliases);
-      const repo = alias ? channel.repoAssignments.find((r) => r.alias === alias) : null;
-      const cwd = repo?.repoPath;
-      const aliasKey = alias ?? "general";
-      const claudeSessionId = activeSession?.claudeSessionIds?.[aliasKey] ?? undefined;
-
-      let activeId = sessionId;
-      if (!activeId) {
-        const session = await api.createSession(channel.channelId, raw.slice(0, 60));
-        activeId = session.sessionId;
-        onSessionCreated(activeId);
-      }
-
-      // Snapshot every repo in the channel *before* the turn runs so the
-      // user can later click Rewind on this message to restore state.
-      // Snapshot is best-effort — if a repo lacks commits or git errors,
-      // surface it but still let the user send; rewind just won't be
-      // offered for this turn.
-      let rewindKey: string | undefined;
-      if (channel.repoAssignments.length > 0) {
-        try {
-          const snap = await api.rewindSnapshot(channel.channelId, activeId);
-          rewindKey = snap.key;
-        } catch (err) {
-          console.warn("[rewind] snapshot failed:", err);
-        }
-      }
-
-      const streamId = await api.startChat({
-        channelId: channel.channelId,
-        sessionId: activeId,
-        message: body,
-        alias: alias ?? undefined,
-        cwd,
-        claudeSessionId,
-        autoApprove,
-        rewindKey,
-      });
-      onStartStream({
-        streamId,
-        alias,
-        accum: "",
-        activity: [],
-        expanded: false,
-      });
-      setText("");
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (mention && filteredAliases.length > 0) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setMention({ ...mention, index: (mention.index + 1) % filteredAliases.length });
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setMention({
-          ...mention,
-          index: (mention.index - 1 + filteredAliases.length) % filteredAliases.length,
-        });
-        return;
-      }
-      if (e.key === "Enter" || e.key === "Tab") {
-        e.preventDefault();
-        applyMention(filteredAliases[mention.index]);
-        return;
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setMention(null);
-        return;
-      }
-    }
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      send();
-    }
-  };
-
-  const disabled = busy || streaming;
-  const showMentions = !!mention && filteredAliases.length > 0;
-
-  return (
-    <div className="composer">
-      {error && <div className="composer-error">{error}</div>}
-      <div className="composer-input-wrap">
-        {showMentions && (
-          <MentionPopover
+          <Composer
             channel={channel}
-            aliases={filteredAliases}
-            index={mention!.index}
-            onPick={applyMention}
+            sessionId={sessionId}
+            activeSession={activeSession}
+            streaming={!!stream}
+            onStartStream={setStream}
+            onSessionCreated={onSessionCreated}
           />
-        )}
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={handleTextChange}
-          onKeyDown={onKeyDown}
-          onSelect={handleSelect}
-          onBlur={() => setTimeout(() => setMention(null), 120)}
-          placeholder={
-            channel.repoAssignments.length > 0
-              ? "Use @alias to target a repo · Enter to send · Shift+Enter newline"
-              : "Type a message · Enter to send · Shift+Enter newline"
-          }
-          rows={2}
-          disabled={disabled}
-        />
-      </div>
-      <div className="composer-controls">
-        <label className="auto-approve" title="Pass --dangerously-skip-permissions to claude">
-          <input
-            type="checkbox"
-            checked={autoApprove}
-            onChange={(e) => setAutoApprove(e.target.checked)}
-          />
-          auto-approve
-        </label>
-        <button className="primary" onClick={send} disabled={disabled || !text.trim()}>
-          {streaming ? "…" : "Send"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function MentionPopover({
-  channel,
-  aliases,
-  index,
-  onPick,
-}: {
-  channel: Channel;
-  aliases: string[];
-  index: number;
-  onPick: (alias: string) => void;
-}) {
-  return (
-    <div className="mention-popover" role="listbox">
-      {aliases.map((a, i) => {
-        const repo = channel.repoAssignments.find((r) => r.alias === a);
-        return (
-          <button
-            key={a}
-            type="button"
-            role="option"
-            aria-selected={i === index}
-            className={`mention-option ${i === index ? "active" : ""}`}
-            // Use onMouseDown so the pick fires before textarea blur clears it.
-            onMouseDown={(e) => {
-              e.preventDefault();
-              onPick(a);
-            }}
-          >
-            <span className="mention-alias">@{a}</span>
-            {repo?.repoPath && <span className="mention-path">{repo.repoPath}</span>}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function parseAliasPrefix(
-  message: string,
-  aliases: string[]
-): { alias: string | null; body: string } {
-  const match = message.match(/^@([a-zA-Z0-9_-]+)\s+([\s\S]*)$/);
-  if (!match) return { alias: null, body: message };
-  const candidate = match[1];
-  if (!aliases.includes(candidate)) return { alias: null, body: message };
-  return { alias: candidate, body: match[2] };
-}
-
-// Canonical ticket statuses + display labels. "pending" shows as "Backlog"
-// because that's what a kanban board reader expects.
-const BOARD_COLUMNS: Array<{ status: string; label: string }> = [
-  { status: "pending", label: "Backlog" },
-  { status: "ready", label: "Ready" },
-  { status: "executing", label: "Executing" },
-  { status: "verifying", label: "Verifying" },
-  { status: "retry", label: "Retry" },
-  { status: "blocked", label: "Blocked" },
-  { status: "completed", label: "Completed" },
-  { status: "failed", label: "Failed" },
-];
-
-function BoardView({ tickets }: { tickets: TicketLedgerEntry[] }) {
-  const [selected, setSelected] = useState<TicketLedgerEntry | null>(null);
-
-  if (tickets.length === 0) return <div className="empty">No tickets in this channel</div>;
-
-  const grouped: Record<string, TicketLedgerEntry[]> = {};
-  for (const t of tickets) {
-    const key = BOARD_COLUMNS.some((c) => c.status === t.status) ? t.status : "pending";
-    (grouped[key] ||= []).push(t);
-  }
-  const visible = BOARD_COLUMNS.filter((c) => (grouped[c.status]?.length ?? 0) > 0);
-
-  return (
-    <>
-      <div className="board-columns">
-        {visible.map(({ status, label }) => (
-          <div key={status} className="board-column">
-            <h4>
-              {label} ({grouped[status].length})
-            </h4>
-            <div className="board-column-body">
-              {grouped[status].map((t) => {
-                const isLinear = t.source === "linear";
-                return (
-                  <div
-                    key={t.ticketId}
-                    className={`ticket clickable${isLinear ? " ticket-linear" : ""}`}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => setSelected(t)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        setSelected(t);
-                      }
-                    }}
-                  >
-                    {isLinear && t.linearIdentifier && (
-                      <div className="ticket-linear-chip">Linear · {t.linearIdentifier}</div>
-                    )}
-                    <div>{t.title}</div>
-                    {t.assignedAlias && <div className="ticket-alias-chip">@{t.assignedAlias}</div>}
-                    <div className="ticket-meta">
-                      {isLinear
-                        ? (t.linearState ?? "linear mirror")
-                        : `${t.specialty} · attempt ${t.attempt}${
-                            t.assignedAgentName ? ` · ${t.assignedAgentName}` : ""
-                          }`}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-      </div>
-      {selected && (
-        <TicketDetailModal ticket={selected} tickets={tickets} onClose={() => setSelected(null)} />
+        </>
       )}
-    </>
-  );
-}
-
-function TicketDetailModal({
-  ticket,
-  tickets,
-  onClose,
-}: {
-  ticket: TicketLedgerEntry;
-  tickets: TicketLedgerEntry[];
-  onClose: () => void;
-}) {
-  const deps = ticket.dependsOn.map((depId) => {
-    const found = tickets.find((x) => x.ticketId === depId);
-    return {
-      id: depId,
-      title: found?.title ?? "(not in this channel's ledger)",
-      status: found?.status ?? "?",
-    };
-  });
-  return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal ticket-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">{ticket.title}</div>
-        <div className="modal-body">
-          <div className="detail-row">
-            <span className="detail-label">ID</span>
-            <code>{ticket.ticketId}</code>
-          </div>
-          <div className="detail-row">
-            <span className="detail-label">Status</span>
-            <span>{ticket.status}</span>
-          </div>
-          <div className="detail-row">
-            <span className="detail-label">Specialty</span>
-            <span>{ticket.specialty}</span>
-          </div>
-          <div className="detail-row">
-            <span className="detail-label">Verification</span>
-            <span>{ticket.verification}</span>
-          </div>
-          <div className="detail-row">
-            <span className="detail-label">Attempt</span>
-            <span>{ticket.attempt}</span>
-          </div>
-          {ticket.assignedAgentName && (
-            <div className="detail-row">
-              <span className="detail-label">Assigned</span>
-              <span>{ticket.assignedAgentName}</span>
-            </div>
-          )}
-          {ticket.assignedAlias && (
-            <div className="detail-row">
-              <span className="detail-label">Assigned to</span>
-              <span>@{ticket.assignedAlias}</span>
-            </div>
-          )}
-          {ticket.source === "linear" && (
-            <>
-              {ticket.linearIdentifier && (
-                <div className="detail-row">
-                  <span className="detail-label">Linear</span>
-                  <span>{ticket.linearIdentifier}</span>
-                </div>
-              )}
-              {ticket.linearState && (
-                <div className="detail-row">
-                  <span className="detail-label">Linear state</span>
-                  <span>{ticket.linearState}</span>
-                </div>
-              )}
-              {ticket.linearUrl && (
-                <div className="detail-row">
-                  <span className="detail-label">Link</span>
-                  <a
-                    href={ticket.linearUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="tracked-pr-link"
-                  >
-                    Open in Linear
-                  </a>
-                </div>
-              )}
-            </>
-          )}
-          {deps.length > 0 && (
-            <div className="detail-row detail-row-block">
-              <span className="detail-label">Depends on ({deps.length})</span>
-              <ul className="dep-list">
-                {deps.map((d) => (
-                  <li key={d.id}>
-                    <code>{d.id}</code> <span className="dep-status">{d.status}</span>
-                    <div className="dep-title">{d.title}</div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-        <div className="modal-footer">
-          <button type="button" onClick={onClose}>
-            Close
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function DecisionsView({ decisions }: { decisions: Decision[] }) {
-  if (decisions.length === 0) return <div className="empty">No decisions recorded</div>;
-  return (
-    <>
-      {decisions.map((d) => (
-        <div key={d.decisionId} className="decision">
-          <h4>{d.title}</h4>
-          <div className="meta">
-            {d.decidedByName} · {formatTime(d.createdAt)}
-          </div>
-          <p>{d.description}</p>
-          {d.rationale && (
-            <p>
-              <strong>Why:</strong> {d.rationale}
-            </p>
-          )}
-          {d.alternatives.length > 0 && (
-            <p>
-              <strong>Alternatives:</strong> {d.alternatives.join(", ")}
-            </p>
-          )}
-        </div>
-      ))}
-    </>
-  );
-}
-
-function formatTime(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return iso;
-  }
-}
-
-/**
- * Approval CTA shown above the tabs whenever a run tied to the current
- * channel is `AWAITING_APPROVAL`. Clicking Approve/Reject shells out to
- * `rly approve` / `rly reject` via the Tauri bridge — the same code path
- * the TUI and CLI hit, so there's only one surface that writes approval
- * records.
- */
-function PendingPlanCta({
-  channel,
-  refreshTick,
-  onChanged,
-}: {
-  channel: Channel | null;
-  refreshTick: number;
-  onChanged: () => void;
-}) {
-  const [plans, setPlans] = useState<PendingPlan[]>([]);
-  const [busyRunId, setBusyRunId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .listPendingPlans()
-      .then((p) => {
-        if (!cancelled) setPlans(p);
-      })
-      .catch(() => {
-        if (!cancelled) setPlans([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [refreshTick]);
-
-  const relevant = plans.filter((p) =>
-    channel ? !p.channelId || p.channelId === channel.channelId : true
-  );
-  if (relevant.length === 0) return null;
-
-  const act = async (plan: PendingPlan, decision: "approve" | "reject") => {
-    setBusyRunId(plan.runId);
-    setError(null);
-    try {
-      if (decision === "approve") {
-        await api.approvePlan(plan.runId);
-      } else {
-        await api.rejectPlan(plan.runId);
-      }
-      // Nudge the app-wide refresh so the banner disappears once the
-      // approval record lands.
-      onChanged();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusyRunId(null);
-    }
-  };
-
-  return (
-    <div className="plan-cta" role="status" aria-live="polite">
-      {relevant.map((p) => (
-        <div key={p.runId} className="plan-cta-row">
-          <div className="plan-cta-body">
-            <strong>Plan awaiting approval</strong>
-            <span className="plan-cta-feature">{p.featureRequest.slice(0, 80)}</span>
-            <span className="plan-cta-meta">
-              run {p.runId.slice(0, 12)}… · workspace {p.workspaceId}
-            </span>
-          </div>
-          <div className="plan-cta-buttons">
-            <button
-              type="button"
-              className="primary"
-              disabled={busyRunId === p.runId}
-              onClick={() => act(p, "approve")}
-            >
-              {busyRunId === p.runId ? "…" : "Approve"}
-            </button>
-            <button type="button" disabled={busyRunId === p.runId} onClick={() => act(p, "reject")}>
-              Reject
-            </button>
-          </div>
-        </div>
-      ))}
-      {error && <div className="composer-error">{error}</div>}
+      {tab === "board" && <BoardView tickets={tickets} settings={settings} />}
+      {tab === "decisions" && <DecisionsView decisions={decisions} channel={channel} />}
+      {settingsOpen && (
+        <ChannelSettingsDrawer
+          channel={channel}
+          onClose={() => setSettingsOpen(false)}
+          onRefresh={onRefresh}
+          onArchived={() => onChannelRemoved(channel.channelId)}
+        />
+      )}
     </div>
   );
 }

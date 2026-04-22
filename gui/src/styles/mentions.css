@@ -1,0 +1,42 @@
+/* Mention chips + inline code — rendered by renderWithMentions. */
+
+.mention {
+  display: inline-flex;
+  align-items: baseline;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-tight);
+  vertical-align: baseline;
+}
+
+.mention-repo-primary {
+  background: var(--color-mention-primary-bg);
+  color: var(--color-mention-primary-fg);
+  border: 1px solid var(--color-mention-primary-line);
+  padding: 0 var(--space-3) 0 var(--space-2);
+}
+
+.mention-repo-attached {
+  background: var(--color-mention-attached-bg);
+  color: var(--color-mention-attached-fg);
+  border: 1px solid var(--color-mention-attached-line);
+  padding: 0 var(--space-3) 0 var(--space-2);
+}
+
+.mention-human {
+  background: var(--color-mention-human-bg);
+  color: var(--color-mention-human-fg);
+  padding: 0 var(--space-2);
+}
+
+.mention-code {
+  background: var(--color-paper-alt);
+  padding: 1px var(--space-3);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  color: var(--color-text-primary);
+}
