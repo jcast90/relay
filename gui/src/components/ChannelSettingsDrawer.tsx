@@ -52,7 +52,10 @@ function ReposTab({ channel, onRefresh }: { channel: Channel; onRefresh: () => v
   const primaryId = channel.primaryWorkspaceId ?? channel.repoAssignments[0]?.workspaceId;
 
   useEffect(() => {
-    api.listSpawns(channel.channelId).then(setSpawns).catch(() => setSpawns([]));
+    api
+      .listSpawns(channel.channelId)
+      .then(setSpawns)
+      .catch(() => setSpawns([]));
   }, [channel.channelId]);
 
   const setPrimary = async (workspaceId: string) => {
@@ -146,9 +149,7 @@ function ReposTab({ channel, onRefresh }: { channel: Channel; onRefresh: () => v
                     {r.repoPath}
                   </div>
                 </div>
-                {!isPrimary && (
-                  <button onClick={() => setPrimary(r.workspaceId)}>Promote</button>
-                )}
+                {!isPrimary && <button onClick={() => setPrimary(r.workspaceId)}>Promote</button>}
                 {spawnRow ? (
                   <button onClick={() => killSpawn(r.alias)}>Kill</button>
                 ) : (
@@ -205,9 +206,8 @@ function MembersTab({ channel }: { channel: Channel }) {
             <span
               style={{
                 fontSize: "var(--font-size-xs)",
-                color: m.status === "working"
-                  ? "var(--color-accent-amber)"
-                  : "var(--color-accent-mint)",
+                color:
+                  m.status === "working" ? "var(--color-accent-amber)" : "var(--color-accent-mint)",
               }}
             >
               {m.status}
@@ -306,9 +306,15 @@ function AboutTab({
       </div>
       <div className="drawer-section">
         <h4>Full access</h4>
-        <p style={{ margin: "0 0 8px", fontSize: "var(--font-size-xs)", color: "var(--color-text-muted)" }}>
-          Runs dispatched agents with workspace-write sandbox and no approval
-          prompts. Scoped per-channel — other channels stay prompted.
+        <p
+          style={{
+            margin: "0 0 8px",
+            fontSize: "var(--font-size-xs)",
+            color: "var(--color-text-muted)",
+          }}
+        >
+          Runs dispatched agents with workspace-write sandbox and no approval prompts. Scoped
+          per-channel — other channels stay prompted.
         </p>
         <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
           <input type="checkbox" checked={fullAccess} onChange={toggleFullAccess} />
@@ -318,11 +324,7 @@ function AboutTab({
       <div className="drawer-section">
         <h4>Status</h4>
         <div>{channel.status}</div>
-        <button
-          style={{ marginTop: 8 }}
-          disabled={busy}
-          onClick={handleArchive}
-        >
+        <button style={{ marginTop: 8 }} disabled={busy} onClick={handleArchive}>
           {channel.status === "archived" ? "Unarchive" : "Archive"}
         </button>
       </div>

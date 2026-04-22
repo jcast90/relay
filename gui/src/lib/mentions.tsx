@@ -40,8 +40,8 @@ export function renderWithMentions(text: string, channel: ChannelLike): ReactNod
       const cls = isPrimary
         ? "mention mention-repo-primary"
         : isRepo
-        ? "mention mention-repo-attached"
-        : "mention mention-human";
+          ? "mention mention-repo-attached"
+          : "mention mention-human";
       nodes.push(
         <span key={key++} className={cls}>
           {tok}

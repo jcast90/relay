@@ -50,12 +50,20 @@ export function MessageList({
       ) : (
         <FeedView entries={feed} channel={ui} />
       )}
-      {stream && <StreamCard stream={stream} channel={ui} onToggleExpanded={onToggleStreamExpanded} />}
+      {stream && (
+        <StreamCard stream={stream} channel={ui} onToggleExpanded={onToggleStreamExpanded} />
+      )}
     </div>
   );
 }
 
-function FeedView({ entries, channel }: { entries: ChannelEntry[]; channel: ReturnType<typeof toUiChannel> }) {
+function FeedView({
+  entries,
+  channel,
+}: {
+  entries: ChannelEntry[];
+  channel: ReturnType<typeof toUiChannel>;
+}) {
   if (entries.length === 0) return <div className="chat-empty">No activity yet</div>;
   return (
     <>
@@ -95,7 +103,8 @@ function SessionMessages({
   const ui = toUiChannel(channel);
   const [rewindTarget, setRewindTarget] = useState<PersistedChatMessage | null>(null);
 
-  if (messages.length === 0) return <div className="chat-empty">No messages in this session yet</div>;
+  if (messages.length === 0)
+    return <div className="chat-empty">No messages in this session yet</div>;
   return (
     <>
       {messages.map((m, i) => {
@@ -104,13 +113,13 @@ function SessionMessages({
         return (
           <div key={i} className={`message role-${m.role}`}>
             <div className="msg-avatar">
-              {m.agentAlias ? m.agentAlias.slice(0, 1).toUpperCase() : m.role.slice(0, 1).toUpperCase()}
+              {m.agentAlias
+                ? m.agentAlias.slice(0, 1).toUpperCase()
+                : m.role.slice(0, 1).toUpperCase()}
             </div>
             <div>
               <div className="msg-head">
-                <span className="msg-author">
-                  {m.agentAlias ? `@${m.agentAlias}` : m.role}
-                </span>
+                <span className="msg-author">{m.agentAlias ? `@${m.agentAlias}` : m.role}</span>
                 <span className="msg-time">{formatTime(m.timestamp)}</span>
                 <span className="msg-actions">
                   {m.role === "user" && rewindKey && (
@@ -199,7 +208,9 @@ function RewindConfirmModal({
       <div className="modal modal-sm" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           Rewind to this turn?
-          <button className="close-btn" onClick={onClose}>×</button>
+          <button className="close-btn" onClick={onClose}>
+            ×
+          </button>
         </div>
         <div className="modal-body">
           <p style={{ margin: 0 }}>

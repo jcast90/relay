@@ -104,7 +104,7 @@ export function BoardView({ tickets, settings }: Props) {
                 )}
               </span>
               <span className="agent-chip">
-                {t.assignedAlias ? `@${t.assignedAlias}` : t.assignedAgentName ?? "—"}
+                {t.assignedAlias ? `@${t.assignedAlias}` : (t.assignedAgentName ?? "—")}
               </span>
               <span className="agent-chip">
                 {t.linearIdentifier ? t.linearIdentifier : `#${t.attempt}`}
@@ -116,7 +116,9 @@ export function BoardView({ tickets, settings }: Props) {
         <KanbanView tickets={filtered} onSelect={setSelected} showLinearBadge={showLinearBadge} />
       )}
 
-      {selected && <TicketDetailModal ticket={selected} tickets={tickets} onClose={() => setSelected(null)} />}
+      {selected && (
+        <TicketDetailModal ticket={selected} tickets={tickets} onClose={() => setSelected(null)} />
+      )}
     </div>
   );
 }
@@ -188,19 +190,25 @@ function TicketDetailModal({
       <div className="modal modal-sm" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           {ticket.title}
-          <button className="close-btn" onClick={onClose}>×</button>
+          <button className="close-btn" onClick={onClose}>
+            ×
+          </button>
         </div>
         <div className="modal-body">
           <DetailRow label="ID">
             <code>{ticket.ticketId}</code>
           </DetailRow>
           <DetailRow label="Status">
-            <span className={`status-pill status-${statusKey(ticket.status)}`}>{ticket.status}</span>
+            <span className={`status-pill status-${statusKey(ticket.status)}`}>
+              {ticket.status}
+            </span>
           </DetailRow>
           <DetailRow label="Specialty">{ticket.specialty}</DetailRow>
           <DetailRow label="Verification">{ticket.verification}</DetailRow>
           <DetailRow label="Attempt">{ticket.attempt}</DetailRow>
-          {ticket.assignedAgentName && <DetailRow label="Assigned">{ticket.assignedAgentName}</DetailRow>}
+          {ticket.assignedAgentName && (
+            <DetailRow label="Assigned">{ticket.assignedAgentName}</DetailRow>
+          )}
           {ticket.assignedAlias && <DetailRow label="Routed to">@{ticket.assignedAlias}</DetailRow>}
           {ticket.source === "linear" && ticket.linearUrl && (
             <DetailRow label="Linear">
@@ -216,10 +224,26 @@ function TicketDetailModal({
           )}
           {deps.length > 0 && (
             <div>
-              <div style={{ fontSize: 10, textTransform: "uppercase", color: "var(--color-text-dim)", marginBottom: 6 }}>
+              <div
+                style={{
+                  fontSize: 10,
+                  textTransform: "uppercase",
+                  color: "var(--color-text-dim)",
+                  marginBottom: 6,
+                }}
+              >
                 Depends on ({deps.length})
               </div>
-              <ul style={{ padding: 0, margin: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 6 }}>
+              <ul
+                style={{
+                  padding: 0,
+                  margin: 0,
+                  listStyle: "none",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 6,
+                }}
+              >
                 {deps.map((d) => (
                   <li
                     key={d.id}
@@ -231,7 +255,9 @@ function TicketDetailModal({
                     }}
                   >
                     <code>{d.id}</code>
-                    <span style={{ marginLeft: 8, color: "var(--color-text-muted)" }}>{d.status}</span>
+                    <span style={{ marginLeft: 8, color: "var(--color-text-muted)" }}>
+                      {d.status}
+                    </span>
                     <div style={{ marginTop: 2 }}>{d.title}</div>
                   </li>
                 ))}
@@ -240,7 +266,9 @@ function TicketDetailModal({
           )}
         </div>
         <div className="modal-footer" style={{ justifyContent: "flex-end" }}>
-          <button type="button" onClick={onClose}>Close</button>
+          <button type="button" onClick={onClose}>
+            Close
+          </button>
         </div>
       </div>
     </div>

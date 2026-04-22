@@ -59,9 +59,7 @@ export function ChannelHeader({
         >
           {channel.starred ? "★" : "☆"}
         </button>
-        {channel.description && (
-          <div className="channel-header-topic">{channel.description}</div>
-        )}
+        {channel.description && <div className="channel-header-topic">{channel.description}</div>}
         <div className="agent-stack">
           {channel.members.slice(0, 4).map((m) => (
             <span

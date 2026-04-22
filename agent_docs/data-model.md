@@ -6,15 +6,15 @@ The core domain types. TS is canonical; Rust mirrors (in `crates/harness-data/sr
 
 ## Canonical types
 
-| Type | TS definition | Rust mirror | Notes |
-|---|---|---|---|
-| `HarnessRun` | `src/domain/run.ts` (interface `HarnessRun`) | partially via `RunIndexEntry` + `TicketLedger` in `crates/harness-data/src/lib.rs` | One classifier→planner→scheduler execution. Lives under a channel. |
-| `Channel` | `src/domain/channel.ts` (interface `Channel`) | `struct Channel` in `crates/harness-data/src/lib.rs` | Slack-like workspace for one piece of work. Members, pinned refs, repo assignments. |
-| `ChannelEntry` | `src/domain/channel.ts` (interface `ChannelEntry`) | `struct ChannelEntry` | Append-only feed row. `ChannelEntryTypeSchema` enumerates the types. |
-| `TicketLedgerEntry` | `src/domain/ticket.ts` (interface `TicketLedgerEntry`) | `struct TicketLedgerEntry` | Unit of parallel work. Deps DAG, retry budget, specialty tag. |
-| `Decision` | `src/domain/decision.ts` (interface `Decision`) | `struct Decision` | Rationale + alternatives. One file per decision under `channels/<id>/decisions/`. |
-| `CrosslinkSession` | `src/crosslink/types.ts` (`CrosslinkSessionSchema` zod + `type CrosslinkSession`) | not mirrored — GUI reads live heartbeat JSON directly | Session heartbeat written to `~/.relay/crosslink/sessions/`. |
-| `Spawn` | `gui/src/types.ts` (`type Spawn`) + `channels/<id>/spawns.json` on disk | not mirrored in `crates/harness-data/` — GUI reads the JSON directly | Tracked spawned-terminal sessions (macOS GUI only). |
+| Type                | TS definition                                                                     | Rust mirror                                                                        | Notes                                                                               |
+| ------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `HarnessRun`        | `src/domain/run.ts` (interface `HarnessRun`)                                      | partially via `RunIndexEntry` + `TicketLedger` in `crates/harness-data/src/lib.rs` | One classifier→planner→scheduler execution. Lives under a channel.                  |
+| `Channel`           | `src/domain/channel.ts` (interface `Channel`)                                     | `struct Channel` in `crates/harness-data/src/lib.rs`                               | Slack-like workspace for one piece of work. Members, pinned refs, repo assignments. |
+| `ChannelEntry`      | `src/domain/channel.ts` (interface `ChannelEntry`)                                | `struct ChannelEntry`                                                              | Append-only feed row. `ChannelEntryTypeSchema` enumerates the types.                |
+| `TicketLedgerEntry` | `src/domain/ticket.ts` (interface `TicketLedgerEntry`)                            | `struct TicketLedgerEntry`                                                         | Unit of parallel work. Deps DAG, retry budget, specialty tag.                       |
+| `Decision`          | `src/domain/decision.ts` (interface `Decision`)                                   | `struct Decision`                                                                  | Rationale + alternatives. One file per decision under `channels/<id>/decisions/`.   |
+| `CrosslinkSession`  | `src/crosslink/types.ts` (`CrosslinkSessionSchema` zod + `type CrosslinkSession`) | not mirrored — GUI reads live heartbeat JSON directly                              | Session heartbeat written to `~/.relay/crosslink/sessions/`.                        |
+| `Spawn`             | `gui/src/types.ts` (`type Spawn`) + `channels/<id>/spawns.json` on disk           | not mirrored in `crates/harness-data/` — GUI reads the JSON directly               | Tracked spawned-terminal sessions (macOS GUI only).                                 |
 
 ## Enums and schemas worth knowing
 

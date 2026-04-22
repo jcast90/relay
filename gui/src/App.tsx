@@ -57,15 +57,18 @@ export function App() {
   }, [refreshTick, includeArchived]);
 
   useEffect(() => {
-    api.getSettings().then(setSettings).catch(() => {
-      setSettings({
-        ticketProvider: "relay",
-        linearApiToken: "",
-        linearWorkspace: "",
-        linearPollSeconds: 30,
-        rightRailOpen: true,
+    api
+      .getSettings()
+      .then(setSettings)
+      .catch(() => {
+        setSettings({
+          ticketProvider: "relay",
+          linearApiToken: "",
+          linearWorkspace: "",
+          linearPollSeconds: 30,
+          rightRailOpen: true,
+        });
       });
-    });
   }, []);
 
   useEffect(() => {

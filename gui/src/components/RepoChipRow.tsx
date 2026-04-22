@@ -107,10 +107,7 @@ export function RepoChipRow({ channel, onChanged }: Props) {
                     Set as primary
                   </div>
                 )}
-                <div
-                  className="popover-item"
-                  onClick={() => spawnInTerminal(r.alias, r.repoPath)}
-                >
+                <div className="popover-item" onClick={() => spawnInTerminal(r.alias, r.repoPath)}>
                   Spawn in Terminal
                 </div>
                 {!isPrimary ? (
@@ -160,7 +157,10 @@ function AddRepoPopover({
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    api.listWorkspaces().then(setWorkspaces).catch(() => setWorkspaces([]));
+    api
+      .listWorkspaces()
+      .then(setWorkspaces)
+      .catch(() => setWorkspaces([]));
   }, []);
 
   const attachedIds = new Set(channel.repoAssignments.map((r) => r.workspaceId));
@@ -169,7 +169,10 @@ function AddRepoPopover({
   const attach = async (w: WorkspaceEntry) => {
     if (busy) return;
     setBusy(true);
-    const alias = basename(w.repoPath).replace(/[^a-z0-9-]/gi, "").toLowerCase().slice(0, 12);
+    const alias = basename(w.repoPath)
+      .replace(/[^a-z0-9-]/gi, "")
+      .toLowerCase()
+      .slice(0, 12);
     const next = [
       ...channel.repoAssignments.map((r) => ({
         alias: r.alias,

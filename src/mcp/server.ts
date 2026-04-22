@@ -21,6 +21,14 @@ import {
   isCrosslinkTool,
   type CrosslinkToolState,
 } from "../crosslink/tools.js";
+import {
+  allowlistForRole,
+  denyToolEnvelope,
+  isToolAllowedForRole,
+  resolveCurrentRole,
+  warnIfUnknownRole,
+} from "./role-allowlist.js";
+import { REPO_ADMIN_TOOL_STUBS, spawnWorkerStub } from "../agents/repo-admin.js";
 
 export interface JsonRpcMessage {
   jsonrpc: "2.0";
@@ -52,6 +60,14 @@ export interface McpHandlerContext {
 export async function buildMcpMessageHandler(
   workspaceRoot: string
 ): Promise<{ handler: McpMessageHandler; context: McpHandlerContext }> {
+  // AL-11 (I1 fix): if RELAY_AGENT_ROLE is set to a value we don't recognise,
+  // log a one-shot warning to stderr on startup. The allowlist fall-through
+  // on unknown roles is still the documented behaviour (new roles opt IN by
+  // adding a map entry), but an unrecognised value running with no
+  // enforcement needs to be visible in logs — a silent typo shipping as
+  // cosmetic security is the opposite of what this layer is for.
+  warnIfUnknownRole(resolveCurrentRole());
+
   const paths = getHarnessWorkspacePaths(workspaceRoot);
   const artifactStore = new LocalArtifactStore(paths.artifactsDir, getHarnessStore());
   const crosslinkStore = new CrosslinkStore(undefined, getHarnessStore());
@@ -148,137 +164,233 @@ async function handleMessage(
       };
     case "notifications/initialized":
       return null;
-    case "tools/list":
+    case "tools/list": {
+      // AL-11: when the session runs under a role (RELAY_AGENT_ROLE set),
+      // the tools/list report is filtered to the role's allowlist. Unknown
+      // or absent role returns the full set, preserving pre-AL-11 behavior.
+      const role = resolveCurrentRole();
+      const allowlist = allowlistForRole(role);
+      const allTools: Array<{ name: string; description: string; inputSchema: unknown }> = [
+        ...(getCrosslinkToolDefinitions() as Array<{
+          name: string;
+          description: string;
+          inputSchema: unknown;
+        }>),
+        ...(getChannelToolDefinitions() as Array<{
+          name: string;
+          description: string;
+          inputSchema: unknown;
+        }>),
+        {
+          name: "harness_status",
+          description: "Get Relay workspace status and recent runs.",
+          inputSchema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {},
+          },
+        },
+        {
+          name: "harness_list_runs",
+          description: "List recent harness runs for the current workspace.",
+          inputSchema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              limit: { type: "integer", minimum: 1, maximum: 50 },
+            },
+          },
+        },
+        {
+          name: "harness_get_run_detail",
+          description:
+            "Get full run snapshot including classification, tickets, evidence, artifacts, and optionally the event log.",
+          inputSchema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["runId"],
+            properties: {
+              runId: { type: "string" },
+              includeEvents: { type: "boolean" },
+            },
+          },
+        },
+        {
+          name: "harness_get_artifact",
+          description: "Read a harness artifact JSON file by absolute path.",
+          inputSchema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["path"],
+            properties: {
+              path: { type: "string" },
+            },
+          },
+        },
+        {
+          name: "harness_approve_plan",
+          description: "Approve the pending plan for a run, unblocking ticket execution.",
+          inputSchema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["runId"],
+            properties: {
+              runId: { type: "string" },
+            },
+          },
+        },
+        {
+          name: "harness_reject_plan",
+          description: "Reject the pending plan with optional feedback.",
+          inputSchema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["runId"],
+            properties: {
+              runId: { type: "string" },
+              feedback: { type: "string" },
+            },
+          },
+        },
+        {
+          name: "project_create",
+          description:
+            "Create a new project. A project is a channel that groups related chats, runs, and decisions. " +
+            "Use this when the user wants to kick off a new initiative or workstream.",
+          inputSchema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["name"],
+            properties: {
+              name: {
+                type: "string",
+                description: "Project name, e.g. 'Auth Refactor' or 'New Dashboard'",
+              },
+              description: {
+                type: "string",
+                description: "What the project is about",
+              },
+            },
+          },
+        },
+        {
+          name: "harness_dispatch",
+          description:
+            "Dispatch a feature request to the agent team. This kicks off the orchestrator in the background: " +
+            "classifies the request, creates a plan, decomposes into tickets, and assigns agents. " +
+            "Progress is posted to the channel feed and visible in the dashboard. Returns immediately with run ID.",
+          inputSchema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["featureRequest"],
+            properties: {
+              featureRequest: {
+                type: "string",
+                description:
+                  "The feature to build — should be well-defined from your chat discussion",
+              },
+              channelId: {
+                type: "string",
+                description:
+                  "Channel/project to link this run to. If omitted, a new channel is created.",
+              },
+            },
+          },
+        },
+        {
+          // AL-11 declares the name; AL-14 fills in the handler. Advertised
+          // here so the repo-admin capability report is stable from day one.
+          name: "spawn_worker",
+          description:
+            "[STUB — implemented in AL-14] Spawn an ephemeral worker agent into an " +
+            "isolated worktree to execute a ticket. Calling this today returns a " +
+            "structured `stubbed` error that points at AL-14.",
+          inputSchema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["ticketId", "specialty"],
+            properties: {
+              ticketId: { type: "string" },
+              specialty: { type: "string" },
+              rationale: { type: "string" },
+            },
+          },
+        },
+      ];
+
+      const filteredTools = allowlist
+        ? allTools.filter((tool) => allowlist.has(tool.name))
+        : allTools;
+
       return {
         jsonrpc: "2.0",
         id: message.id ?? null,
         result: {
-          tools: [
-            ...getCrosslinkToolDefinitions(),
-            ...getChannelToolDefinitions(),
-            {
-              name: "harness_status",
-              description: "Get Relay workspace status and recent runs.",
-              inputSchema: {
-                type: "object",
-                additionalProperties: false,
-                properties: {},
-              },
-            },
-            {
-              name: "harness_list_runs",
-              description: "List recent harness runs for the current workspace.",
-              inputSchema: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  limit: { type: "integer", minimum: 1, maximum: 50 },
-                },
-              },
-            },
-            {
-              name: "harness_get_run_detail",
-              description:
-                "Get full run snapshot including classification, tickets, evidence, artifacts, and optionally the event log.",
-              inputSchema: {
-                type: "object",
-                additionalProperties: false,
-                required: ["runId"],
-                properties: {
-                  runId: { type: "string" },
-                  includeEvents: { type: "boolean" },
-                },
-              },
-            },
-            {
-              name: "harness_get_artifact",
-              description: "Read a harness artifact JSON file by absolute path.",
-              inputSchema: {
-                type: "object",
-                additionalProperties: false,
-                required: ["path"],
-                properties: {
-                  path: { type: "string" },
-                },
-              },
-            },
-            {
-              name: "harness_approve_plan",
-              description: "Approve the pending plan for a run, unblocking ticket execution.",
-              inputSchema: {
-                type: "object",
-                additionalProperties: false,
-                required: ["runId"],
-                properties: {
-                  runId: { type: "string" },
-                },
-              },
-            },
-            {
-              name: "harness_reject_plan",
-              description: "Reject the pending plan with optional feedback.",
-              inputSchema: {
-                type: "object",
-                additionalProperties: false,
-                required: ["runId"],
-                properties: {
-                  runId: { type: "string" },
-                  feedback: { type: "string" },
-                },
-              },
-            },
-            {
-              name: "project_create",
-              description:
-                "Create a new project. A project is a channel that groups related chats, runs, and decisions. " +
-                "Use this when the user wants to kick off a new initiative or workstream.",
-              inputSchema: {
-                type: "object",
-                additionalProperties: false,
-                required: ["name"],
-                properties: {
-                  name: {
-                    type: "string",
-                    description: "Project name, e.g. 'Auth Refactor' or 'New Dashboard'",
-                  },
-                  description: {
-                    type: "string",
-                    description: "What the project is about",
-                  },
-                },
-              },
-            },
-            {
-              name: "harness_dispatch",
-              description:
-                "Dispatch a feature request to the agent team. This kicks off the orchestrator in the background: " +
-                "classifies the request, creates a plan, decomposes into tickets, and assigns agents. " +
-                "Progress is posted to the channel feed and visible in the dashboard. Returns immediately with run ID.",
-              inputSchema: {
-                type: "object",
-                additionalProperties: false,
-                required: ["featureRequest"],
-                properties: {
-                  featureRequest: {
-                    type: "string",
-                    description:
-                      "The feature to build — should be well-defined from your chat discussion",
-                  },
-                  channelId: {
-                    type: "string",
-                    description:
-                      "Channel/project to link this run to. If omitted, a new channel is created.",
-                  },
-                },
-              },
-            },
-          ],
+          tools: filteredTools,
         },
       };
+    }
     case "tools/call":
       try {
         const toolName = String(message.params?.name ?? "");
         const toolArgs = (message.params?.arguments as Record<string, unknown> | undefined) ?? {};
+
+        // AL-11: consult the per-role allowlist before dispatching. When a
+        // role (e.g. repo-admin) is active and the tool isn't on its list,
+        // return a STRUCTURED denial envelope (NOT a silent failure) so the
+        // caller sees the reason and can choose a different path.
+        const currentRole = resolveCurrentRole();
+        if (currentRole && !isToolAllowedForRole(currentRole, toolName)) {
+          const envelope = denyToolEnvelope(currentRole, toolName);
+          return {
+            jsonrpc: "2.0",
+            id: message.id ?? null,
+            result: {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify(envelope, null, 2),
+                },
+              ],
+              isError: true,
+            },
+          };
+        }
+
+        // AL-11 stub: spawn_worker is in the repo-admin allowlist so the
+        // capability surface is stable, but the actual handler lands in
+        // AL-14. Call the stub so repo-admin sees the pending-capability
+        // reason rather than an "unknown tool" error.
+        if (toolName === "spawn_worker") {
+          try {
+            spawnWorkerStub(toolArgs);
+          } catch (err) {
+            return {
+              jsonrpc: "2.0",
+              id: message.id ?? null,
+              result: {
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify(
+                      {
+                        error: "tool-stubbed",
+                        tool: "spawn_worker",
+                        reason:
+                          err instanceof Error ? err.message : REPO_ADMIN_TOOL_STUBS.spawn_worker,
+                        landsIn: "AL-14",
+                      },
+                      null,
+                      2
+                    ),
+                  },
+                ],
+                isError: true,
+              },
+            };
+          }
+        }
+
         const toolResult = isCrosslinkTool(toolName)
           ? await callCrosslinkTool(toolName, toolArgs, crosslinkState)
           : isChannelTool(toolName)
