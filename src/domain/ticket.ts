@@ -92,6 +92,18 @@ export interface TicketLedgerEntry {
    * with ticket files written before per-repo routing existed.
    */
   assignedAlias?: string;
+  /**
+   * Provenance of the ticket. Omitted / "relay" = produced by the
+   * orchestrator pipeline (decomposer). "linear" = read-only mirror of a
+   * Linear issue, created by `linear-mirror.ts`. The scheduler only picks
+   * up tickets it itself placed on the run ledger; mirror tickets live on
+   * the channel board only and are inert from the scheduler's POV.
+   */
+  source?: "relay" | "linear";
+  linearIssueId?: string;
+  linearIdentifier?: string;
+  linearState?: string;
+  linearUrl?: string;
 }
 
 export function initializeTicketLedger(

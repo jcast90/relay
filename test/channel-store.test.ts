@@ -402,4 +402,33 @@ describe("channel store", () => {
       }
     });
   });
+
+  describe("linearProjectId patching", () => {
+    it("persists linearProjectId via updateChannel and clears it on undefined", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      try {
+        const channel = await store.createChannel({
+          name: "linked",
+          description: "test"
+        });
+        expect(channel.linearProjectId).toBeUndefined();
+
+        const linked = await store.updateChannel(channel.channelId, {
+          linearProjectId: "proj-uuid-abc"
+        });
+        expect(linked!.linearProjectId).toBe("proj-uuid-abc");
+
+        const reloaded = await store.getChannel(channel.channelId);
+        expect(reloaded!.linearProjectId).toBe("proj-uuid-abc");
+
+        const cleared = await store.updateChannel(channel.channelId, {
+          linearProjectId: undefined
+        });
+        expect(cleared!.linearProjectId).toBeUndefined();
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  });
 });

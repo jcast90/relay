@@ -63,6 +63,20 @@ pub struct TicketLedgerEntry {
     /// before per-repo routing existed still deserialize.
     #[serde(default)]
     pub assigned_alias: Option<String>,
+    /// Provenance of the ticket. Omitted / "relay" = Relay-produced;
+    /// "linear" = read-only mirror of a Linear issue. All
+    /// `#[serde(default)]` for back-compat with ticket files written before
+    /// the Linear mirror existed.
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub linear_issue_id: Option<String>,
+    #[serde(default)]
+    pub linear_identifier: Option<String>,
+    #[serde(default)]
+    pub linear_state: Option<String>,
+    #[serde(default)]
+    pub linear_url: Option<String>,
 }
 
 // --- Channel ---
@@ -95,6 +109,10 @@ pub struct Channel {
     /// `repo_assignments`.
     #[serde(default)]
     pub primary_workspace_id: Option<String>,
+    /// Linear project ID mirrored onto this channel's board. Read-only.
+    /// Absence means no Linear mirror is configured.
+    #[serde(default)]
+    pub linear_project_id: Option<String>,
     /// ISO 8601 timestamps. Optional for back-compat with channel files
     /// written before these fields were tracked.
     #[serde(default)]
@@ -818,6 +836,82 @@ mod tests {
         assert_eq!(t.depends_on, vec!["T-0"]);
         assert_eq!(t.assigned_alias.as_deref(), Some("ui"));
         assert!(t.assigned_agent_id.is_none());
+    }
+
+    #[test]
+    fn ticket_ledger_entry_with_linear_mirror_fields() {
+        let json = r#"{
+            "ticketId":"linear:abc-123",
+            "title":"mirrored issue",
+            "specialty":"general",
+            "status":"ready",
+            "dependsOn":[],
+            "verification":"pending",
+            "attempt":0,
+            "source":"linear",
+            "linearIssueId":"abc-123",
+            "linearIdentifier":"ENG-42",
+            "linearState":"open",
+            "linearUrl":"https://linear.app/acme/issue/ENG-42"
+        }"#;
+        let t: TicketLedgerEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(t.source.as_deref(), Some("linear"));
+        assert_eq!(t.linear_identifier.as_deref(), Some("ENG-42"));
+        assert_eq!(t.linear_state.as_deref(), Some("open"));
+        assert_eq!(
+            t.linear_url.as_deref(),
+            Some("https://linear.app/acme/issue/ENG-42")
+        );
+    }
+
+    #[test]
+    fn ticket_ledger_entry_back_compat_without_linear_fields() {
+        // A Relay-authored ticket written before the mirror existed must
+        // still parse cleanly with all Linear fields absent.
+        let json = r#"{
+            "ticketId":"T-9",
+            "title":"x",
+            "specialty":"general",
+            "status":"ready",
+            "dependsOn":[],
+            "verification":"pending",
+            "attempt":0
+        }"#;
+        let t: TicketLedgerEntry = serde_json::from_str(json).unwrap();
+        assert!(t.source.is_none());
+        assert!(t.linear_issue_id.is_none());
+        assert!(t.linear_identifier.is_none());
+        assert!(t.linear_state.is_none());
+        assert!(t.linear_url.is_none());
+    }
+
+    #[test]
+    fn channel_with_linear_project_id() {
+        let json = r#"{
+            "channelId":"c-1",
+            "name":"x",
+            "description":"",
+            "status":"active",
+            "members":[],
+            "pinnedRefs":[],
+            "linearProjectId":"proj-uuid-abc"
+        }"#;
+        let ch: Channel = serde_json::from_str(json).unwrap();
+        assert_eq!(ch.linear_project_id.as_deref(), Some("proj-uuid-abc"));
+    }
+
+    #[test]
+    fn channel_back_compat_without_linear_project_id() {
+        let json = r#"{
+            "channelId":"c-1",
+            "name":"x",
+            "description":"",
+            "status":"active",
+            "members":[],
+            "pinnedRefs":[]
+        }"#;
+        let ch: Channel = serde_json::from_str(json).unwrap();
+        assert!(ch.linear_project_id.is_none());
     }
 
     #[test]

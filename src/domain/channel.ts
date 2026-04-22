@@ -66,6 +66,13 @@ export interface Channel {
    * primary/associated model existed.
    */
   primaryWorkspaceId?: string;
+  /**
+   * Linear project ID this channel mirrors onto its ticket board. Read-only
+   * mirror — tickets created from Linear issues are tagged with
+   * `source: "linear"` and are never scheduled by the orchestrator. Absence
+   * means no mirror is configured; Relay still functions normally.
+   */
+  linearProjectId?: string;
   createdAt: string;
   updatedAt: string;
 }
