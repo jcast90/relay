@@ -1299,7 +1299,14 @@ async function printTaskBoard(channelId: string, args: string[] = []): Promise<v
 
   // Delegates to resolveBoardTickets so CLI + MCP tool + GUI all read the
   // channel board through the same unified-then-fallback policy.
-  const board: Record<string, Array<{ ticketId: string; title: string }>> = {};
+  interface BoardRow {
+    ticketId: string;
+    title: string;
+    source?: "relay" | "linear";
+    linearIdentifier?: string;
+    linearUrl?: string;
+  }
+  const board: Record<string, BoardRow[]> = {};
   const resolved = await resolveBoardTickets(store, channelId, async (
     workspaceId,
     runId
@@ -1313,7 +1320,13 @@ async function printTaskBoard(channelId: string, args: string[] = []): Promise<v
 
   for (const { entry } of resolved) {
     if (!board[entry.status]) board[entry.status] = [];
-    board[entry.status].push({ ticketId: entry.ticketId, title: entry.title });
+    board[entry.status].push({
+      ticketId: entry.ticketId,
+      title: entry.title,
+      source: entry.source,
+      linearIdentifier: entry.linearIdentifier,
+      linearUrl: entry.linearUrl
+    });
   }
 
   if (args.includes("--json")) {
@@ -1329,7 +1342,12 @@ async function printTaskBoard(channelId: string, args: string[] = []): Promise<v
   for (const [status, tickets] of Object.entries(board)) {
     console.log(`[${status.toUpperCase()}] (${tickets.length})`);
     for (const t of tickets) {
-      console.log(`  ${t.ticketId}: ${t.title}`);
+      if (t.source === "linear" && t.linearIdentifier) {
+        const tail = t.linearUrl ? `  ${t.linearUrl}` : "";
+        console.log(`  [linear ${t.linearIdentifier}] ${t.title}${tail}`);
+      } else {
+        console.log(`  ${t.ticketId}: ${t.title}`);
+      }
     }
     console.log("");
   }

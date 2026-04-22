@@ -564,11 +564,29 @@ fn draw_board(frame: &mut Frame, app: &App, channel_name: &str, area: Rect) {
             Style::default()
         };
 
-        lines.push(Line::from(vec![
-            Span::styled(indicator, Style::default().fg(Color::Cyan)),
-            Span::styled(&ticket.title, title_style),
-            Span::styled(format!(" [{}]", agent), Style::default().fg(Color::DarkGray)),
-        ]));
+        let is_linear = ticket.source.as_deref() == Some("linear");
+        let mut spans = vec![Span::styled(indicator, Style::default().fg(Color::Cyan))];
+        if is_linear {
+            if let Some(id) = ticket.linear_identifier.as_deref() {
+                spans.push(Span::styled(
+                    format!("[{}] ", id),
+                    Style::default().fg(Color::Magenta),
+                ));
+            } else {
+                spans.push(Span::styled(
+                    "[linear] ",
+                    Style::default().fg(Color::Magenta),
+                ));
+            }
+        }
+        spans.push(Span::styled(&ticket.title, title_style));
+        if !is_linear {
+            spans.push(Span::styled(
+                format!(" [{}]", agent),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        lines.push(Line::from(spans));
 
         flat_index += 1;
     }
@@ -1573,7 +1591,8 @@ fn detail_content<'a>(app: &'a App) -> (String, Vec<Line<'a>>) {
                     let ticket = &app.tickets[idx];
                     let agent = ticket.assigned_agent_name.as_deref().unwrap_or("unassigned");
                     let status_clr = status_color(&ticket.status);
-                    let lines = vec![
+                    let is_linear = ticket.source.as_deref() == Some("linear");
+                    let mut lines = vec![
                         Line::from(vec![
                             Span::styled("Title: ", Style::default().fg(Color::DarkGray)),
                             Span::styled(&ticket.title, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
@@ -1602,16 +1621,41 @@ fn detail_content<'a>(app: &'a App) -> (String, Vec<Line<'a>>) {
                             Span::styled("Ticket ID: ", Style::default().fg(Color::DarkGray)),
                             Span::styled(&ticket.ticket_id, Style::default().fg(Color::DarkGray)),
                         ]),
-                        Line::raw(""),
-                        Line::from(vec![
-                            Span::styled("Dependencies: ", Style::default().fg(Color::DarkGray)),
-                            Span::raw(if ticket.depends_on.is_empty() {
-                                "none".to_string()
-                            } else {
-                                ticket.depends_on.join(", ")
-                            }),
-                        ]),
                     ];
+                    if is_linear {
+                        lines.push(Line::raw(""));
+                        lines.push(Line::from(vec![Span::styled(
+                            "── Linear (read-only mirror) ──",
+                            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                        )]));
+                        if let Some(id) = ticket.linear_identifier.as_deref() {
+                            lines.push(Line::from(vec![
+                                Span::styled("Identifier: ", Style::default().fg(Color::DarkGray)),
+                                Span::styled(id, Style::default().fg(Color::Magenta)),
+                            ]));
+                        }
+                        if let Some(s) = ticket.linear_state.as_deref() {
+                            lines.push(Line::from(vec![
+                                Span::styled("Linear state: ", Style::default().fg(Color::DarkGray)),
+                                Span::raw(s),
+                            ]));
+                        }
+                        if let Some(url) = ticket.linear_url.as_deref() {
+                            lines.push(Line::from(vec![
+                                Span::styled("URL: ", Style::default().fg(Color::DarkGray)),
+                                Span::styled(url, Style::default().fg(Color::Blue)),
+                            ]));
+                        }
+                    }
+                    lines.push(Line::raw(""));
+                    lines.push(Line::from(vec![
+                        Span::styled("Dependencies: ", Style::default().fg(Color::DarkGray)),
+                        Span::raw(if ticket.depends_on.is_empty() {
+                            "none".to_string()
+                        } else {
+                            ticket.depends_on.join(", ")
+                        }),
+                    ]));
                     (format!("Ticket: {}", ticket.title), lines)
                 } else {
                     ("No ticket".to_string(), vec![])

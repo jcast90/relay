@@ -101,6 +101,13 @@ export type TicketLedgerEntry = {
   // Alias of the channel repo assignment this ticket is routed to.
   // Optional; absent on tickets written before per-repo routing existed.
   assignedAlias?: string;
+  // Provenance. Absent = Relay-authored. "linear" = read-only mirror of
+  // a Linear issue surfaced by the Linear → channel-board poller.
+  source?: "relay" | "linear";
+  linearIssueId?: string;
+  linearIdentifier?: string;
+  linearState?: string;
+  linearUrl?: string;
 };
 
 export type Decision = {
