@@ -136,7 +136,7 @@ All three dashboards (CLI / TUI / GUI) read the same files. No synchronisation l
   agent-names.json            # display-name registry
 ```
 
-Opting in to Postgres (`PostgresHarnessStore`) keeps the same on-disk layout and adds `LISTEN/NOTIFY` on top for cross-agent coordination.
+Today the file backend is the only one that ships. A Postgres backend is stubbed in source (`src/storage/postgres-store.ts`) for future multi-agent coordination but isn't wired yet — see the [Roadmap](../README.md#roadmap).
 
 ## Troubleshooting
 

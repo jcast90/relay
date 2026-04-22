@@ -23,7 +23,7 @@ Top-level layout of the repo. One line per directory, pointing at the concrete s
 - **`channels/`** — `channel-store.ts` owns feed / tickets / decisions; `ao-notifier.ts` bridges to Composio's AO orchestrator.
 - **`integrations/`** — AO plugins: tracker (GitHub/Linear), scm (PR watcher), pr-poller, env-mutex.
 - **`execution/`** — `executor.ts` abstraction, `local-child-process-executor.ts`.
-- **`storage/`** — `HarnessStore` interface in `store.ts`, `FileHarnessStore` and `PostgresHarnessStore` backends.
+- **`storage/`** — `HarnessStore` interface in `store.ts`. `FileHarnessStore` is the only shipping backend; `PostgresHarnessStore` is stubbed for future multi-agent coordination (see the Roadmap in the root README) and not wired through `factory.ts`.
 - **`domain/`** — shared TS types and zod schemas. Canonical source for shapes; Rust side mirrors these.
 - **`mcp/`** — MCP server + tool definitions (harness / channel / crosslink tool groups).
 - **`crosslink/`** — session discovery, messaging between live agents, hook generation for Claude/Codex.

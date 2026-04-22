@@ -14,10 +14,14 @@ export interface StoreFactoryOptions {
 }
 
 /**
- * Thrown when a store kind is recognized but not yet implemented. The message
- * points at the tracking ticket (where one exists) so operators know where to
- * follow up instead of filing duplicate bugs. SQLite has no tracking ticket
- * yet (TBD); postgres points at T-402.
+ * Retained for source-level compatibility with callers that imported this
+ * symbol before OSS-21 made `file` the only shipping backend. The factory no
+ * longer throws this error at runtime — unsupported `HARNESS_STORE` values
+ * warn and fall back to the file backend (see `buildHarnessStore` below).
+ *
+ * Kept exported so existing `import { NotImplementedError }` call sites keep
+ * compiling; it will be removed alongside the Postgres/SQLite placeholder
+ * branches in a follow-up cleanup PR.
  */
 export class NotImplementedError extends Error {
   constructor(message: string) {
@@ -78,23 +82,25 @@ function resolveKind(explicit: StoreKind | undefined): StoreKind {
  * argument and must not call this factory directly.
  *
  * Precedence: `opts.kind` > `HARNESS_STORE` env > default `"file"`.
+ *
+ * Only the `"file"` backend ships today (OSS-21). Any other kind — whether
+ * from the env var or an explicit opts.kind — logs a one-line warning and
+ * falls back to file. We deliberately do not throw here: old docs and user
+ * scripts still reference `HARNESS_STORE=postgres`, and crashing those
+ * callers on startup would be a worse experience than quietly degrading to
+ * the working backend. The Postgres/SQLite code remains in-tree as a
+ * placeholder for the roadmap; see README's Roadmap section.
  */
 export function buildHarnessStore(opts: StoreFactoryOptions = {}): HarnessStore {
   const kind = resolveKind(opts.kind);
 
-  if (kind === "file") {
-    return new FileHarnessStore(opts.fileRoot ?? getRelayDir());
-  }
-
-  if (kind === "postgres") {
-    throw new NotImplementedError(
-      "PostgresHarnessStore is T-402 (not yet implemented); use HARNESS_STORE=file."
+  if (kind !== "file") {
+    console.warn(
+      `Only the 'file' storage backend is implemented today. HARNESS_STORE='${kind}' ignored; using file backend.`
     );
   }
 
-  throw new NotImplementedError(
-    "SqliteHarnessStore is not yet implemented; use HARNESS_STORE=file."
-  );
+  return new FileHarnessStore(opts.fileRoot ?? getRelayDir());
 }
 
 // Module-level singleton. Handlers migrating off direct `fs/promises` (T-101+)

@@ -3,14 +3,29 @@ name: Release
 # Trigger: any pushed tag that looks like v0.1.0, v0.2.0-rc.1, etc.
 #
 # Fan-out:
-#   - release-npm      publishes the `relay` package to npm (and GitHub Packages)
+#   - release-npm      publishes the `@jcast90/relay` package to npm. Gated on
+#                      the `NPM_PUBLISH_ENABLED` repository variable (OSS-21):
+#                      the job always runs but only actually publishes when an
+#                      admin flips that toggle. That keeps the fan-out stable
+#                      while the package name is still being claimed on npm.
 #   - release-gui      matrix-builds the Tauri GUI on macOS / Linux / Windows and
-#                      uploads the OS-native installer artifacts
+#                      uploads the OS-native installer artifacts. Does NOT
+#                      depend on release-npm — GUI bundles ship on every tag
+#                      regardless of whether npm publish is enabled.
 #   - release-github   collects everything and cuts a GitHub Release, using the
-#                      matching CHANGELOG.md section as the release body
+#                      matching CHANGELOG.md section as the release body. Also
+#                      independent of release-npm.
 #
-# Admin-only secrets required:
-#   NPM_TOKEN          npm auth token with publish scope for `relay`
+# Admin-only secrets / variables:
+#   NPM_TOKEN                    npm auth token with publish scope for the
+#                                `@jcast90` scope. Only required once
+#                                NPM_PUBLISH_ENABLED is set to "true".
+#   vars.NPM_PUBLISH_ENABLED     repo-level variable (not a secret). Set to
+#                                "true" to actually publish to npm; anything
+#                                else (including unset) makes release-npm a
+#                                no-op. OSS-21: deferred because publish isn't
+#                                day-1; toggle when the scope and token are
+#                                both provisioned.
 #   (GITHUB_TOKEN is provided automatically by Actions; used for GitHub Packages
 #   mirror + Release creation.)
 #
@@ -39,16 +54,30 @@ jobs:
   release-npm:
     name: release-npm
     runs-on: ubuntu-latest
+    # OSS-21: npm publish is deferred. The job always runs (so the fan-out
+    # graph stays stable) but the publish steps short-circuit unless the
+    # repo-level `NPM_PUBLISH_ENABLED` variable is "true". This replaces the
+    # earlier "publish is day-1" assumption: both `relay` and `rly` were
+    # taken on npm, the package is now scoped as `@jcast90/relay`, and the
+    # admin will flip this toggle once the scope + token are provisioned.
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Publish gate notice
+        if: vars.NPM_PUBLISH_ENABLED != 'true'
+        run: |
+          echo "NPM_PUBLISH_ENABLED is not set to 'true' — skipping npm publish steps."
+          echo "Set the repo variable to 'true' to publish @jcast90/relay on the next tag."
+
       - name: Setup pnpm
+        if: vars.NPM_PUBLISH_ENABLED == 'true'
         uses: pnpm/action-setup@v4
         with:
           version: 10
 
       - name: Setup Node.js (npm registry)
+        if: vars.NPM_PUBLISH_ENABLED == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -56,17 +85,21 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
+        if: vars.NPM_PUBLISH_ENABLED == 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Build
+        if: vars.NPM_PUBLISH_ENABLED == 'true'
         run: pnpm build
 
       - name: Publish to npm
+        if: vars.NPM_PUBLISH_ENABLED == 'true'
         run: pnpm publish --no-git-checks --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Setup Node.js (GitHub Packages)
+        if: vars.NPM_PUBLISH_ENABLED == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -74,15 +107,15 @@ jobs:
           scope: "@jcast90"
 
       - name: Publish mirror to GitHub Packages
-        # Best-effort mirror. GitHub Packages requires a scoped name, so we
-        # rewrite package.json on the fly to @jcast90/relay, publish, then
-        # discard. If this step fails we don't want to block the npm release.
+        if: vars.NPM_PUBLISH_ENABLED == 'true'
+        # Best-effort mirror. `@jcast90/relay` is already a scoped name, so we
+        # just set publishConfig to the GitHub Packages registry and publish.
+        # If this step fails we don't want to block the npm release.
         continue-on-error: true
         run: |
           node -e "
             const fs = require('fs');
             const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.name = '@jcast90/relay';
             pkg.publishConfig = { registry: 'https://npm.pkg.github.com' };
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
@@ -92,7 +125,9 @@ jobs:
 
   release-gui:
     name: release-gui (${{ matrix.platform.os }})
-    needs: release-npm
+    # OSS-21: GUI bundles do not depend on the npm publish. Removed the
+    # `needs: release-npm` — Tauri artifacts ship on every tag regardless of
+    # whether npm publish is enabled.
     strategy:
       fail-fast: false
       matrix:
@@ -177,7 +212,10 @@ jobs:
 
   release-github:
     name: release-github
-    needs: [release-npm, release-gui]
+    # OSS-21: The GitHub Release depends only on GUI bundles (the artifacts
+    # it uploads), not on npm publish. Dropping `release-npm` here means a
+    # tag still cuts a Release when NPM_PUBLISH_ENABLED is off.
+    needs: [release-gui]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

@@ -23,6 +23,36 @@ import { ScriptedInvoker } from "../src/simulation/scripted-invoker.js";
 // for the non-orchestrator writers (poller, scheduler tail, filesystem lag).
 const RM_OPTS = { recursive: true, force: true, maxRetries: 3, retryDelay: 50 } as const;
 
+/**
+ * Poll `fn` until it returns a truthy value or `timeoutMs` elapses. OSS-21:
+ * mirror the pattern from `verification-override-feed.test.ts` so cross-
+ * process visibility races (atomic tmp-rename visible to a fresh
+ * directory-read on Linux CI) surface as a crisp timeout instead of a flaky
+ * single-snapshot assertion. Orchestrator-v2 already drains its tracked
+ * writes before returning, so this is defensive — the timeout budget is
+ * small and the happy path resolves on the first iteration.
+ */
+async function waitFor<T>(
+  fn: () => Promise<T | undefined> | T | undefined,
+  opts: { timeoutMs?: number; intervalMs?: number; label?: string } = {}
+): Promise<T> {
+  const timeoutMs = opts.timeoutMs ?? 2000;
+  const intervalMs = opts.intervalMs ?? 20;
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const value = await fn();
+    if (value !== undefined && value !== null && value !== false) {
+      return value as T;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `waitFor timed out after ${timeoutMs}ms${opts.label ? `: ${opts.label}` : ""}`
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
 function buildOrchestrator(
   cwd: string,
   artifactsDir: string,
@@ -181,7 +211,13 @@ describe("OrchestratorV2 integration", () => {
       );
 
       expect(run.channelId).not.toBeNull();
-      const boardTickets = await channelStore.readChannelTickets(run.channelId!);
+      const boardTickets = await waitFor(
+        async () => {
+          const tickets = await channelStore.readChannelTickets(run.channelId!);
+          return tickets.length === run.ticketLedger.length ? tickets : undefined;
+        },
+        { timeoutMs: 2000, intervalMs: 20, label: "channel board mirror settled" }
+      );
       expect(boardTickets.length).toBe(run.ticketLedger.length);
       for (const entry of boardTickets) {
         expect(entry.runId).toBe(run.id);
@@ -209,7 +245,13 @@ describe("OrchestratorV2 integration", () => {
 
       expect(run.classification!.tier).toBe("trivial");
       expect(run.channelId).not.toBeNull();
-      const boardTickets = await channelStore.readChannelTickets(run.channelId!);
+      const boardTickets = await waitFor(
+        async () => {
+          const tickets = await channelStore.readChannelTickets(run.channelId!);
+          return tickets.length > 0 ? tickets : undefined;
+        },
+        { timeoutMs: 2000, intervalMs: 20, label: "trivial fast-track board mirror settled" }
+      );
       expect(boardTickets.length).toBeGreaterThan(0);
       expect(boardTickets[0].runId).toBe(run.id);
     } finally {
