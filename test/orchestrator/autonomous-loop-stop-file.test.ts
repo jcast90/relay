@@ -380,6 +380,9 @@ describe("startAutonomousSession — AL-9 STOP-file kill switch", () => {
         repoAdminSpawner: fx.adminSpawner,
         workerSpawner: fx.workerSpawner as unknown as WorkerSpawner,
         rootDir: fx.root,
+        // AL-4: drive the steady-state loop fast so async admin-boot +
+        // drain progress observes within the test's default timeout.
+        pollIntervalMs: 2,
       },
     });
 
@@ -400,7 +403,7 @@ describe("startAutonomousSession — AL-9 STOP-file kill switch", () => {
     expect(windDown?.reason).toBe("user-stop-signal");
   }, 5_000);
 
-  it("honors STOP dropped mid-drain — in-flight worker is NOT force-stopped, later tickets still allowed to complete", async () => {
+  it("honors STOP dropped mid-drain — in-flight worker is NOT force-stopped, queued tickets are NOT pulled", async () => {
     const fx = await buildFixture(2);
     cleanupFns.push(fx.cleanup);
 
@@ -418,12 +421,15 @@ describe("startAutonomousSession — AL-9 STOP-file kill switch", () => {
       lifecycle: fx.lifecycle,
       trust: "supervised",
       allowedRepos: fx.allowedRepos,
-      stopPollIntervalMs: 10,
+      stopPollIntervalMs: 1,
       testOverrides: {
         channelStore: fx.channelStore,
         repoAdminSpawner: fx.adminSpawner,
         workerSpawner: fx.workerSpawner as unknown as WorkerSpawner,
         rootDir: fx.root,
+        // AL-4: drive the steady-state loop fast so async admin-boot +
+        // drain progress observes within the test's default timeout.
+        pollIntervalMs: 2,
       },
     });
 
@@ -435,36 +441,35 @@ describe("startAutonomousSession — AL-9 STOP-file kill switch", () => {
     // AL-9 — graceful wind-down respects in-flight workers.
     expect(firstHandle.stop).not.toHaveBeenCalled();
 
-    // Drop STOP mid-drain. The background poll fires every 10ms so
-    // the lifecycle flips within one tick.
+    // Drop STOP mid-drain. The background poll fires every 1ms so the
+    // lifecycle flips within one tick.
     await writeStopFile(fx.sessionId, { rootDir: fx.root, source: "test" });
 
-    // Complete the first ticket normally — the in-flight worker is
-    // allowed to finish. The runner's serial drain then pulls the
-    // next ticket (t-2) from its own queue because t-2 was already
-    // routed before STOP landed (AL-9 does not cancel pre-routed
-    // tickets; the STOP file is advisory, not a ledger-level undo).
-    firstHandle.fire({ exitCode: 0, prUrl: "https://github.com/o/r/pull/1" });
+    // Give the background STOP poll one tick to observe the file and
+    // transition the lifecycle to `winding_down`. The runner's
+    // `notAcceptingNew` flag is set in the same transition callback, so
+    // once we observe `winding_down` we know subsequent fires will NOT
+    // pull new tickets off the admin's pending queue.
+    await waitUntil(() => fx.lifecycle.state === "winding_down");
 
-    // The second ticket was already routed before STOP fired, so it
-    // WILL spawn. That's the "respect in-flight work" contract — the
-    // runner drains its own pre-queued tickets. The lifecycle is
-    // already in `winding_down` at this point.
-    await waitUntil(() => fx.workerSpawner.handles("frontend").length >= 2);
-    const secondHandle = fx.workerSpawner.handles("frontend")[1];
-    secondHandle.fire({ exitCode: 0, prUrl: "https://github.com/o/r/pull/2" });
+    // Complete the first ticket normally — the in-flight worker is
+    // allowed to finish. Under AL-4 + AL-9 wind-down semantics, the
+    // runner's serial drain returns AFTER this ticket completes instead
+    // of pulling the next queued ticket. The admin's pending queue
+    // still has t-2 at shutdown so a future session can pick it up.
+    firstHandle.fire({ exitCode: 0, prUrl: "https://github.com/o/r/pull/1" });
 
     await driverP;
 
-    // The in-flight worker's stop() should have been called only
-    // during teardown (autonomous-loop-exit), NOT during the STOP
-    // poll. We can't assert "never" here because the finally block
-    // calls r.stop() which cascades; but we CAN assert it was not
-    // called BEFORE the worker fired its own completion — i.e. the
-    // exit was driven by the test's `fire`, not by SIGTERM.
-    //
-    // The equivalent check: the first worker's final state is
-    // "completed" (exit 0), not "stopped" (exit null from a SIGTERM).
+    // Only ONE worker was ever spawned. AL-4 + AL-9 honors the "stop
+    // dispatching new" contract — the second routed ticket stays in
+    // the admin's queue, never spawns a worker.
+    expect(fx.workerSpawner.handles("frontend")).toHaveLength(1);
+
+    // The in-flight worker's stop() should have been called only during
+    // teardown (autonomous-loop-exit). The first worker's final state
+    // is "completed" (exit 0) — not "stopped" (null from SIGTERM) —
+    // proving the user-stop did NOT force-kill the in-flight worker.
     expect(firstHandle.state).toBe("completed");
 
     // Lifecycle: dispatching → winding_down → killed, terminal reason
@@ -476,10 +481,11 @@ describe("startAutonomousSession — AL-9 STOP-file kill switch", () => {
     expect(windDown?.reason).toBe("user-stop-signal");
   }, 10_000);
 
-  it("does not trigger winding_down when the STOP file is absent (idle loop reaches al-16-pending)", async () => {
+  it("does not trigger winding_down when the STOP file is absent (idle loop reaches the natural terminal)", async () => {
     // Regression guard: AL-9 must not fire the kill switch spuriously.
-    // A session with zero STOP activity should follow the AL-14 terminal
-    // path (killed / al-16-pending).
+    // A session with zero STOP activity should follow the AL-4 steady-
+    // state driver's natural terminal path (done / done) after the
+    // ticket board drains cleanly.
     const fx = await buildFixture(1);
     cleanupFns.push(fx.cleanup);
 
@@ -503,6 +509,9 @@ describe("startAutonomousSession — AL-9 STOP-file kill switch", () => {
         repoAdminSpawner: fx.adminSpawner,
         workerSpawner: fx.workerSpawner as unknown as WorkerSpawner,
         rootDir: fx.root,
+        // AL-4: drive the steady-state loop fast so async admin-boot +
+        // drain progress observes within the test's default timeout.
+        pollIntervalMs: 2,
       },
     });
 
@@ -514,11 +523,15 @@ describe("startAutonomousSession — AL-9 STOP-file kill switch", () => {
     await driverP;
 
     const lc = await readLifecycle(fx.root, fx.sessionId);
-    expect(lc.state).toBe("killed");
-    // Natural terminal, not user-stop.
-    expect(lc.transitions[lc.transitions.length - 1].reason).toBe("al-16-pending");
-    // No winding_down transition ever landed.
-    expect(lc.transitions.find((t) => t.to === "winding_down")).toBeUndefined();
+    // AL-4: a clean drain reaches the `done` terminal (via the
+    // dispatching → winding_down → done two-step) with reason "done".
+    // Neither state is the user-stop-signal path.
+    expect(lc.state).toBe("done");
+    expect(lc.transitions[lc.transitions.length - 1].reason).toBe("done");
+    // The winding_down transition IS present on the AL-4 happy path,
+    // stamped with the natural terminal reason, not the user-stop one.
+    const windDown = lc.transitions.find((t) => t.to === "winding_down");
+    expect(windDown?.reason).toBe("done");
   }, 10_000);
 
   it("audit gate: all-green ledger after user stop logs audit-eligible; non-green ledger logs skip", async () => {
@@ -558,6 +571,9 @@ describe("startAutonomousSession — AL-9 STOP-file kill switch", () => {
         repoAdminSpawner: fx.adminSpawner,
         workerSpawner: fx.workerSpawner as unknown as WorkerSpawner,
         rootDir: fx.root,
+        // AL-4: drive the steady-state loop fast so async admin-boot +
+        // drain progress observes within the test's default timeout.
+        pollIntervalMs: 2,
       },
     });
 
