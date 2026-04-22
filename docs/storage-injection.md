@@ -35,11 +35,11 @@ global side-effect.
 
 ## Environment
 
-| `HARNESS_STORE`          | Behavior                                                    |
-| ------------------------ | ----------------------------------------------------------- |
-| unset / `file`           | `FileHarnessStore` at `getRelayDir()` (usually `~/.relay/`) |
-| `postgres` / `sqlite`    | Warns once, falls back to the file backend (see below)      |
-| any other value          | Silently falls back to the file backend                     |
+| `HARNESS_STORE`       | Behavior                                                    |
+| --------------------- | ----------------------------------------------------------- |
+| unset / `file`        | `FileHarnessStore` at `getRelayDir()` (usually `~/.relay/`) |
+| `postgres` / `sqlite` | Warns once, falls back to the file backend (see below)      |
+| any other value       | Silently falls back to the file backend                     |
 
 The factory never throws on an unsupported backend — old docs and user
 scripts still reference `HARNESS_STORE=postgres`, and crashing those
