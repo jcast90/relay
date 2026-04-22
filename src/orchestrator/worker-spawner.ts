@@ -224,12 +224,24 @@ export function specialtyToAgentId(specialty: AgentSpecialty | undefined): strin
 }
 
 /**
+ * Module-local monotonic counter used to disambiguate runIds minted in the
+ * same millisecond. Replaces the previous `Math.random().slice(2,6)`
+ * suffix which had a non-trivial collision rate at high spawn rates —
+ * two workers spawned in the same ms (which happens in tests, and may
+ * happen in production once parallel drains land in AL-16) could collide
+ * on worktree path. A counter can't collide inside one process.
+ */
+let runIdCounter = 0;
+
+/**
  * Short time-stamp suffix used inside `runId` so two concurrent worker
- * spawns for the same ticket generate distinct worktree paths. Base-36
- * keeps the suffix compact while preserving uniqueness within a run.
+ * spawns for the same ticket generate distinct worktree paths. The
+ * counter suffix is monotonic; the leading `clock()` stamp keeps the id
+ * roughly sortable for a human reader.
  */
 function shortTimestamp(clock: () => number): string {
-  return `${clock().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const seq = (++runIdCounter).toString(36);
+  return `${clock().toString(36)}-${seq}`;
 }
 
 /**

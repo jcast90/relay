@@ -3,9 +3,36 @@ import type { TokenTracker } from "../budget/token-tracker.js";
 import type { Channel, RepoAssignment } from "../domain/channel.js";
 import { ChannelStore } from "../channels/channel-store.js";
 import { RepoAdminPool, isRepoAdminPoolEnabled } from "./repo-admin-pool.js";
+import type { RepoAdminProcessSpawner } from "./repo-admin-session.js";
 import { TicketRouter } from "./ticket-router.js";
 import { TicketRunner } from "./ticket-runner.js";
 import { WorkerSpawner } from "./worker-spawner.js";
+
+/**
+ * Env var gating AL-14's worker-drain phase. Distinct from the pool-enabled
+ * flag so an operator can flip the pool on (AL-12 boot/restart/shutdown
+ * exercise) without automatically enabling worker spawning + drain. The
+ * split exists because AL-4's merge-detection cleanup has not shipped yet:
+ * every worker that reaches `awaiting-merge` state leaves its worktree on
+ * disk until AL-4 lands, and we want operators to opt into that leak
+ * deliberately. Default **off**.
+ *
+ * Recognised true-ish values: `"1"`, `"true"`, `"yes"`, `"on"`
+ * (case-insensitive). Anything else — including typos — is treated as off
+ * so a misconfigured flag doesn't silently leak worktrees.
+ */
+export const RELAY_AL14_WORKER_DRAIN = "RELAY_AL14_WORKER_DRAIN";
+
+/**
+ * Parse {@link RELAY_AL14_WORKER_DRAIN} into a bool. See the constant's
+ * docstring for the "why two flags" rationale.
+ */
+export function isWorkerDrainEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env[RELAY_AL14_WORKER_DRAIN];
+  if (!raw) return false;
+  const normalized = raw.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
 
 /**
  * Options handed to {@link startAutonomousSession} by the CLI entrypoint
@@ -39,29 +66,74 @@ export interface StartAutonomousSessionOptions {
    * every assignment on the channel. AL-4 uses this as a filter at dispatch
    * time. */
   allowedRepos: RepoAssignment[];
+  /**
+   * **Test-only** injection hooks. Production callers MUST NOT set these —
+   * they exist solely so the AL-14 drain integration test can exercise the
+   * pool-boot + router + runner drain path end-to-end without a real
+   * `claude` binary. Three seams are exposed:
+   *
+   *  - `channelStore`: replaces the default `new ChannelStore()` so tests
+   *    can drive a tmp-dir-backed store with seeded channels + tickets.
+   *  - `repoAdminSpawner`: threaded into the `RepoAdminPool` so its per-
+   *    admin children are fakes (no real CLI).
+   *  - `workerSpawner`: replaces `new WorkerSpawner()` so the runner's
+   *    spawn + monitor loop fires deterministically against a fake.
+   *
+   * All three are optional and ALL must be `undefined` in production.
+   * Presence of any field constitutes a test invocation.
+   */
+  testOverrides?: {
+    channelStore?: ChannelStore;
+    repoAdminSpawner?: RepoAdminProcessSpawner;
+    workerSpawner?: WorkerSpawner;
+    /**
+     * Override the pool's `~/.relay` base dir so the test's tmp dir is
+     * used instead of the real home dir for session/admin logs.
+     */
+    rootDir?: string;
+  };
 }
 
 /**
- * Autonomous-loop driver entrypoint. At AL-14 the loop:
+ * Autonomous-loop driver entrypoint. The behaviour is gated by two env
+ * flags so AL-12's pool lifecycle and AL-14's worker drain can be rolled
+ * out independently:
  *
- *   1. When {@link RELAY_REPO_ADMIN_POOL_ENABLED} is on:
- *      - Boots the repo-admin pool (AL-12).
- *      - Reads the channel's ticket board and routes each ready ticket
- *        through {@link TicketRouter} so the matching repo-admin queues
- *        it (AL-13).
- *      - For each admin, drains its pending queue via {@link TicketRunner}:
- *        spawn a worker in a per-ticket worktree, monitor until the
- *        worker exits, and mark the ticket `verifying` (PR opened) /
- *        `failed` (AC4) on the board. Serialized inside each admin;
- *        parallel across admins.
- *      - Transitions the lifecycle to `killed` with reason
- *        `"al-16-pending"`. AL-14 owns spawn + drain; inter-admin
- *        coordination + the steady-state driver loop are still pending.
- *   2. When the flag is off: preserves the pre-AL-13 behaviour — no pool,
- *      no routing, lifecycle transitions to `killed / al-13-pending`.
- *   3. Tears down pool + lifecycle + tracker. Errors during teardown are
+ *   1. When {@link RELAY_REPO_ADMIN_POOL_ENABLED} is off:
+ *      Preserves the pre-AL-12 behaviour — no pool, no routing, lifecycle
+ *      transitions to `killed` with reason `"al-13-pending"`. This is the
+ *      safe default.
+ *   2. When only the pool flag is on:
+ *      Boots the repo-admin pool (AL-12) and routes each ready ticket
+ *      through {@link TicketRouter} (AL-13) so the matching admin queues
+ *      it. Workers are NOT spawned and queues are NOT drained — the
+ *      lifecycle transitions to `killed` with reason `"al-14-pending"`.
+ *      This mode exercises boot + routing in production without leaking
+ *      worktrees.
+ *   3. When BOTH {@link RELAY_REPO_ADMIN_POOL_ENABLED} and
+ *      {@link RELAY_AL14_WORKER_DRAIN} are on:
+ *      Full AL-14 behaviour. For each admin whose session is live
+ *      (`state === "ready"`), drain its pending queue via
+ *      {@link TicketRunner} — spawn a worker in a per-ticket worktree,
+ *      monitor until the worker exits, and mark the ticket `verifying`
+ *      (PR opened) / `failed` (AC4) on the board. Serialized inside each
+ *      admin; parallel across admins. On completion the lifecycle
+ *      transitions to `killed` with reason `"al-16-pending"`.
+ *   4. Tears down pool + lifecycle + tracker. Errors during teardown are
  *      logged and swallowed: a cosmetic shutdown failure must not turn a
  *      successful handoff into a non-zero CLI exit.
+ *
+ * ## Why two flags
+ *
+ * AL-14 owns spawn + drain but NOT PR-merge cleanup (AL-4's scope). A
+ * ticket whose worker opens a PR transitions to `awaiting-merge` and its
+ * worktree persists on disk until a merge event reaches
+ * {@link TicketRunner.handlePrMerged}. Until AL-4 ships merge-detection
+ * wiring, every pool-enabled autonomous run with the drain on leaks one
+ * worktree per successful ticket. Gating the drain behind its own flag
+ * lets operators opt into that leak knowingly — and keeps a clean opt-
+ * out path for AL-12/AL-13 exercise runs that shouldn't spawn workers at
+ * all.
  *
  * PR-merge cleanup (AC3) is NOT driven here — the runner exposes
  * {@link TicketRunner.handlePrMerged}; the autonomous-loop's steady-
@@ -71,7 +143,7 @@ export interface StartAutonomousSessionOptions {
  * hook is dormant here.
  */
 export async function startAutonomousSession(opts: StartAutonomousSessionOptions): Promise<void> {
-  const { sessionId, lifecycle, tracker, channel, allowedRepos } = opts;
+  const { sessionId, lifecycle, tracker, channel, allowedRepos, testOverrides } = opts;
 
   // AL-12 built the repo-admin pool, but the admin-process handshake
   // protocol it relies on is AL-14's deliverable. Without that protocol
@@ -81,16 +153,32 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
   // `rly run --autonomous` invocations keep the pre-AL-12 behaviour
   // (clean `killed / al-13-pending` exit) until AL-14 flips the flag.
   const poolEnabled = isRepoAdminPoolEnabled();
+  // AL-14 spawn + drain is gated by a SEPARATE flag from the pool flag.
+  // Until AL-4 ships merge-detection cleanup, every ticket that reaches
+  // `awaiting-merge` leaves a worktree on disk — the two-flag split lets
+  // operators opt into that leak explicitly rather than inheriting it
+  // by flipping the pool flag. When the drain flag is off but the pool
+  // flag is on, the loop still routes tickets (AL-13) but no workers
+  // are spawned, and the lifecycle exits with reason `al-14-pending`.
+  const drainEnabled = poolEnabled && isWorkerDrainEnabled();
 
   if (!poolEnabled) {
     console.log(
       `[autonomous-loop] dispatcher not yet implemented — ` +
         `Session ${sessionId} marked as killed with reason "al-13-pending".`
     );
+  } else if (!drainEnabled) {
+    console.log(
+      `[autonomous-loop] repo-admin pool + router enabled; worker drain disabled ` +
+        `(RELAY_AL14_WORKER_DRAIN unset) — Session ${sessionId} will route tickets and ` +
+        `mark killed with reason "al-14-pending".`
+    );
   } else {
     console.log(
       `[autonomous-loop] routing channel tickets + draining repo-admin queues — ` +
-        `Session ${sessionId} will mark killed with reason "al-16-pending" once drained.`
+        `Session ${sessionId} will mark killed with reason "al-16-pending" once drained. ` +
+        `worker drain enabled; tickets that reach awaiting-merge state will leave ` +
+        `worktrees on disk until AL-4 lands merge-detection cleanup.`
     );
   }
 
@@ -100,6 +188,8 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
         allowedAliases: allowedRepos.map((r) => r.alias),
         fullAccess: channel.fullAccess ?? false,
         lifecycle,
+        spawner: testOverrides?.repoAdminSpawner,
+        rootDir: testOverrides?.rootDir,
       })
     : null;
 
@@ -116,17 +206,17 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
   }
 
   // AL-13: drain the channel's ticket board through the router exactly
-  // once. AL-14 adds a second pass that drains each admin's queue via
-  // TicketRunner — spawn a worker per ticket, wait for it to open a PR
-  // (or fail), then exit. The autonomous-loop's steady-state driver
-  // (AL-4) will replace this single-pass shape; AL-14 just proves the
-  // end-to-end plumbing.
-  let terminalReason: "al-13-pending" | "al-16-pending" = "al-13-pending";
+  // once. AL-14 adds a second pass (gated by RELAY_AL14_WORKER_DRAIN)
+  // that drains each admin's queue via TicketRunner — spawn a worker
+  // per ticket, wait for it to open a PR (or fail), then exit. The
+  // autonomous-loop's steady-state driver (AL-4) will replace this
+  // single-pass shape; AL-14 just proves the end-to-end plumbing.
+  let terminalReason: "al-13-pending" | "al-14-pending" | "al-16-pending" = "al-13-pending";
   if (pool) {
-    terminalReason = "al-16-pending";
+    terminalReason = drainEnabled ? "al-16-pending" : "al-14-pending";
     const runners: TicketRunner[] = [];
     try {
-      const channelStore = new ChannelStore();
+      const channelStore = testOverrides?.channelStore ?? new ChannelStore();
       const router = new TicketRouter({ pool, channel, channelStore });
       const boardTickets = await channelStore.readChannelTickets(channel.channelId);
       for (const ticket of boardTickets) {
@@ -149,37 +239,45 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
         }
       }
 
-      // AL-14: drain each admin's pending queue in parallel. Each admin
-      // serializes internally (one worker at a time in its repo); two
-      // different admins DO run in parallel. The drain promise resolves
-      // once every admin's queue is empty AND every in-flight worker has
-      // exited.
-      const spawner = new WorkerSpawner();
-      const admins = pool.listSessions();
-      for (const admin of admins) {
-        const assignment = channel.repoAssignments?.find((a) => a.alias === admin.alias);
-        if (!assignment) continue;
-        runners.push(
-          new TicketRunner({
-            admin,
-            repoAssignment: assignment,
-            channel,
-            channelStore,
-            spawner,
-          })
+      if (drainEnabled) {
+        // AL-14: drain each admin's pending queue in parallel. Each admin
+        // serializes internally (one worker at a time in its repo); two
+        // different admins DO run in parallel. The drain promise resolves
+        // once every admin's queue is empty AND every in-flight worker has
+        // exited.
+        const spawner = testOverrides?.workerSpawner ?? new WorkerSpawner();
+        // Filter to live admins only: `listSessions()` also returns admins
+        // whose child has died / been terminally marked `stopped` by the
+        // pool's rapid-restart ceiling. Dispatching into those sessions
+        // is a programming error (they throw) and surfacing nothing is
+        // the right behaviour — the router already wrote the blocked
+        // status for the routing failure.
+        const admins = pool.listSessions().filter((s) => s.state === "ready");
+        for (const admin of admins) {
+          const assignment = channel.repoAssignments?.find((a) => a.alias === admin.alias);
+          if (!assignment) continue;
+          runners.push(
+            new TicketRunner({
+              admin,
+              repoAssignment: assignment,
+              channel,
+              channelStore,
+              spawner,
+            })
+          );
+        }
+        await Promise.all(
+          runners.map((r) =>
+            r.drain().catch((err) => {
+              console.warn(
+                `[autonomous-loop] ticket runner drain failed: ${
+                  err instanceof Error ? err.message : String(err)
+                }`
+              );
+            })
+          )
         );
       }
-      await Promise.all(
-        runners.map((r) =>
-          r.drain().catch((err) => {
-            console.warn(
-              `[autonomous-loop] ticket runner drain failed: ${
-                err instanceof Error ? err.message : String(err)
-              }`
-            );
-          })
-        )
-      );
     } catch (err) {
       console.warn(
         `[autonomous-loop] ticket routing pass failed: ${
