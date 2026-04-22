@@ -4,10 +4,7 @@ import { listAgentNames } from "../domain/agent-names.js";
 import type { Channel, ChannelEntry } from "../domain/channel.js";
 import type { TicketLedgerEntry } from "../domain/ticket.js";
 import { LocalArtifactStore } from "../execution/artifact-store.js";
-import {
-  getGlobalRoot,
-  listRegisteredWorkspaces
-} from "../cli/workspace-registry.js";
+import { getGlobalRoot, listRegisteredWorkspaces } from "../cli/workspace-registry.js";
 import {
   bold,
   boxBottom,
@@ -26,13 +23,21 @@ import {
   showCursor,
   statusColor,
   truncate,
-  yellow
+  yellow,
 } from "./render.js";
 
 const ACTIVE_RUN_STATES = new Set([
-  "CLASSIFYING", "DRAFT_PLAN", "PLAN_REVIEW", "AWAITING_APPROVAL",
-  "DESIGN_DOC", "PHASE_READY", "PHASE_EXECUTE", "TEST_FIX_LOOP",
-  "REVIEW_FIX_LOOP", "TICKETS_EXECUTING", "TICKETS_COMPLETE"
+  "CLASSIFYING",
+  "DRAFT_PLAN",
+  "PLAN_REVIEW",
+  "AWAITING_APPROVAL",
+  "DESIGN_DOC",
+  "PHASE_READY",
+  "PHASE_EXECUTE",
+  "TEST_FIX_LOOP",
+  "REVIEW_FIX_LOOP",
+  "TICKETS_EXECUTING",
+  "TICKETS_COMPLETE",
 ]);
 
 interface DashboardState {
@@ -53,7 +58,7 @@ export async function startDashboard(): Promise<void> {
     feed: [],
     tickets: [],
     activeRuns: [],
-    agents: []
+    agents: [],
   };
 
   hideCursor();
@@ -104,7 +109,7 @@ async function refresh(state: DashboardState, channelStore: ChannelStore): Promi
     id: a.agentId,
     name: a.displayName,
     role: a.role,
-    provider: a.provider
+    provider: a.provider,
   }));
 
   const selectedChannel = state.channels[state.selectedChannelIndex];
@@ -140,7 +145,7 @@ async function refresh(state: DashboardState, channelStore: ChannelStore): Promi
           runId: run.runId,
           state: run.state,
           featureRequest: run.featureRequest,
-          workspace: ws.repoPath.split("/").pop() ?? ws.workspaceId
+          workspace: ws.repoPath.split("/").pop() ?? ws.workspaceId,
         });
       }
     }
@@ -161,8 +166,7 @@ function draw(state: DashboardState): void {
   // Header
   moveTo(row, 1);
   process.stdout.write(
-    bold(cyan(" AGENT HARNESS ")) +
-    dim(`  q=quit  j/k=navigate  refreshing every 3s`)
+    bold(cyan(" AGENT HARNESS ")) + dim(`  q=quit  j/k=navigate  refreshing every 3s`)
   );
   row += 2;
 
@@ -258,17 +262,25 @@ function draw(state: DashboardState): void {
 
     // Group tickets by status
     const groups = groupTicketsByStatus(state.tickets);
-    const statusOrder = ["executing", "verifying", "ready", "blocked", "pending", "retry", "completed", "failed"];
+    const statusOrder = [
+      "executing",
+      "verifying",
+      "ready",
+      "blocked",
+      "pending",
+      "retry",
+      "completed",
+      "failed",
+    ];
 
     for (const status of statusOrder) {
       const tickets = groups[status];
       if (!tickets || tickets.length === 0) continue;
 
       moveTo(boardRow, leftWidth + centerWidth + 3);
-      process.stdout.write(boxRow(
-        `${statusColor(status.toUpperCase())} ${dim(`(${tickets.length})`)}`,
-        rightWidth
-      ));
+      process.stdout.write(
+        boxRow(`${statusColor(status.toUpperCase())} ${dim(`(${tickets.length})`)}`, rightWidth)
+      );
       boardRow++;
 
       for (const ticket of tickets.slice(0, 3)) {
@@ -299,10 +311,7 @@ function draw(state: DashboardState): void {
       for (const run of state.activeRuns.slice(0, 4)) {
         const label = truncate(run.featureRequest, rightWidth - 18);
         moveTo(boardRow, leftWidth + centerWidth + 3);
-        process.stdout.write(boxRow(
-          `  ${statusColor(run.state)} ${dim(label)}`,
-          rightWidth
-        ));
+        process.stdout.write(boxRow(`  ${statusColor(run.state)} ${dim(label)}`, rightWidth));
         boardRow++;
       }
     }
@@ -317,28 +326,38 @@ function draw(state: DashboardState): void {
   const ticketCount = state.tickets.length;
   const runCount = state.activeRuns.length;
   process.stdout.write(
-    dim(` ${channelCount} channel(s)  ${ticketCount} ticket(s)  ${runCount} active run(s)  ${state.agents.length} agent(s)`)
+    dim(
+      ` ${channelCount} channel(s)  ${ticketCount} ticket(s)  ${runCount} active run(s)  ${state.agents.length} agent(s)`
+    )
   );
 }
 
 function feedIcon(type: string): string {
   switch (type) {
-    case "message": return cyan("💬");
-    case "decision": return yellow("⚖️");
-    case "status_update": return magenta("📊");
-    case "artifact": return green("📎");
-    case "agent_joined": return green("→");
-    case "agent_left": return red("←");
-    case "run_started": return cyan("▶");
-    case "run_completed": return green("✓");
-    case "ref_added": return dim("🔗");
-    default: return dim("·");
+    case "message":
+      return cyan("💬");
+    case "decision":
+      return yellow("⚖️");
+    case "status_update":
+      return magenta("📊");
+    case "artifact":
+      return green("📎");
+    case "agent_joined":
+      return green("→");
+    case "agent_left":
+      return red("←");
+    case "run_started":
+      return cyan("▶");
+    case "run_completed":
+      return green("✓");
+    case "ref_added":
+      return dim("🔗");
+    default:
+      return dim("·");
   }
 }
 
-function groupTicketsByStatus(
-  tickets: TicketLedgerEntry[]
-): Record<string, TicketLedgerEntry[]> {
+function groupTicketsByStatus(tickets: TicketLedgerEntry[]): Record<string, TicketLedgerEntry[]> {
   const groups: Record<string, TicketLedgerEntry[]> = {};
 
   for (const ticket of tickets) {

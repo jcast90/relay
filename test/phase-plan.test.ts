@@ -18,13 +18,13 @@ describe("phase plan schema", () => {
         task: {
           title: "Bad",
           featureRequest: "Missing phases",
-          repoRoot: process.cwd()
+          repoRoot: process.cwd(),
         },
         phases: [],
         finalVerification: {
-          commands: []
+          commands: [],
         },
-        docsToUpdate: []
+        docsToUpdate: [],
       })
     ).toThrow();
   });

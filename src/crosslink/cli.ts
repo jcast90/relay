@@ -3,10 +3,7 @@ import { CrosslinkStore } from "./store.js";
 import { generateHookScripts, printHookSetupInstructions } from "./hook.js";
 import { buildCrosslinkId } from "./types.js";
 
-export async function handleCrosslinkCommand(
-  subcommand: string,
-  args: string[]
-): Promise<void> {
+export async function handleCrosslinkCommand(subcommand: string, args: string[]): Promise<void> {
   switch (subcommand) {
     case "init":
       return handleInit();
@@ -62,9 +59,7 @@ async function handleCheck(): Promise<void> {
   // In hook context, RELAY_SESSION is not set, so we pick the most recently
   // active session.
   const envSessionId = process.env.RELAY_SESSION;
-  const session = envSessionId
-    ? sessions.find((s) => s.sessionId === envSessionId)
-    : sessions[0];
+  const session = envSessionId ? sessions.find((s) => s.sessionId === envSessionId) : sessions[0];
 
   if (!session) {
     return;
@@ -73,11 +68,11 @@ async function handleCheck(): Promise<void> {
   const messages = await store.pollMessages(session.sessionId);
 
   for (const msg of messages) {
-    const replyHint = msg.type === "question"
-      ? " — use crosslink_reply to respond"
-      : "";
+    const replyHint = msg.type === "question" ? " — use crosslink_reply to respond" : "";
 
-    console.log(`[CROSSLINK INBOUND from=${msg.fromSessionId} messageId=${msg.messageId} type=${msg.type}${replyHint}]`);
+    console.log(
+      `[CROSSLINK INBOUND from=${msg.fromSessionId} messageId=${msg.messageId} type=${msg.type}${replyHint}]`
+    );
     console.log(msg.content);
     console.log("[/CROSSLINK]");
     console.log("");
@@ -100,7 +95,7 @@ async function handleSend(args: string[]): Promise<void> {
     fromSessionId: buildCrosslinkId("cli"),
     toSessionId,
     content: message,
-    type: "question"
+    type: "question",
   });
 
   console.log(`Message sent: ${sent.messageId}`);

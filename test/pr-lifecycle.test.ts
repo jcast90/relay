@@ -4,11 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import {
-  createPrLifecycle,
-  advancePrStage,
-  canTransition
-} from "../src/domain/pr-lifecycle.js";
+import { createPrLifecycle, advancePrStage, canTransition } from "../src/domain/pr-lifecycle.js";
 import { LocalArtifactStore } from "../src/execution/artifact-store.js";
 import { FileHarnessStore } from "../src/storage/file-store.js";
 
@@ -16,7 +12,7 @@ describe("PR lifecycle domain", () => {
   it("creates a lifecycle in branch_created stage", () => {
     const lifecycle = createPrLifecycle({
       runId: "run-1",
-      branch: "feature/widget"
+      branch: "feature/widget",
     });
 
     expect(lifecycle.runId).toBe("run-1");
@@ -31,7 +27,7 @@ describe("PR lifecycle domain", () => {
   it("advances through stages and records events", () => {
     let lifecycle = createPrLifecycle({
       runId: "run-1",
-      branch: "feature/widget"
+      branch: "feature/widget",
     });
 
     lifecycle = advancePrStage(lifecycle, "commits_pushed");
@@ -40,7 +36,7 @@ describe("PR lifecycle domain", () => {
 
     lifecycle = advancePrStage(lifecycle, "pr_opened", {
       prNumber: "42",
-      prUrl: "https://github.com/org/repo/pull/42"
+      prUrl: "https://github.com/org/repo/pull/42",
     });
     expect(lifecycle.currentStage).toBe("pr_opened");
     expect(lifecycle.prNumber).toBe(42);
@@ -68,7 +64,7 @@ describe("PR lifecycle persistence", () => {
       const lifecycle = createPrLifecycle({
         runId: "run-pr-1",
         branch: "feature/test",
-        baseBranch: "develop"
+        baseBranch: "develop",
       });
 
       const path = await store.savePrLifecycle(lifecycle);

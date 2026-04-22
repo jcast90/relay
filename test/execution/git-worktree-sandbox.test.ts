@@ -11,7 +11,7 @@ import { resolveLocalPath } from "../../src/execution/sandbox.js";
 import {
   GitWorktreeSandboxProvider,
   type RunGit,
-  type RunGitResult
+  type RunGitResult,
 } from "../../src/execution/sandboxes/git-worktree.js";
 
 const runRealGit = promisify(execFileCb);
@@ -28,29 +28,21 @@ function makeRecordingRunGit(
   responder: (call: RecordedCall) => RunGitResult | Promise<RunGitResult> = () => ({
     stdout: "",
     stderr: "",
-    code: 0
+    code: 0,
   })
 ): { runGit: RunGit; calls: RecordedCall[] } {
   const calls: RecordedCall[] = [];
   const runGit: RunGit = async (args, cwd) => {
     calls.push({ args, cwd });
     const result = await responder({ args, cwd });
-    if (
-      result.code === 0 &&
-      args[0] === "worktree" &&
-      args[1] === "add"
-    ) {
+    if (result.code === 0 && args[0] === "worktree" && args[1] === "add") {
       // `-b <branch> <path> <base>` — the path is the 4th positional arg.
       const path = args[4];
       if (path) {
         await mkdir(path, { recursive: true });
       }
     }
-    if (
-      result.code === 0 &&
-      args[0] === "worktree" &&
-      args[1] === "remove"
-    ) {
+    if (result.code === 0 && args[0] === "worktree" && args[1] === "remove") {
       const path = args[args.length - 1];
       if (path) {
         await rm(path, { recursive: true, force: true });
@@ -80,21 +72,14 @@ describe("GitWorktreeSandboxProvider.create", () => {
 
     const ref = await provider.create(repo, "main", {
       runId: "run-abc",
-      ticketId: "T-042"
+      ticketId: "T-042",
     });
 
     expect(calls).toHaveLength(1);
     const expectedPath = join(baseDir, "run-run-abc", "T-042");
     expect(calls[0]).toEqual({
-      args: [
-        "worktree",
-        "add",
-        "-b",
-        "sandbox/run-abc/T-042",
-        expectedPath,
-        "main"
-      ],
-      cwd: repo.root
+      args: ["worktree", "add", "-b", "sandbox/run-abc/T-042", expectedPath, "main"],
+      cwd: repo.root,
     });
 
     expect(ref.id).toBe("runtime-run-abc-T-042");
@@ -115,20 +100,17 @@ describe("GitWorktreeSandboxProvider.create", () => {
 
     const ref = await provider.create(repo, "develop", {
       runId: "run-xyz",
-      ticketId: "T-007"
+      ticketId: "T-007",
     });
 
-    const statePath = join(
-      resolveLocalPath(ref) ?? "/missing",
-      ".relay-state.json"
-    );
+    const statePath = join(resolveLocalPath(ref) ?? "/missing", ".relay-state.json");
     const raw = JSON.parse(await readFile(statePath, "utf8"));
 
     expect(raw).toMatchObject({
       runId: "run-xyz",
       ticketId: "T-007",
       base: "develop",
-      branch: "sandbox/run-xyz/T-007"
+      branch: "sandbox/run-xyz/T-007",
     });
     expect(typeof raw.createdAt).toBe("string");
     expect(Number.isNaN(Date.parse(raw.createdAt))).toBe(false);
@@ -143,12 +125,12 @@ describe("GitWorktreeSandboxProvider.create", () => {
 
     const ref = await provider.create(repo, "main", {
       runId: "r1",
-      ticketId: "T-1"
+      ticketId: "T-1",
     });
 
     expect(ref.workdir).toEqual({
       kind: "local",
-      path: join(baseDir, "run-r1", "T-1")
+      path: join(baseDir, "run-r1", "T-1"),
     });
     expect(ref.meta?.branch).toBe("sandbox/r1/T-1");
 
@@ -160,13 +142,13 @@ describe("GitWorktreeSandboxProvider.create", () => {
     const { runGit } = makeRecordingRunGit(() => ({
       stdout: "",
       stderr: "fatal: invalid reference: nope",
-      code: 128
+      code: 128,
     }));
     const provider = new GitWorktreeSandboxProvider({ baseDir, runGit });
 
-    await expect(
-      provider.create(repo, "nope", { runId: "r", ticketId: "T" })
-    ).rejects.toThrow(/invalid reference/);
+    await expect(provider.create(repo, "nope", { runId: "r", ticketId: "T" })).rejects.toThrow(
+      /invalid reference/
+    );
 
     await rm(baseDir, { recursive: true, force: true });
   });
@@ -176,7 +158,7 @@ describe("GitWorktreeSandboxProvider.create", () => {
     const { runGit } = makeRecordingRunGit(() => ({
       stdout: "progress: cloning",
       stderr: "fatal: boom",
-      code: 128
+      code: 128,
     }));
     const provider = new GitWorktreeSandboxProvider({ baseDir, runGit });
 
@@ -184,9 +166,9 @@ describe("GitWorktreeSandboxProvider.create", () => {
     // snippet, not just the stderr — without those, an operator staring at
     // the thrown error has no way to tell a non-zero git exit from a random
     // JS runtime failure.
-    await expect(
-      provider.create(repo, "main", { runId: "r", ticketId: "T" })
-    ).rejects.toThrow(/exit 128.*boom.*stdout: progress: cloning/);
+    await expect(provider.create(repo, "main", { runId: "r", ticketId: "T" })).rejects.toThrow(
+      /exit 128.*boom.*stdout: progress: cloning/
+    );
 
     await rm(baseDir, { recursive: true, force: true });
   });
@@ -198,7 +180,7 @@ describe("GitWorktreeSandboxProvider.create", () => {
 
     const [a, b] = await Promise.all([
       provider.create(repo, "main", { runId: "run-a", ticketId: "T-1" }),
-      provider.create(repo, "main", { runId: "run-b", ticketId: "T-2" })
+      provider.create(repo, "main", { runId: "run-b", ticketId: "T-2" }),
     ]);
 
     expect(a.id).not.toBe(b.id);
@@ -219,9 +201,9 @@ describe("GitWorktreeSandboxProvider.create", () => {
 
     await provider.create(repo, "main", { runId: "r", ticketId: "T-dup" });
 
-    await expect(
-      provider.create(repo, "main", { runId: "r", ticketId: "T-dup" })
-    ).rejects.toThrow(/already exists.*T-203 recovery should handle resume/);
+    await expect(provider.create(repo, "main", { runId: "r", ticketId: "T-dup" })).rejects.toThrow(
+      /already exists.*T-203 recovery should handle resume/
+    );
 
     await rm(baseDir, { recursive: true, force: true });
   });
@@ -243,14 +225,12 @@ describe("GitWorktreeSandboxProvider.create", () => {
     };
     const provider = new GitWorktreeSandboxProvider({ baseDir, runGit });
 
-    await expect(
-      provider.create(repo, "main", { runId: "r", ticketId: "T" })
-    ).rejects.toThrow(/Failed to write \.relay-state\.json/);
+    await expect(provider.create(repo, "main", { runId: "r", ticketId: "T" })).rejects.toThrow(
+      /Failed to write \.relay-state\.json/
+    );
 
     // Rollback = a second invocation with `--force` on the target path.
-    const rollback = calls.find(
-      (c) => c.args[1] === "remove" && c.args.includes("--force")
-    );
+    const rollback = calls.find((c) => c.args[1] === "remove" && c.args.includes("--force"));
     expect(rollback).toBeDefined();
 
     await rm(baseDir, { recursive: true, force: true });
@@ -263,7 +243,7 @@ describe("GitWorktreeSandboxProvider.create", () => {
       { label: "backslash", value: "\\x" },
       { label: "empty string", value: "" },
       { label: "leading space", value: " space" },
-      { label: "null byte", value: "null\0byte" }
+      { label: "null byte", value: "null\0byte" },
     ];
 
     for (const { label, value } of unsafeValues) {
@@ -300,14 +280,12 @@ describe("GitWorktreeSandboxProvider.create", () => {
           id: `runtime-${value}-T-1`,
           workdir: {
             kind: "local" as const,
-            path: join(baseDir, `run-${value}`, "T-1")
+            path: join(baseDir, `run-${value}`, "T-1"),
           },
-          meta: { runId: value, ticketId: "T-1" }
+          meta: { runId: value, ticketId: "T-1" },
         };
 
-        await expect(provider.destroy(forgedRef)).rejects.toThrow(
-          /Unsafe path segment/
-        );
+        await expect(provider.destroy(forgedRef)).rejects.toThrow(/Unsafe path segment/);
 
         await rm(baseDir, { recursive: true, force: true });
       });
@@ -321,14 +299,12 @@ describe("GitWorktreeSandboxProvider.create", () => {
           id: `runtime-r-${value}`,
           workdir: {
             kind: "local" as const,
-            path: join(baseDir, "run-r", value)
+            path: join(baseDir, "run-r", value),
           },
-          meta: { runId: "r", ticketId: value }
+          meta: { runId: "r", ticketId: value },
         };
 
-        await expect(provider.destroy(forgedRef)).rejects.toThrow(
-          /Unsafe path segment/
-        );
+        await expect(provider.destroy(forgedRef)).rejects.toThrow(/Unsafe path segment/);
 
         await rm(baseDir, { recursive: true, force: true });
       });
@@ -344,7 +320,7 @@ describe("GitWorktreeSandboxProvider.destroy", () => {
 
     const ref = await provider.create(repo, "main", {
       runId: "r",
-      ticketId: "T"
+      ticketId: "T",
     });
 
     const outcome = await provider.destroy(ref);
@@ -352,11 +328,7 @@ describe("GitWorktreeSandboxProvider.destroy", () => {
 
     const removeCall = calls.find((c) => c.args[1] === "remove");
     expect(removeCall).toBeDefined();
-    expect(removeCall!.args).toEqual([
-      "worktree",
-      "remove",
-      resolveLocalPath(ref)
-    ]);
+    expect(removeCall!.args).toEqual(["worktree", "remove", resolveLocalPath(ref)]);
     expect(removeCall!.args).not.toContain("--force");
     expect(removeCall!.cwd).toBe(repo.root);
 
@@ -370,7 +342,7 @@ describe("GitWorktreeSandboxProvider.destroy", () => {
 
     const ref = await provider.create(repo, "main", {
       runId: "r",
-      ticketId: "T"
+      ticketId: "T",
     });
 
     const outcome = await provider.destroy(ref, { force: true });
@@ -378,12 +350,7 @@ describe("GitWorktreeSandboxProvider.destroy", () => {
 
     const removeCall = calls.find((c) => c.args[1] === "remove");
     expect(removeCall).toBeDefined();
-    expect(removeCall!.args).toEqual([
-      "worktree",
-      "remove",
-      "--force",
-      resolveLocalPath(ref)
-    ]);
+    expect(removeCall!.args).toEqual(["worktree", "remove", "--force", resolveLocalPath(ref)]);
 
     await rm(baseDir, { recursive: true, force: true });
   });
@@ -393,7 +360,7 @@ describe("GitWorktreeSandboxProvider.destroy", () => {
     const { runGit, calls } = makeRecordingRunGit();
     const provider = new GitWorktreeSandboxProvider({
       baseDir,
-      runGit
+      runGit,
     });
 
     // Build a ref for a path that was never created on disk.
@@ -401,13 +368,13 @@ describe("GitWorktreeSandboxProvider.destroy", () => {
       id: "runtime-ghost-T-0",
       workdir: {
         kind: "local" as const,
-        path: join(baseDir, "run-ghost", "T-0")
+        path: join(baseDir, "run-ghost", "T-0"),
       },
-      meta: { branch: "sandbox/ghost/T-0", runId: "ghost", ticketId: "T-0" }
+      meta: { branch: "sandbox/ghost/T-0", runId: "ghost", ticketId: "T-0" },
     };
 
     await expect(provider.destroy(phantom)).resolves.toEqual({
-      kind: "missing"
+      kind: "missing",
     });
     // No git invocation should happen when the path is missing.
     expect(calls).toHaveLength(0);
@@ -429,7 +396,7 @@ describe("GitWorktreeSandboxProvider.destroy", () => {
     const orphanRef = {
       id: "runtime-orphan-T-0",
       workdir: { kind: "local" as const, path: existingPath },
-      meta: { branch: "sandbox/orphan/T-0", runId: "orphan", ticketId: "T-0" }
+      meta: { branch: "sandbox/orphan/T-0", runId: "orphan", ticketId: "T-0" },
     };
 
     await expect(provider.destroy(orphanRef)).rejects.toThrow(
@@ -456,9 +423,8 @@ describe("GitWorktreeSandboxProvider.destroy", () => {
       if (failNextRemove && args[1] === "remove") {
         return {
           stdout: "",
-          stderr:
-            "fatal: '...' contains modified or untracked files, use --force to delete it",
-          code: 128
+          stderr: "fatal: '...' contains modified or untracked files, use --force to delete it",
+          code: 128,
         };
       }
       return { stdout: "", stderr: "", code: 0 };
@@ -467,7 +433,7 @@ describe("GitWorktreeSandboxProvider.destroy", () => {
     const provider = new GitWorktreeSandboxProvider({ baseDir, runGit });
     const ref = await provider.create(repo, "main", {
       runId: "r",
-      ticketId: "T-dirty"
+      ticketId: "T-dirty",
     });
 
     const path = resolveLocalPath(ref)!;
@@ -504,7 +470,7 @@ describe("GitWorktreeSandboxProvider.destroy", () => {
         return {
           stdout: "last-line: help",
           stderr: "fatal: catastrophic failure",
-          code: 128
+          code: 128,
         };
       }
       return { stdout: "", stderr: "", code: 0 };
@@ -513,7 +479,7 @@ describe("GitWorktreeSandboxProvider.destroy", () => {
     const provider = new GitWorktreeSandboxProvider({ baseDir, runGit });
     const ref = await provider.create(repo, "main", {
       runId: "r",
-      ticketId: "T-err"
+      ticketId: "T-err",
     });
 
     phase = "remove";
@@ -527,8 +493,7 @@ describe("GitWorktreeSandboxProvider.destroy", () => {
 
 // Integration test gated behind RELAY_TEST_REAL_GIT=1. Uses a real git repo in
 // a temp dir so CI stays fast and hermetic by default.
-const realGitSuite =
-  process.env.RELAY_TEST_REAL_GIT === "1" ? describe : describe.skip;
+const realGitSuite = process.env.RELAY_TEST_REAL_GIT === "1" ? describe : describe.skip;
 
 realGitSuite("GitWorktreeSandboxProvider — real git integration", () => {
   it("creates and destroys a real worktree", async () => {
@@ -543,11 +508,10 @@ realGitSuite("GitWorktreeSandboxProvider — real git integration", () => {
     );
 
     const provider = new GitWorktreeSandboxProvider({ baseDir });
-    const ref = await provider.create(
-      { root: repoRoot },
-      "main",
-      { runId: "real", ticketId: "T-real" }
-    );
+    const ref = await provider.create({ root: repoRoot }, "main", {
+      runId: "real",
+      ticketId: "T-real",
+    });
 
     const path = resolveLocalPath(ref)!;
     expect(await exists(path)).toBe(true);

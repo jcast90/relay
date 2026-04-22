@@ -9,15 +9,10 @@ import {
   getAgentName,
   listAgentNames,
   setAgentName,
-  type AgentNameEntry
+  type AgentNameEntry,
 } from "../src/domain/agent-names.js";
 import { STORE_NS } from "../src/storage/namespaces.js";
-import type {
-  BlobRef,
-  ChangeEvent,
-  HarnessStore,
-  ReadLogOptions
-} from "../src/storage/store.js";
+import type { BlobRef, ChangeEvent, HarnessStore, ReadLogOptions } from "../src/storage/store.js";
 
 /**
  * Minimal in-memory HarnessStore. Same shape as the one used in the T-101
@@ -54,11 +49,7 @@ class FakeHarnessStore implements HarnessStore {
     throw new Error("FakeHarnessStore.appendLog is not implemented");
   }
 
-  async readLog<T>(
-    _ns: string,
-    _id: string,
-    _opts?: ReadLogOptions
-  ): Promise<T[]> {
+  async readLog<T>(_ns: string, _id: string, _opts?: ReadLogOptions): Promise<T[]> {
     throw new Error("FakeHarnessStore.readLog is not implemented");
   }
 
@@ -70,11 +61,7 @@ class FakeHarnessStore implements HarnessStore {
     throw new Error("FakeHarnessStore.getBlob is not implemented");
   }
 
-  async mutate<T>(
-    ns: string,
-    id: string,
-    fn: (prev: T | null) => T
-  ): Promise<T> {
+  async mutate<T>(ns: string, id: string, fn: (prev: T | null) => T): Promise<T> {
     this.mutateCalls.push({ ns, id });
     const prev = (this.docs.get(this.key(ns, id)) as T | undefined) ?? null;
     const next = fn(prev);
@@ -101,7 +88,7 @@ describe("agent names", () => {
 
   it("sets and retrieves agent display names", async () => {
     await setAgentName("test-agent-1", "Test Agent One", "claude", "planner", {
-      relayDir
+      relayDir,
     });
 
     const name = await getAgentName("test-agent-1", { relayDir });
@@ -116,7 +103,7 @@ describe("agent names", () => {
 
     // Overwrite
     await setAgentName("test-agent-1", "Updated Name", "claude", "reviewer", {
-      relayDir
+      relayDir,
     });
     const updated = await getAgentName("test-agent-1", { relayDir });
     expect(updated).toBe("Updated Name");
@@ -127,24 +114,15 @@ describe("agent names", () => {
     // After a set, the on-disk file must contain the full registry as a flat
     // JSON array — never an object wrapper, never under a sub-path.
     await setAgentName("planner-1", "Planner One", "claude", "planner", {
-      relayDir
+      relayDir,
     });
-    await setAgentName(
-      "implementer-1",
-      "Implementer One",
-      "codex",
-      "implementer",
-      { relayDir }
-    );
+    await setAgentName("implementer-1", "Implementer One", "codex", "implementer", { relayDir });
 
     const onDisk = JSON.parse(
       await readFile(join(relayDir, "agent-names.json"), "utf8")
     ) as AgentNameEntry[];
     expect(Array.isArray(onDisk)).toBe(true);
-    expect(onDisk.map((e) => e.agentId).sort()).toEqual([
-      "implementer-1",
-      "planner-1"
-    ]);
+    expect(onDisk.map((e) => e.agentId).sort()).toEqual(["implementer-1", "planner-1"]);
   });
 
   it("mirrors the registry through the injected HarnessStore", async () => {
@@ -152,15 +130,12 @@ describe("agent names", () => {
 
     await setAgentName("planner-1", "Planner One", "claude", "planner", {
       relayDir,
-      store: fake
+      store: fake,
     });
-    await setAgentName(
-      "implementer-1",
-      "Implementer One",
-      "codex",
-      "implementer",
-      { relayDir, store: fake }
-    );
+    await setAgentName("implementer-1", "Implementer One", "codex", "implementer", {
+      relayDir,
+      store: fake,
+    });
 
     // Coordination record is stored under STORE_NS.agentName via mutate so
     // Postgres-backed stores can layer advisory-lock coordination later.
@@ -169,15 +144,9 @@ describe("agent names", () => {
     );
     expect(calls).toHaveLength(2);
 
-    const mirrored = await fake.getDoc<AgentNameEntry[]>(
-      STORE_NS.agentName,
-      "registry"
-    );
+    const mirrored = await fake.getDoc<AgentNameEntry[]>(STORE_NS.agentName, "registry");
     expect(mirrored).not.toBeNull();
-    expect(mirrored!.map((e) => e.agentId).sort()).toEqual([
-      "implementer-1",
-      "planner-1"
-    ]);
+    expect(mirrored!.map((e) => e.agentId).sort()).toEqual(["implementer-1", "planner-1"]);
   });
 
   it("does not fail setAgentName when the HarnessStore mirror throws", async () => {
@@ -212,13 +181,13 @@ describe("agent names", () => {
       },
       watch: async function* () {
         throw new Error("not implemented");
-      }
+      },
     };
 
     await expect(
       setAgentName("resilient-agent", "Resilient", "claude", "planner", {
         relayDir,
-        store: flaky
+        store: flaky,
       })
     ).resolves.toMatchObject({ agentId: "resilient-agent" });
 
@@ -236,9 +205,7 @@ describe("agent names reads legacy pre-migration fixture", () => {
     // relayDir. `listAgentNames` reads `<relayDir>/agent-names.json`, so the
     // fixture has to live under that exact name at the dir root.
     workDir = await mkdtemp(join(tmpdir(), "agent-names-legacy-"));
-    const src = fileURLToPath(
-      new URL("./fixtures/legacy-agent-names.json", import.meta.url)
-    );
+    const src = fileURLToPath(new URL("./fixtures/legacy-agent-names.json", import.meta.url));
     await cp(src, join(workDir, "agent-names.json"));
   });
 
@@ -248,10 +215,7 @@ describe("agent names reads legacy pre-migration fixture", () => {
 
   it("reads pre-migration agent-names.json via the new API", async () => {
     const entries = await listAgentNames({ relayDir: workDir });
-    expect(entries.map((e) => e.agentId).sort()).toEqual([
-      "implementer-codex",
-      "planner-claude"
-    ]);
+    expect(entries.map((e) => e.agentId).sort()).toEqual(["implementer-codex", "planner-claude"]);
 
     const name = await getAgentName("planner-claude", { relayDir: workDir });
     expect(name).toBe("Claude (Planner)");

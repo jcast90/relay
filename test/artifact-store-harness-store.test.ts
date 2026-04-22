@@ -1,12 +1,4 @@
-import {
-  cp,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  stat,
-  writeFile
-} from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,12 +9,7 @@ import { createPrLifecycle } from "../src/domain/pr-lifecycle.js";
 import { LocalArtifactStore } from "../src/execution/artifact-store.js";
 import { FileHarnessStore } from "../src/storage/file-store.js";
 import { STORE_NS } from "../src/storage/namespaces.js";
-import type {
-  BlobRef,
-  ChangeEvent,
-  HarnessStore,
-  ReadLogOptions
-} from "../src/storage/store.js";
+import type { BlobRef, ChangeEvent, HarnessStore, ReadLogOptions } from "../src/storage/store.js";
 import type { HarnessRun, RunEvent } from "../src/domain/run.js";
 
 /**
@@ -62,11 +49,7 @@ class FakeHarnessStore implements HarnessStore {
     throw new Error("FakeHarnessStore.appendLog is not implemented");
   }
 
-  async readLog<T>(
-    _ns: string,
-    _id: string,
-    _opts?: ReadLogOptions
-  ): Promise<T[]> {
+  async readLog<T>(_ns: string, _id: string, _opts?: ReadLogOptions): Promise<T[]> {
     throw new Error("FakeHarnessStore.readLog is not implemented");
   }
 
@@ -82,7 +65,7 @@ class FakeHarnessStore implements HarnessStore {
       ns,
       id,
       size: bytes.byteLength,
-      contentType: meta?.["contentType"]
+      contentType: meta?.["contentType"],
     };
   }
 
@@ -92,11 +75,7 @@ class FakeHarnessStore implements HarnessStore {
     return bytes;
   }
 
-  async mutate<T>(
-    ns: string,
-    id: string,
-    fn: (prev: T | null) => T
-  ): Promise<T> {
+  async mutate<T>(ns: string, id: string, fn: (prev: T | null) => T): Promise<T> {
     this.mutateCalls.push({ ns, id });
     const prev = (this.docs.get(this.key(ns, id)) as T | undefined) ?? null;
     const next = fn(prev);
@@ -131,7 +110,7 @@ function buildTestRun(overrides?: Partial<HarnessRun>): HarnessRun {
     ticketLedger: [],
     ticketLedgerPath: null,
     runIndexPath: null,
-    ...overrides
+    ...overrides,
   };
 }
 
@@ -156,7 +135,7 @@ describe("LocalArtifactStore with HarnessStore injection", () => {
       phaseId: "phase_01",
       command: "pnpm test",
       result: { exitCode: 0, stdout: "ok", stderr: "" },
-      cwd: "/tmp"
+      cwd: "/tmp",
     });
 
     expect(record.type).toBe("command_result");
@@ -178,8 +157,8 @@ describe("LocalArtifactStore with HarnessStore injection", () => {
       classification: {
         category: "fix_test",
         rationale: "verification setup",
-        nextAction: "repair tests"
-      }
+        nextAction: "repair tests",
+      },
     });
 
     expect(record.type).toBe("failure_classification");
@@ -201,8 +180,8 @@ describe("LocalArtifactStore with HarnessStore injection", () => {
         suggestedSpecialties: [],
         estimatedTicketCount: 1,
         needsDesignDoc: false,
-        needsUserApproval: false
-      }
+        needsUserApproval: false,
+      },
     });
 
     expect(uri.startsWith("blob://")).toBe(true);
@@ -217,7 +196,7 @@ describe("LocalArtifactStore with HarnessStore injection", () => {
   it("routes design docs through putBlob", async () => {
     const uri = await store.saveDesignDoc({
       runId: "run-hs-1",
-      content: "# Design\n\nSome markdown."
+      content: "# Design\n\nSome markdown.",
     });
 
     expect(uri.startsWith("blob://")).toBe(true);
@@ -225,7 +204,7 @@ describe("LocalArtifactStore with HarnessStore injection", () => {
     const bytes = await fake.getBlob({
       ns: STORE_NS.runArtifacts,
       id: "run-hs-1__design-doc",
-      size: 0
+      size: 0,
     });
     expect(new TextDecoder().decode(bytes)).toContain("# Design");
   });
@@ -234,7 +213,7 @@ describe("LocalArtifactStore with HarnessStore injection", () => {
     await store.saveApprovalRecord({
       runId: "run-hs-1",
       decision: "approved",
-      feedback: "LGTM"
+      feedback: "LGTM",
     });
     const record = await store.readApprovalRecord("run-hs-1");
     expect(record).not.toBeNull();
@@ -247,7 +226,7 @@ describe("LocalArtifactStore with HarnessStore injection", () => {
 
     expect(fake.mutateCalls).toContainEqual({
       ns: STORE_NS.runArtifacts,
-      id: "run-hs-1__run-snapshot"
+      id: "run-hs-1__run-snapshot",
     });
 
     // And the on-disk Rust-visible snapshot is still present at the
@@ -261,7 +240,7 @@ describe("LocalArtifactStore with HarnessStore injection", () => {
       type: "TaskSubmitted",
       phaseId: "phase_00",
       details: {},
-      createdAt: "2026-04-20T00:00:00.000Z"
+      createdAt: "2026-04-20T00:00:00.000Z",
     };
 
     await store.appendEvent("run-hs-1", event);
@@ -277,8 +256,8 @@ describe("LocalArtifactStore with HarnessStore injection", () => {
         completedAt: "2026-04-20T00:00:00.000Z",
         channelId: null,
         phaseLedgerPath: "/tmp/phase-ledger.json",
-        artifactsRoot: "/tmp"
-      }
+        artifactsRoot: "/tmp",
+      },
     });
 
     const ids = new Set(fake.mutateCalls.map((c) => c.id));
@@ -295,12 +274,8 @@ describe("LocalArtifactStore with HarnessStore injection", () => {
 
     // The data itself is on disk at the Rust-compat paths.
     await expect(stat(join(artifactsDir, "run-hs-1", "run.json"))).resolves.toBeTruthy();
-    await expect(
-      stat(join(artifactsDir, "run-hs-1", "ticket-ledger.json"))
-    ).resolves.toBeTruthy();
-    await expect(
-      stat(join(artifactsDir, "run-hs-1", "phase-ledger.json"))
-    ).resolves.toBeTruthy();
+    await expect(stat(join(artifactsDir, "run-hs-1", "ticket-ledger.json"))).resolves.toBeTruthy();
+    await expect(stat(join(artifactsDir, "run-hs-1", "phase-ledger.json"))).resolves.toBeTruthy();
 
     // The HarnessStore's runArtifacts ns must NOT have picked up a doc mirror
     // for the Rust-visible payloads — only the coordination record.
@@ -321,9 +296,7 @@ describe("LocalArtifactStore reads legacy Rust-layout fixtures", () => {
 
   beforeEach(async () => {
     workDir = await mkdtemp(join(tmpdir(), "as-legacy-"));
-    const src = fileURLToPath(
-      new URL("./fixtures/legacy-artifacts", import.meta.url)
-    );
+    const src = fileURLToPath(new URL("./fixtures/legacy-artifacts", import.meta.url));
     await cp(src, workDir, { recursive: true });
   });
 
@@ -334,10 +307,7 @@ describe("LocalArtifactStore reads legacy Rust-layout fixtures", () => {
   it("reads pre-migration run.json, events.jsonl, and ledgers", async () => {
     const storeRoot = await mkdtemp(join(tmpdir(), "as-legacy-hs-"));
     try {
-      const store = new LocalArtifactStore(
-        workDir,
-        new FileHarnessStore(storeRoot)
-      );
+      const store = new LocalArtifactStore(workDir, new FileHarnessStore(storeRoot));
 
       const snapshot = await store.readRunSnapshot("run-legacy-1");
       expect(snapshot).not.toBeNull();
@@ -352,9 +322,7 @@ describe("LocalArtifactStore reads legacy Rust-layout fixtures", () => {
 
       const tickets = await store.readTicketLedger("run-legacy-1");
       expect(tickets).not.toBeNull();
-      expect(tickets!.map((t) => t.ticketId)).toEqual([
-        "ticket-legacy-1"
-      ]);
+      expect(tickets!.map((t) => t.ticketId)).toEqual(["ticket-legacy-1"]);
 
       const runs = await store.readRunsIndex();
       expect(runs).toHaveLength(1);
@@ -371,20 +339,12 @@ describe("LocalArtifactStore reads legacy Rust-layout fixtures", () => {
   it("reads a pre-migration command-result artifact via its absolute path", async () => {
     const storeRoot = await mkdtemp(join(tmpdir(), "as-legacy-cmd-hs-"));
     try {
-      const store = new LocalArtifactStore(
-        workDir,
-        new FileHarnessStore(storeRoot)
-      );
+      const store = new LocalArtifactStore(workDir, new FileHarnessStore(storeRoot));
 
       // Pre-T-103 artifacts were loose JSON files under
       // `<runId>/<phaseId>/<artifactId>.json` — the fallback path in
       // `readCommandResult` must still resolve them.
-      const path = join(
-        workDir,
-        "run-legacy-1",
-        "phase_01",
-        "artifact-legacy-1.json"
-      );
+      const path = join(workDir, "run-legacy-1", "phase_01", "artifact-legacy-1.json");
       const content = await store.readCommandResult(path);
       expect(content.command).toBe("pnpm test");
       expect(content.exitCode).toBe(0);
@@ -416,27 +376,27 @@ describe("LocalArtifactStore error handling (malformed URIs & missing legacy pat
   });
 
   it("throws on a blob:// URI missing a slash", async () => {
-    await expect(
-      store.readCommandResult("blob://run-artifacts")
-    ).rejects.toThrow(/Invalid blob URI.*blob:\/\/run-artifacts/);
+    await expect(store.readCommandResult("blob://run-artifacts")).rejects.toThrow(
+      /Invalid blob URI.*blob:\/\/run-artifacts/
+    );
   });
 
   it("throws on a blob:// URI with an empty namespace", async () => {
-    await expect(
-      store.readCommandResult("blob:///abc")
-    ).rejects.toThrow(/Invalid blob URI.*empty namespace/);
+    await expect(store.readCommandResult("blob:///abc")).rejects.toThrow(
+      /Invalid blob URI.*empty namespace/
+    );
   });
 
   it("throws on a blob:// URI with an empty id", async () => {
-    await expect(
-      store.readCommandResult("blob://run-artifacts/")
-    ).rejects.toThrow(/Invalid blob URI.*empty id/);
+    await expect(store.readCommandResult("blob://run-artifacts/")).rejects.toThrow(
+      /Invalid blob URI.*empty id/
+    );
   });
 
   it("throws on a malformed blob:// URI passed to readFailureClassification", async () => {
-    await expect(
-      store.readFailureClassification("blob://bogus")
-    ).rejects.toThrow(/Invalid blob URI.*blob:\/\/bogus/);
+    await expect(store.readFailureClassification("blob://bogus")).rejects.toThrow(
+      /Invalid blob URI.*blob:\/\/bogus/
+    );
   });
 
   it("wraps ENOENT on a legacy absolute path with contextual error", async () => {
@@ -462,7 +422,7 @@ describe("LocalArtifactStore error handling (malformed URIs & missing legacy pat
         exitCode: 0,
         stdout: "",
         stderr: "",
-        capturedAt: "2026-04-20T00:00:00.000Z"
+        capturedAt: "2026-04-20T00:00:00.000Z",
       })
     );
 
@@ -491,10 +451,7 @@ describe("LocalArtifactStore error handling (malformed URIs & missing legacy pat
 
   it("throws (not silent empty) on corrupt events.jsonl", async () => {
     await mkdir(join(artifactsDir, "run-bad-events"), { recursive: true });
-    await writeFile(
-      join(artifactsDir, "run-bad-events", "events.jsonl"),
-      "{not json}\n"
-    );
+    await writeFile(join(artifactsDir, "run-bad-events", "events.jsonl"), "{not json}\n");
     await expect(store.readEventLog("run-bad-events")).rejects.toThrow(
       /Failed to parse event log at .*events\.jsonl/
     );
@@ -502,10 +459,7 @@ describe("LocalArtifactStore error handling (malformed URIs & missing legacy pat
 
   it("throws (not silent null) on corrupt pr-lifecycle.json", async () => {
     await mkdir(join(artifactsDir, "run-bad-pr"), { recursive: true });
-    await writeFile(
-      join(artifactsDir, "run-bad-pr", "pr-lifecycle.json"),
-      "nope"
-    );
+    await writeFile(join(artifactsDir, "run-bad-pr", "pr-lifecycle.json"), "nope");
     await expect(store.readPrLifecycle("run-bad-pr")).rejects.toThrow(
       /Failed to parse PR lifecycle at .*pr-lifecycle\.json/
     );
@@ -513,10 +467,7 @@ describe("LocalArtifactStore error handling (malformed URIs & missing legacy pat
 
   it("throws (not silent null) on corrupt ticket-ledger.json", async () => {
     await mkdir(join(artifactsDir, "run-bad-tickets"), { recursive: true });
-    await writeFile(
-      join(artifactsDir, "run-bad-tickets", "ticket-ledger.json"),
-      "still not json"
-    );
+    await writeFile(join(artifactsDir, "run-bad-tickets", "ticket-ledger.json"), "still not json");
     await expect(store.readTicketLedger("run-bad-tickets")).rejects.toThrow(
       /Failed to parse ticket ledger at .*ticket-ledger\.json/
     );
@@ -554,7 +505,7 @@ describe("LocalArtifactStore blob round-trip (saveCommandResult -> readCommandRe
       phaseId: "phase_07",
       command: "pnpm run build",
       result: { exitCode: 1, stdout: "line one\nline two", stderr: "boom" },
-      cwd: "/work"
+      cwd: "/work",
     });
 
     // The returned path is a blob URI with the expected ns prefix.
@@ -585,13 +536,13 @@ describe("LocalArtifactStore PR lifecycle coordination record", () => {
     try {
       const lifecycle = createPrLifecycle({
         runId: "run-pr-coord-1",
-        branch: "feature/x"
+        branch: "feature/x",
       });
       await store.savePrLifecycle(lifecycle);
 
       expect(fake.mutateCalls).toContainEqual({
         ns: STORE_NS.runArtifacts,
-        id: "run-pr-coord-1__pr-lifecycle"
+        id: "run-pr-coord-1__pr-lifecycle",
       });
       const coord = await fake.getDoc<{ kind: string }>(
         STORE_NS.runArtifacts,

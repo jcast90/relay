@@ -11,7 +11,7 @@ describe("agent registry", () => {
 
     for (const agent of createLiveAgents({
       cwd,
-      invoker: new ScriptedInvoker(cwd)
+      invoker: new ScriptedInvoker(cwd),
     })) {
       registry.register(agent);
     }
@@ -31,7 +31,7 @@ describe("agent registry", () => {
       artifactContext: [],
       attempt: 1,
       maxAttempts: 2,
-      priorEvidence: []
+      priorEvidence: [],
     });
 
     const apiAgent = registry.resolve({
@@ -49,7 +49,7 @@ describe("agent registry", () => {
       artifactContext: [],
       attempt: 1,
       maxAttempts: 2,
-      priorEvidence: []
+      priorEvidence: [],
     });
 
     expect(uiAgent.id).toBe("pixel");

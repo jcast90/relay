@@ -1,7 +1,7 @@
 import {
   parseClassificationResult,
   type ClassificationResult,
-  type ComplexityTier
+  type ComplexityTier,
 } from "../domain/classification.js";
 import type { AgentResult, WorkRequest } from "../domain/agent.js";
 import type { HarnessRun } from "../domain/run.js";
@@ -10,7 +10,7 @@ import {
   detectTrackerKind,
   resolveIssue,
   type HarnessIssue,
-  type TrackerKind
+  type TrackerKind,
 } from "../integrations/tracker.js";
 import { basename } from "node:path";
 
@@ -23,7 +23,7 @@ const TRIVIAL_PATTERNS = [
   /\bconfig\s+change\b/i,
   /\badd\s+comment\b/i,
   /\bformat(ting)?\b/i,
-  /\blint\s+fix\b/i
+  /\blint\s+fix\b/i,
 ];
 
 const BUGFIX_PATTERNS = [
@@ -34,7 +34,7 @@ const BUGFIX_PATTERNS = [
   /\berror\b/i,
   /\bnot\s+working\b/i,
   /\bregression\b/i,
-  /\bdebug\b/i
+  /\bdebug\b/i,
 ];
 
 export function classifyByHeuristic(featureRequest: string): ComplexityTier | null {
@@ -61,7 +61,7 @@ export function buildHeuristicClassification(
     suggestedSpecialties: ["general"],
     estimatedTicketCount: tier === "trivial" ? 1 : 2,
     needsDesignDoc: false,
-    needsUserApproval: false
+    needsUserApproval: false,
   };
 }
 
@@ -116,7 +116,7 @@ function buildProjectConfig(
     repo: repo || leaf,
     path: repoRoot,
     defaultBranch: "main",
-    sessionPrefix: leaf
+    sessionPrefix: leaf,
   };
 }
 
@@ -154,10 +154,7 @@ async function tryResolveTrackerIssue(
  * heuristics and the LLM prompt see the title + body + labels, not just a
  * bare URL.
  */
-function enrichFeatureRequest(
-  featureRequest: string,
-  issue: HarnessIssue
-): string {
+function enrichFeatureRequest(featureRequest: string, issue: HarnessIssue): string {
   const labels = issue.labels.length ? `\nLabels: ${issue.labels.join(", ")}` : "";
   const body = issue.body ? `\n\n${issue.body}` : "";
   return `${issue.title}${labels}${body}\n\nSource: ${issue.url}`;
@@ -184,7 +181,7 @@ export async function classifyRequest(input: {
 
   const context: string[] = [
     `Repository root: ${input.repoRoot}`,
-    `Feature request: ${effectiveRequest}`
+    `Feature request: ${effectiveRequest}`,
   ];
   if (issue) {
     context.push(`Tracker: ${issue.url}`);
@@ -202,7 +199,7 @@ export async function classifyRequest(input: {
     acceptanceCriteria: [
       "Classify the request into exactly one complexity tier.",
       "Provide a rationale for the classification.",
-      "Estimate the number of parallelizable tickets."
+      "Estimate the number of parallelizable tickets.",
     ],
     allowedCommands: [],
     verificationCommands: [],
@@ -211,7 +208,7 @@ export async function classifyRequest(input: {
     artifactContext: [],
     attempt: 1,
     maxAttempts: 2,
-    priorEvidence: []
+    priorEvidence: [],
   });
 
   try {
@@ -225,7 +222,7 @@ export async function classifyRequest(input: {
       suggestedSpecialties: ["general"],
       estimatedTicketCount: 3,
       needsDesignDoc: false,
-      needsUserApproval: false
+      needsUserApproval: false,
     };
     return suggestedBranch ? { ...fallback, suggestedBranch } : fallback;
   }

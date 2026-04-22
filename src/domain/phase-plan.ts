@@ -4,7 +4,7 @@ import { AgentSpecialtySchema } from "./specialty.js";
 
 export const RetryPolicySchema = z.object({
   maxAgentAttempts: z.number().int().min(1).max(5),
-  maxTestFixLoops: z.number().int().min(1).max(10)
+  maxTestFixLoops: z.number().int().min(1).max(10),
 });
 
 export const PhaseDefinitionSchema = z.object({
@@ -16,7 +16,7 @@ export const PhaseDefinitionSchema = z.object({
   allowedCommands: z.array(z.string().min(1)).default([]),
   verificationCommands: z.array(z.string().min(1)).default([]),
   docsToUpdate: z.array(z.string().min(1)).default([]),
-  retryPolicy: RetryPolicySchema
+  retryPolicy: RetryPolicySchema,
 });
 
 export const PhasePlanSchema = z.object({
@@ -24,13 +24,13 @@ export const PhasePlanSchema = z.object({
   task: z.object({
     title: z.string().min(1),
     featureRequest: z.string().min(1),
-    repoRoot: z.string().min(1)
+    repoRoot: z.string().min(1),
   }),
   phases: z.array(PhaseDefinitionSchema).min(1),
   finalVerification: z.object({
-    commands: z.array(z.string().min(1)).default([])
+    commands: z.array(z.string().min(1)).default([]),
   }),
-  docsToUpdate: z.array(z.string().min(1)).default([])
+  docsToUpdate: z.array(z.string().min(1)).default([]),
 });
 
 export type RetryPolicy = z.infer<typeof RetryPolicySchema>;
@@ -41,16 +41,13 @@ export function parsePhasePlan(input: unknown): PhasePlan {
   return PhasePlanSchema.parse(input);
 }
 
-export function createSeedPlan(
-  featureRequest: string,
-  repoRoot: string
-): PhasePlan {
+export function createSeedPlan(featureRequest: string, repoRoot: string): PhasePlan {
   return parsePhasePlan({
     version: 1,
     task: {
       title: "Bootstrap harness scaffolding",
       featureRequest,
-      repoRoot
+      repoRoot,
     },
     phases: [
       {
@@ -60,15 +57,15 @@ export function createSeedPlan(
         specialty: "ui",
         acceptanceCriteria: [
           "Create an initial composition root for the harness.",
-          "Keep the file layout simple enough for future API wiring."
+          "Keep the file layout simple enough for future API wiring.",
         ],
         allowedCommands: ["pnpm typecheck"],
         verificationCommands: ["pnpm typecheck"],
         docsToUpdate: ["README.md"],
         retryPolicy: {
           maxAgentAttempts: 2,
-          maxTestFixLoops: 2
-        }
+          maxTestFixLoops: 2,
+        },
       },
       {
         id: "phase_02",
@@ -77,21 +74,21 @@ export function createSeedPlan(
         specialty: "api_crud",
         acceptanceCriteria: [
           "Create seams for future CRUD and business logic flows.",
-          "Keep orchestration independent from provider-specific execution details."
+          "Keep orchestration independent from provider-specific execution details.",
         ],
         allowedCommands: ["pnpm typecheck", "pnpm test"],
         verificationCommands: ["pnpm typecheck", "pnpm test"],
         docsToUpdate: ["README.md"],
         retryPolicy: {
           maxAgentAttempts: 2,
-          maxTestFixLoops: 2
-        }
-      }
+          maxTestFixLoops: 2,
+        },
+      },
     ],
     finalVerification: {
-      commands: ["pnpm typecheck", "pnpm test"]
+      commands: ["pnpm typecheck", "pnpm test"],
     },
-    docsToUpdate: ["README.md"]
+    docsToUpdate: ["README.md"],
   });
 }
 
@@ -102,7 +99,7 @@ export const phasePlanJsonSchema = {
   properties: {
     version: {
       type: "integer",
-      enum: [1]
+      enum: [1],
     },
     task: {
       type: "object",
@@ -111,8 +108,8 @@ export const phasePlanJsonSchema = {
       properties: {
         title: { type: "string" },
         featureRequest: { type: "string" },
-        repoRoot: { type: "string" }
-      }
+        repoRoot: { type: "string" },
+      },
     },
     phases: {
       type: "array",
@@ -129,7 +126,7 @@ export const phasePlanJsonSchema = {
           "allowedCommands",
           "verificationCommands",
           "docsToUpdate",
-          "retryPolicy"
+          "retryPolicy",
         ],
         properties: {
           id: { type: "string" },
@@ -137,24 +134,24 @@ export const phasePlanJsonSchema = {
           goal: { type: "string" },
           specialty: {
             type: "string",
-            enum: ["general", "ui", "business_logic", "api_crud"]
+            enum: ["general", "ui", "business_logic", "api_crud"],
           },
           acceptanceCriteria: {
             type: "array",
             minItems: 1,
-            items: { type: "string" }
+            items: { type: "string" },
           },
           allowedCommands: {
             type: "array",
-            items: { type: "string" }
+            items: { type: "string" },
           },
           verificationCommands: {
             type: "array",
-            items: { type: "string" }
+            items: { type: "string" },
           },
           docsToUpdate: {
             type: "array",
-            items: { type: "string" }
+            items: { type: "string" },
           },
           retryPolicy: {
             type: "object",
@@ -164,17 +161,17 @@ export const phasePlanJsonSchema = {
               maxAgentAttempts: {
                 type: "integer",
                 minimum: 1,
-                maximum: 5
+                maximum: 5,
               },
               maxTestFixLoops: {
                 type: "integer",
                 minimum: 1,
-                maximum: 10
-              }
-            }
-          }
-        }
-      }
+                maximum: 10,
+              },
+            },
+          },
+        },
+      },
     },
     finalVerification: {
       type: "object",
@@ -183,13 +180,13 @@ export const phasePlanJsonSchema = {
       properties: {
         commands: {
           type: "array",
-          items: { type: "string" }
-        }
-      }
+          items: { type: "string" },
+        },
+      },
     },
     docsToUpdate: {
       type: "array",
-      items: { type: "string" }
-    }
-  }
+      items: { type: "string" },
+    },
+  },
 } as const;

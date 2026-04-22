@@ -85,7 +85,7 @@ describe("generateHookScripts", () => {
         agentProvider: "claude",
         status: "active",
         registeredAt: new Date().toISOString(),
-        lastHeartbeat: new Date().toISOString()
+        lastHeartbeat: new Date().toISOString(),
       })
     );
 
@@ -102,7 +102,7 @@ describe("generateHookScripts", () => {
         status: "pending",
         createdAt: new Date().toISOString(),
         deliveredAt: null,
-        repliedAt: null
+        repliedAt: null,
       })
     );
 
@@ -110,7 +110,7 @@ describe("generateHookScripts", () => {
     // session deterministically regardless of PID-ancestry heuristics.
     const out = execFileSync(process.execPath, [nodeScriptPath], {
       env: { ...process.env, RELAY_SESSION: sessionId },
-      encoding: "utf8"
+      encoding: "utf8",
     });
 
     expect(out).toContain("CROSSLINK INBOUND");

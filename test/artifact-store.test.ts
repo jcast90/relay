@@ -20,8 +20,8 @@ describe("artifact store", () => {
         classification: {
           category: "fix_test",
           rationale: "The failure is isolated to verification setup.",
-          nextAction: "Repair the tests before changing product logic."
-        }
+          nextAction: "Repair the tests before changing product logic.",
+        },
       });
       const content = await store.readFailureClassification(artifact.path);
 
@@ -36,11 +36,11 @@ describe("artifact store", () => {
     } finally {
       await rm(artifactRoot, {
         recursive: true,
-        force: true
+        force: true,
       });
       await rm(storeRoot, {
         recursive: true,
-        force: true
+        force: true,
       });
     }
   });

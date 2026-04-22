@@ -4,11 +4,11 @@ import {
   parseClassificationResult,
   tierNeedsApproval,
   tierNeedsDesignDoc,
-  tierSkipsPlanning
+  tierSkipsPlanning,
 } from "../src/domain/classification.js";
 import {
   classifyByHeuristic,
-  buildHeuristicClassification
+  buildHeuristicClassification,
 } from "../src/orchestrator/classifier.js";
 
 describe("classification domain", () => {
@@ -19,7 +19,7 @@ describe("classification domain", () => {
       suggestedSpecialties: ["ui", "api_crud"],
       estimatedTicketCount: 5,
       needsDesignDoc: false,
-      needsUserApproval: true
+      needsUserApproval: true,
     });
 
     expect(result.tier).toBe("feature_large");
@@ -35,7 +35,7 @@ describe("classification domain", () => {
         suggestedSpecialties: [],
         estimatedTicketCount: 1,
         needsDesignDoc: false,
-        needsUserApproval: false
+        needsUserApproval: false,
       })
     ).toThrow();
   });

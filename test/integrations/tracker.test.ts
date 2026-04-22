@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  createTracker,
-  detectTrackerKind,
-  resolveIssue
-} from "../../src/integrations/tracker.js";
+import { createTracker, detectTrackerKind, resolveIssue } from "../../src/integrations/tracker.js";
 
 // Mock the AO GitHub tracker so its `create()` throws when invoked. We use
 // plain `vi.mock` here — no seam in tracker.ts was needed, since tracker.ts
@@ -16,12 +12,12 @@ vi.mock("@aoagents/ao-plugin-tracker-github", () => ({
       name: "tracker-github",
       slot: "tracker" as const,
       description: "mocked",
-      version: "0.0.0-test"
+      version: "0.0.0-test",
     },
     create: () => {
       throw new Error("boom from mocked plugin create()");
-    }
-  }
+    },
+  },
 }));
 
 describe("detectTrackerKind", () => {
@@ -29,38 +25,38 @@ describe("detectTrackerKind", () => {
     {
       input: "https://github.com/acme/widgets/issues/42",
       expected: "github",
-      why: "GitHub issue URL"
+      why: "GitHub issue URL",
     },
     {
       input: "https://linear.app/acme/issue/ABC-123/some-title",
       expected: "linear",
-      why: "Linear issue URL"
+      why: "Linear issue URL",
     },
     {
       input: "ABC-123",
       expected: "linear",
-      why: "bare Linear identifier"
+      why: "bare Linear identifier",
     },
     {
       input: "build me a new auth system",
       expected: null,
-      why: "plain text"
+      why: "plain text",
     },
     {
       input: "",
       expected: null,
-      why: "empty string"
+      why: "empty string",
     },
     {
       input: "   ",
       expected: null,
-      why: "whitespace only"
+      why: "whitespace only",
     },
     {
       input: "https://github.com/acme/widgets/pull/42",
       expected: null,
-      why: "GitHub PR URL, not an issue"
-    }
+      why: "GitHub PR URL, not an issue",
+    },
   ];
 
   for (const { input, expected, why } of cases) {
@@ -79,7 +75,7 @@ describe("resolveIssue", () => {
       url: "https://github.com/acme/widgets/issues/42",
       state: "open",
       labels: ["bug", "p1"],
-      branchName: "issue/42-fix-the-thing"
+      branchName: "issue/42-fix-the-thing",
     };
 
     const tracker = {
@@ -88,7 +84,7 @@ describe("resolveIssue", () => {
       isCompleted: async () => false,
       issueUrl: () => fakeIssue.url,
       branchName: () => "fallback-should-not-be-used",
-      generatePrompt: async () => "prompt"
+      generatePrompt: async () => "prompt",
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any;
 
@@ -97,7 +93,7 @@ describe("resolveIssue", () => {
       repo: "acme/widgets",
       path: "/tmp",
       defaultBranch: "main",
-      sessionPrefix: "widgets"
+      sessionPrefix: "widgets",
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any;
 
@@ -109,7 +105,7 @@ describe("resolveIssue", () => {
       body: "Body text describes the bug.",
       url: "https://github.com/acme/widgets/issues/42",
       labels: ["bug", "p1"],
-      branchName: "issue/42-fix-the-thing"
+      branchName: "issue/42-fix-the-thing",
     });
   });
 
@@ -120,7 +116,7 @@ describe("resolveIssue", () => {
       description: "No branch on issue.",
       url: "https://linear.app/acme/issue/ABC-123",
       state: "open",
-      labels: []
+      labels: [],
       // no branchName
     };
 
@@ -134,7 +130,7 @@ describe("resolveIssue", () => {
         branchNameCalledWith = { identifier };
         return "abc-123-another";
       },
-      generatePrompt: async () => "prompt"
+      generatePrompt: async () => "prompt",
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any;
 
@@ -143,7 +139,7 @@ describe("resolveIssue", () => {
       repo: "ws/proj",
       path: "/tmp",
       defaultBranch: "main",
-      sessionPrefix: "proj"
+      sessionPrefix: "proj",
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any;
 
@@ -162,7 +158,7 @@ describe("resolveIssue", () => {
       description: "",
       url: "https://github.com/acme/widgets/issues/7",
       state: "open",
-      branchName: "issue/7"
+      branchName: "issue/7",
       // labels omitted
     };
 
@@ -172,7 +168,7 @@ describe("resolveIssue", () => {
       isCompleted: async () => false,
       issueUrl: () => fakeIssue.url,
       branchName: () => "ignored",
-      generatePrompt: async () => "p"
+      generatePrompt: async () => "p",
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any;
 
@@ -181,7 +177,7 @@ describe("resolveIssue", () => {
       repo: "acme/widgets",
       path: "/tmp",
       defaultBranch: "main",
-      sessionPrefix: "widgets"
+      sessionPrefix: "widgets",
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any;
 
@@ -201,9 +197,9 @@ describe("createTracker — env restoration when plugin create() throws", () => 
       expect(process.env.GITHUB_TOKEN).toBeUndefined();
       expect("GITHUB_TOKEN" in process.env).toBe(false);
 
-      await expect(
-        createTracker("github", { token: "throwaway" })
-      ).rejects.toThrow(/boom from mocked plugin create\(\)/);
+      await expect(createTracker("github", { token: "throwaway" })).rejects.toThrow(
+        /boom from mocked plugin create\(\)/
+      );
 
       // After the throw propagates, the env var must be gone again — matching
       // its prior undefined / absent state, not a lingering "throwaway".
@@ -220,9 +216,9 @@ describe("createTracker — env restoration when plugin create() throws", () => 
     process.env.GITHUB_TOKEN = "original-token";
 
     try {
-      await expect(
-        createTracker("github", { token: "throwaway" })
-      ).rejects.toThrow(/boom from mocked plugin create\(\)/);
+      await expect(createTracker("github", { token: "throwaway" })).rejects.toThrow(
+        /boom from mocked plugin create\(\)/
+      );
 
       expect(process.env.GITHUB_TOKEN).toBe("original-token");
     } finally {

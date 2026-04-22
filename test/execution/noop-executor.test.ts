@@ -2,10 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { TicketDefinition } from "../../src/domain/ticket.js";
 import type { ExecutionEvent } from "../../src/execution/executor.js";
-import {
-  NoopExecutor,
-  NoopSandboxProvider
-} from "../../src/execution/noop-executor.js";
+import { NoopExecutor, NoopSandboxProvider } from "../../src/execution/noop-executor.js";
 import type { RepoRef } from "../../src/execution/sandbox.js";
 import { resolveLocalPath } from "../../src/execution/sandbox.js";
 
@@ -19,14 +16,12 @@ const ticket: TicketDefinition = {
   verificationCommands: [],
   docsToUpdate: [],
   dependsOn: [],
-  retryPolicy: { maxAgentAttempts: 1, maxTestFixLoops: 1 }
+  retryPolicy: { maxAgentAttempts: 1, maxTestFixLoops: 1 },
 };
 
 const repo: RepoRef = { root: "/tmp/fake-repo" };
 
-async function collectStream(
-  stream: AsyncIterable<ExecutionEvent>
-): Promise<ExecutionEvent[]> {
+async function collectStream(stream: AsyncIterable<ExecutionEvent>): Promise<ExecutionEvent[]> {
   const events: ExecutionEvent[] = [];
 
   for await (const event of stream) {
@@ -78,7 +73,7 @@ describe("NoopSandboxProvider", () => {
   it("resolveLocalPath returns null for a remote workdir ref", () => {
     const ref = {
       id: "remote-1",
-      workdir: { kind: "remote" as const, uri: "pod://ns/name:/work" }
+      workdir: { kind: "remote" as const, uri: "pod://ns/name:/work" },
     };
 
     expect(resolveLocalPath(ref)).toBeNull();
@@ -93,7 +88,7 @@ describe("NoopExecutor", () => {
     const handle = await executor.start(ticket, {
       runId: "run-1",
       repoRoot: repo.root,
-      sandbox
+      sandbox,
     });
 
     const first = await handle.wait();
@@ -103,7 +98,7 @@ describe("NoopExecutor", () => {
       exitCode: 0,
       summary: "noop",
       stdout: "",
-      stderr: ""
+      stderr: "",
     });
     expect(second).toBe(first);
   });
@@ -115,7 +110,7 @@ describe("NoopExecutor", () => {
     const handle = await executor.start(ticket, {
       runId: "run-1",
       repoRoot: repo.root,
-      sandbox
+      sandbox,
     });
 
     const events = await collectStream(handle.stream());
@@ -131,7 +126,7 @@ describe("NoopExecutor", () => {
     const handle = await executor.start(ticket, {
       runId: "run-1",
       repoRoot: repo.root,
-      sandbox
+      sandbox,
     });
 
     await handle.kill("SIGKILL");
@@ -161,7 +156,7 @@ describe("NoopExecutor", () => {
     const handle = await executor.start(ticket, {
       runId: "run-1",
       repoRoot: repo.root,
-      sandbox
+      sandbox,
     });
 
     const result = await handle.wait();
@@ -181,7 +176,7 @@ describe("NoopExecutor", () => {
     const handle = await executor.start(ticket, {
       runId: "run-1",
       repoRoot: repo.root,
-      sandbox
+      sandbox,
     });
 
     expect(handle.status).toBe("running");
@@ -196,7 +191,7 @@ describe("NoopExecutor", () => {
     const handle = await executor.start(ticket, {
       runId: "run-1",
       repoRoot: repo.root,
-      sandbox
+      sandbox,
     });
 
     expect(handle.status).toBe("running");
@@ -213,7 +208,7 @@ describe("NoopExecutor", () => {
     const handle = await executor.start(ticket, {
       runId: "run-1",
       repoRoot: repo.root,
-      sandbox
+      sandbox,
     });
 
     // Drive the handle to completion first so both stream() calls operate on

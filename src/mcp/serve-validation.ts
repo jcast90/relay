@@ -63,7 +63,7 @@ export function validateServeOptions(opts: ServeOptions): ServeValidation {
       kind: "error",
       message:
         `[rly serve] Refusing to start: --host ${opts.host} is non-loopback and no --token was provided.\n` +
-        "           Either pass --token <token> (recommended) or --allow-unauthenticated-remote to override."
+        "           Either pass --token <token> (recommended) or --allow-unauthenticated-remote to override.",
     };
   }
 
@@ -73,9 +73,7 @@ export function validateServeOptions(opts: ServeOptions): ServeValidation {
     warnings.push(
       "[rly serve] WARNING: no auth token — anyone who can reach this host:port can use the MCP server."
     );
-    warnings.push(
-      "           Set RELAY_TOKEN or pass --token <token> to require a Bearer token."
-    );
+    warnings.push("           Set RELAY_TOKEN or pass --token <token> to require a Bearer token.");
   }
 
   if (!loopback && !opts.token && opts.allowUnauthenticatedRemote) {

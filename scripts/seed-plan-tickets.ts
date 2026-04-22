@@ -23,7 +23,7 @@ import { initializeTicketLedger } from "../src/domain/ticket.js";
 import {
   getWorkspaceDir,
   resolveWorkspaceForRepo,
-  registerWorkspace
+  registerWorkspace,
 } from "../src/cli/workspace-registry.js";
 import { buildRunId } from "../src/orchestrator/orchestrator-v2.js";
 import { join } from "node:path";
@@ -55,10 +55,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "src/storage/store.ts exports the interface with full types",
       "FileHarnessStore passes unit tests covering all methods",
-      "LocalArtifactStore remains untouched this ticket"
+      "LocalArtifactStore remains untouched this ticket",
     ],
     specialty: "general",
-    dependsOn: []
+    dependsOn: [],
   },
   {
     id: "T-002",
@@ -70,10 +70,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "pnpm build && pnpm test pass",
       "grep of node:fs/promises outside src/storage returns only an explicit allowlist",
-      "Env var HARNESS_STORE=file selects FileHarnessStore"
+      "Env var HARNESS_STORE=file selects FileHarnessStore",
     ],
     specialty: "general",
-    dependsOn: ["T-001"]
+    dependsOn: ["T-001"],
   },
   {
     id: "T-003",
@@ -85,10 +85,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "Types compile across the repo",
       "Existing orchestrator + scheduler tests unchanged and passing",
-      "A test double AgentExecutor is available for unit tests"
+      "A test double AgentExecutor is available for unit tests",
     ],
     specialty: "general",
-    dependsOn: []
+    dependsOn: [],
   },
   {
     id: "T-101",
@@ -100,10 +100,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "All existing channel tests pass",
       "A migration test reads fixtures written by the pre-migration code and validates round-trip",
-      "GUI + Rust TUI continue to parse the feed correctly"
+      "GUI + Rust TUI continue to parse the feed correctly",
     ],
     specialty: "general",
-    dependsOn: ["T-001", "T-002"]
+    dependsOn: ["T-001", "T-002"],
   },
   {
     id: "T-102",
@@ -115,10 +115,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "rly up / rly status / rly list-workspaces all work unchanged",
       "Pre-migration workspace registry JSON still reads successfully",
-      "Tests updated to inject a store"
+      "Tests updated to inject a store",
     ],
     specialty: "general",
-    dependsOn: ["T-101"]
+    dependsOn: ["T-101"],
   },
   {
     id: "T-103",
@@ -130,10 +130,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "End-to-end `pnpm demo` produces an equivalent artifact tree",
       "Orchestrator + scheduler tests unchanged",
-      "Artifacts round-trip via readCommandResult / readFailureClassification"
+      "Artifacts round-trip via readCommandResult / readFailureClassification",
     ],
     specialty: "general",
-    dependsOn: ["T-101"]
+    dependsOn: ["T-101"],
   },
   {
     id: "T-104",
@@ -145,10 +145,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "rly crosslink status, rly decisions, named agents all work",
       "No new hardcoded homedir() calls introduced",
-      "Unit tests updated to inject store"
+      "Unit tests updated to inject store",
     ],
     specialty: "general",
-    dependsOn: ["T-101"]
+    dependsOn: ["T-101"],
   },
   {
     id: "T-105",
@@ -160,10 +160,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "Orchestrator runs and chat sessions produce indistinguishable ticket entries on the channel board",
       "rly board and GUI Board render identical contents",
-      "Legacy per-run-ledger readers fall back cleanly when channel board is empty"
+      "Legacy per-run-ledger readers fall back cleanly when channel board is empty",
     ],
     specialty: "general",
-    dependsOn: []
+    dependsOn: [],
   },
   {
     id: "T-201",
@@ -175,10 +175,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "Two concurrent tickets on the same repo use separate worktrees",
       "Killing mid-ticket leaves worktree + .relay-state.json on disk",
-      "Worktrees are removed after successful completion"
+      "Worktrees are removed after successful completion",
     ],
     specialty: "general",
-    dependsOn: ["T-003"]
+    dependsOn: ["T-003"],
   },
   {
     id: "T-202",
@@ -190,10 +190,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "TicketScheduler constructed with AgentExecutor instead of dispatch callback",
       "All orchestrator tests pass",
-      "Stream yields at least start/stdout/exit events"
+      "Stream yields at least start/stdout/exit events",
     ],
     specialty: "general",
-    dependsOn: ["T-003", "T-201"]
+    dependsOn: ["T-003", "T-201"],
   },
   {
     id: "T-203",
@@ -205,10 +205,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "kill -9 during a ticket -> restart -> ticket resumes and completes",
       "Recovered tickets surface in rly board",
-      "Integration test covers kill-restart-complete cycle"
+      "Integration test covers kill-restart-complete cycle",
     ],
     specialty: "general",
-    dependsOn: ["T-202", "T-103", "T-105"]
+    dependsOn: ["T-202", "T-103", "T-105"],
   },
   {
     id: "T-204",
@@ -220,10 +220,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "Two concurrent runs with 3 tickets each + cap=4 -> max 4 in-flight agents",
       "Cap respects hot-reload of the config value",
-      "Metric/log line on block/unblock"
+      "Metric/log line on block/unblock",
     ],
     specialty: "general",
-    dependsOn: ["T-202"]
+    dependsOn: ["T-202"],
   },
   {
     id: "T-301",
@@ -235,10 +235,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "A simulated hang fires stuck_agent within threshold + 10s",
       "Threshold configurable per ticket/run",
-      "Event posted to channel feed"
+      "Event posted to channel feed",
     ],
     specialty: "general",
-    dependsOn: ["T-202"]
+    dependsOn: ["T-202"],
   },
   {
     id: "T-302",
@@ -250,10 +250,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "Single hang recovers by retry",
       "Repeated hang escalates via harness_escalate",
-      "Ticket ledger ends in failed_stuck status when exhausted"
+      "Ticket ledger ends in failed_stuck status when exhausted",
     ],
     specialty: "general",
-    dependsOn: ["T-301"]
+    dependsOn: ["T-301"],
   },
   {
     id: "T-303",
@@ -265,10 +265,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "Three integration tests, one per severity",
       "Channel always receives an escalation post",
-      "Webhook/pager endpoints configurable at runtime"
+      "Webhook/pager endpoints configurable at runtime",
     ],
     specialty: "general",
-    dependsOn: ["T-101", "T-105"]
+    dependsOn: ["T-101", "T-105"],
   },
   {
     id: "T-304",
@@ -280,10 +280,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "rly board renders stuck + escalated tickets distinctly",
       "Rust TUI and Tauri GUI show the new statuses",
-      "Status changes propagate within a render tick"
+      "Status changes propagate within a render tick",
     ],
     specialty: "general",
-    dependsOn: ["T-301", "T-303"]
+    dependsOn: ["T-301", "T-303"],
   },
   {
     id: "T-401",
@@ -295,10 +295,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "External Claude session with remote MCP URL can call harness_list_runs",
       "Auth: missing/invalid token rejected",
-      "Existing stdio path unchanged"
+      "Existing stdio path unchanged",
     ],
     specialty: "general",
-    dependsOn: ["T-002"]
+    dependsOn: ["T-002"],
   },
   {
     id: "T-402",
@@ -310,10 +310,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "pnpm demo works end-to-end against Postgres",
       "Two harness processes on the same DB don't corrupt state",
-      "Migrations run idempotently"
+      "Migrations run idempotently",
     ],
     specialty: "general",
-    dependsOn: ["T-001"]
+    dependsOn: ["T-001"],
   },
   {
     id: "T-403",
@@ -325,10 +325,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "2-ticket demo against a kind cluster completes",
       "Artifacts land in the configured HarnessStore",
-      "Failed pods leave logs + PVC preserved for inspection"
+      "Failed pods leave logs + PVC preserved for inspection",
     ],
     specialty: "devops",
-    dependsOn: ["T-202", "T-401"]
+    dependsOn: ["T-202", "T-401"],
   },
   {
     id: "T-404",
@@ -340,10 +340,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "docker compose up boots a working relay over HTTP backed by Postgres",
       "Image is reproducible (no host mounts required)",
-      "README quickstart section added"
+      "README quickstart section added",
     ],
     specialty: "devops",
-    dependsOn: ["T-401", "T-402"]
+    dependsOn: ["T-401", "T-402"],
   },
   {
     id: "T-501",
@@ -355,10 +355,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "Plugin off: harness behavior unchanged",
       "Plugin on: planner classification pulls graph results instead of grep for architecture queries",
-      "Graph rebuild triggered on branch switch inside the sandbox worktree, not the user's repo"
+      "Graph rebuild triggered on branch switch inside the sandbox worktree, not the user's repo",
     ],
     specialty: "general",
-    dependsOn: ["T-401", "T-102"]
+    dependsOn: ["T-401", "T-102"],
   },
   {
     id: "T-502",
@@ -370,10 +370,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "Adding hooks-overrides/atlas.json affects only Atlas sessions",
       "Merge precedence matches docs: base -> role -> workspace+role",
-      "No regression to existing single-settings callers"
+      "No regression to existing single-settings callers",
     ],
     specialty: "general",
-    dependsOn: ["T-102"]
+    dependsOn: ["T-102"],
   },
   {
     id: "T-503",
@@ -385,10 +385,10 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "Atlas can DM an implementer; recipient sees message on next tool call",
       "Mail survives restarts",
-      "Tests cover send / check / unread counting"
+      "Tests cover send / check / unread counting",
     ],
     specialty: "general",
-    dependsOn: ["T-101"]
+    dependsOn: ["T-101"],
   },
   {
     id: "T-504",
@@ -400,11 +400,11 @@ const PLAN: PlanItem[] = [
     acceptanceCriteria: [
       "A formula TOML is discovered and selectable by the planner",
       "Selected formula produces a deterministic ticket plan",
-      "At least one shipped formula exercised by the demo"
+      "At least one shipped formula exercised by the demo",
     ],
     specialty: "general",
-    dependsOn: ["T-304", "T-204"]
-  }
+    dependsOn: ["T-304", "T-204"],
+  },
 ];
 
 async function main(): Promise<void> {
@@ -421,8 +421,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const workspace =
-    (await resolveWorkspaceForRepo(REPO)) ?? (await registerWorkspace(REPO));
+  const workspace = (await resolveWorkspaceForRepo(REPO)) ?? (await registerWorkspace(REPO));
   const artifactsDir = join(getWorkspaceDir(workspace.workspaceId), "artifacts");
   const artifactStore = new LocalArtifactStore(artifactsDir, getHarnessStore());
 
@@ -439,7 +438,7 @@ async function main(): Promise<void> {
     verificationCommands: [],
     docsToUpdate: [],
     dependsOn: item.dependsOn,
-    retryPolicy: { maxAgentAttempts: 1, maxTestFixLoops: 1 }
+    retryPolicy: { maxAgentAttempts: 1, maxTestFixLoops: 1 },
   }));
 
   const ticketLedger = initializeTicketLedger(tickets, runId);
@@ -451,7 +450,7 @@ async function main(): Promise<void> {
     suggestedSpecialties: ["general", "devops"] as string[],
     estimatedTicketCount: tickets.length,
     needsDesignDoc: false,
-    needsUserApproval: true
+    needsUserApproval: true,
   };
 
   const run: HarnessRun = {
@@ -471,12 +470,12 @@ async function main(): Promise<void> {
         title: "Pluggable Relay refactor",
         featureRequest:
           "Pluggable Relay: storage + executor + MCP transport; adopt select Gas Town concepts; optional graphify plugin",
-        repoRoot: REPO
+        repoRoot: REPO,
       },
       classification,
       tickets,
       finalVerification: { commands: ["pnpm build", "pnpm test"] },
-      docsToUpdate: ["README.md"]
+      docsToUpdate: ["README.md"],
     },
     events: [],
     evidence: [],
@@ -485,7 +484,7 @@ async function main(): Promise<void> {
     phaseLedgerPath: null,
     ticketLedger,
     ticketLedgerPath: null,
-    runIndexPath: null
+    runIndexPath: null,
   };
 
   // Per-run snapshot (immutable decomposition record).
@@ -503,8 +502,8 @@ async function main(): Promise<void> {
       updatedAt: now,
       completedAt: null,
       phaseLedgerPath: null,
-      artifactsRoot: join(artifactsDir, runId)
-    }
+      artifactsRoot: join(artifactsDir, runId),
+    },
   });
 
   // Unified live ticket board — rly board + GUI both read this.
@@ -518,7 +517,7 @@ async function main(): Promise<void> {
         channelId,
         workspaceId: workspace.workspaceId,
         ticketCount: tickets.length,
-        artifactsDir: join(artifactsDir, runId)
+        artifactsDir: join(artifactsDir, runId),
       },
       null,
       2

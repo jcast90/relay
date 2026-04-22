@@ -37,12 +37,12 @@ Paste this into a fresh `rly claude` session:
 https://github.com/acme/api/issues/42
 ```
 
-where issue #42 says *"Rate-limit `/api/search` to 60 req/min per API key, return 429 with `Retry-After` header."*
+where issue #42 says _"Rate-limit `/api/search` to 60 req/min per API key, return 429 with `Retry-After` header."_
 
 What happens, in order:
 
 1. **Classifier** hits GitHub, pulls title + body + labels (`enhancement`, `api`, `backend`). Emits `tier: feature_small`, `suggestedBranch: feat/42-rate-limit-search`.
-2. **Planner** writes a 3-phase plan: *(1) add middleware + token-bucket store, (2) wire into `/api/search` route, (3) tests + error-shape*. Feed entry `plan_created`.
+2. **Planner** writes a 3-phase plan: _(1) add middleware + token-bucket store, (2) wire into `/api/search` route, (3) tests + error-shape_. Feed entry `plan_created`.
 3. **Decomposer** fans out: `T-1 add rate-limit middleware (general)`, `T-2 wire into /api/search (api_crud, depends on T-1)`, `T-3 integration test for 429 + Retry-After (testing, depends on T-2)`, `T-4 update OpenAPI spec (general, depends on T-2)`. Ticket board is live in `rly board <channelId>`.
 4. **Scheduler** starts T-1 (the only `ready` ticket). T-2/T-3/T-4 sit `blocked`. As T-1 completes and verifies, T-2 unblocks, then T-3 + T-4 run in parallel. Max-concurrency defaults to 3 — you can watch the `executing` column fill up.
 5. **Each ticket** spawns its own Claude subprocess with a scoped prompt, runs verification commands (test / lint / typecheck) through the `Executor` abstraction, retries up to `maxTestFixLoops` on failure.
@@ -111,7 +111,7 @@ For when you want to see the pipeline at a glance:
 
 ## `~/.relay/` file layout
 
-All three dashboards (CLI / TUI / GUI) read the same files. No synchronisation layer — the filesystem *is* the state.
+All three dashboards (CLI / TUI / GUI) read the same files. No synchronisation layer — the filesystem _is_ the state.
 
 ```
 ~/.relay/
@@ -140,20 +140,20 @@ Opting in to Postgres (`PostgresHarnessStore`) keeps the same on-disk layout and
 
 ## Troubleshooting
 
-| Symptom | Likely cause / fix |
-|---|---|
-| `GITHUB_TOKEN not set — PR watching disabled` | Expected if you didn't set the token; PRs won't auto-track. Also posted once per channel to the feed (visible in TUI/GUI) so you see it even if you closed the terminal. |
-| Classifier can't resolve a Linear key like `ABC-123` | `LINEAR_API_KEY` (or `COMPOSIO_API_KEY`) not set, or the key doesn't match any issue visible to your token. |
-| Claude keeps prompting for permissions | Set `RELAY_AUTO_APPROVE=1` or pass `--yolo` / `--auto-approve`. |
-| Tickets stuck in `blocked` forever | Check `dependsOn` chain — a failed upstream ticket blocks everything downstream. `rly board <id>` shows the edges. |
-| Ticket retries exhausted (`failed`) | Verification commands kept failing past `maxTestFixLoops`. Feed shows the last verification output; fix manually, mark the ticket `completed`, and the scheduler unblocks downstream. |
-| `Verification override` in feed | The agent proposed commands that weren't on the ticket's allowlist, so the scheduler ran the allowlist instead. The feed entry lists `rejectedCommands` and `substitutedCommands` — if the substitution is wrong, update the ticket's `allowedCommands` / `verificationCommands`. |
-| `rly` runs stale code after `git pull` | Default reads current source via `tsx`, so this shouldn't happen. If you set `RELAY_USE_DIST=1`, run `rly rebuild`. |
-| `rly tui` / `rly gui` fails on first run | Install `cargo` (rustup). The auto-build needs it. |
-| TUI shows no channels | Register at least one workspace with `rly up` and create a channel (or launch a session, which creates one). |
-| GUI shows stale data | `rly gui --rebuild` to refresh the bundle after a code change. |
-| Crosslink `no_session` when spawning an associated agent | The GUI spawns a terminal tab on macOS/Linux/Windows. If spawn fails (no supported terminal detected), a system entry lands in the channel feed — run `rly claude` in the repo manually and crosslink will pick it up. |
-| PR watcher never updates | Check `rly pr-status` for errors. Usually a scoping issue on `GITHUB_TOKEN` (needs `repo` scope for private repos). |
+| Symptom                                                  | Likely cause / fix                                                                                                                                                                                                                                                                |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GITHUB_TOKEN not set — PR watching disabled`            | Expected if you didn't set the token; PRs won't auto-track. Also posted once per channel to the feed (visible in TUI/GUI) so you see it even if you closed the terminal.                                                                                                          |
+| Classifier can't resolve a Linear key like `ABC-123`     | `LINEAR_API_KEY` (or `COMPOSIO_API_KEY`) not set, or the key doesn't match any issue visible to your token.                                                                                                                                                                       |
+| Claude keeps prompting for permissions                   | Set `RELAY_AUTO_APPROVE=1` or pass `--yolo` / `--auto-approve`.                                                                                                                                                                                                                   |
+| Tickets stuck in `blocked` forever                       | Check `dependsOn` chain — a failed upstream ticket blocks everything downstream. `rly board <id>` shows the edges.                                                                                                                                                                |
+| Ticket retries exhausted (`failed`)                      | Verification commands kept failing past `maxTestFixLoops`. Feed shows the last verification output; fix manually, mark the ticket `completed`, and the scheduler unblocks downstream.                                                                                             |
+| `Verification override` in feed                          | The agent proposed commands that weren't on the ticket's allowlist, so the scheduler ran the allowlist instead. The feed entry lists `rejectedCommands` and `substitutedCommands` — if the substitution is wrong, update the ticket's `allowedCommands` / `verificationCommands`. |
+| `rly` runs stale code after `git pull`                   | Default reads current source via `tsx`, so this shouldn't happen. If you set `RELAY_USE_DIST=1`, run `rly rebuild`.                                                                                                                                                               |
+| `rly tui` / `rly gui` fails on first run                 | Install `cargo` (rustup). The auto-build needs it.                                                                                                                                                                                                                                |
+| TUI shows no channels                                    | Register at least one workspace with `rly up` and create a channel (or launch a session, which creates one).                                                                                                                                                                      |
+| GUI shows stale data                                     | `rly gui --rebuild` to refresh the bundle after a code change.                                                                                                                                                                                                                    |
+| Crosslink `no_session` when spawning an associated agent | The GUI spawns a terminal tab on macOS/Linux/Windows. If spawn fails (no supported terminal detected), a system entry lands in the channel feed — run `rly claude` in the repo manually and crosslink will pick it up.                                                            |
+| PR watcher never updates                                 | Check `rly pr-status` for errors. Usually a scoping issue on `GITHUB_TOKEN` (needs `repo` scope for private repos).                                                                                                                                                               |
 
 ## Next
 

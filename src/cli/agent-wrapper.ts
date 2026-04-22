@@ -9,7 +9,7 @@ export async function ensureClaudeMcpConfig(input: {
   paths: HarnessWorkspacePaths;
 }): Promise<string> {
   await mkdir(input.paths.rootDir, {
-    recursive: true
+    recursive: true,
   });
 
   const path = join(input.paths.rootDir, "claude.mcp.json");
@@ -17,20 +17,15 @@ export async function ensureClaudeMcpConfig(input: {
     mcpServers: {
       relay: {
         command: process.execPath,
-        args: [
-          input.cliEntrypoint,
-          "mcp-server",
-          "--workspace",
-          input.cwd
-        ],
+        args: [input.cliEntrypoint, "mcp-server", "--workspace", input.cwd],
         env: {
           RELAY_HOME: input.paths.rootDir,
           RELAY_ARTIFACTS_DIR: input.paths.artifactsDir,
           RELAY_RUNS_INDEX: input.paths.runsIndexPath,
-          RELAY_PROVIDER: "claude"
-        }
-      }
-    }
+          RELAY_PROVIDER: "claude",
+        },
+      },
+    },
   };
 
   await writeFile(path, JSON.stringify(config, null, 2));
@@ -49,7 +44,7 @@ const HARNESS_SYSTEM_PROMPT = [
   "- crosslink_register: Update your session description so others know what you're working on.",
   "",
   "When you receive a crosslink message (prefixed with [CROSSLINK INBOUND]), read it carefully and use crosslink_reply to respond.",
-  "If you need information from another repo, use crosslink_discover to find the right session, then crosslink_send to ask."
+  "If you need information from another repo, use crosslink_discover to find the right session, then crosslink_send to ask.",
 ].join("\n");
 
 /**
@@ -79,7 +74,7 @@ export function buildClaudeLaunchArgs(input: {
     "--mcp-config",
     input.mcpConfigPath,
     "--append-system-prompt",
-    HARNESS_SYSTEM_PROMPT
+    HARNESS_SYSTEM_PROMPT,
   ];
   if (input.autoApprove) {
     // Claude Code's flag for unattended runs. No per-tool prompts.
@@ -102,10 +97,10 @@ export function buildCodexLaunchArgs(input: {
       input.cliEntrypoint,
       "mcp-server",
       "--workspace",
-      input.cwd
+      input.cwd,
     ])}`,
     "-c",
-    `mcp_servers.relay.env.RELAY_PROVIDER=${tomlString("codex")}`
+    `mcp_servers.relay.env.RELAY_PROVIDER=${tomlString("codex")}`,
   ];
   if (input.autoApprove) {
     // Codex CLI's unattended mode. If your codex version rejects this flag,

@@ -54,7 +54,7 @@ cd gui && pnpm build
 ## Code style
 
 - Two-space indent, double quotes, semicolons, trailing commas where the language allows them.
-- **No linter is enforced in CI.** Run your editor's built-in formatter on files you touch.
+- **Prettier is enforced in CI.** Run `pnpm format` before pushing (or `pnpm format:check` to verify). The `format-check` CI job blocks merges on drift.
 - **No drive-by reformats** of files you didn't otherwise touch. Keep the diff focused on the change.
 - Imports grouped roughly as node-builtin / dep / local. No unused imports.
 

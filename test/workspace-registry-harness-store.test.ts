@@ -1,29 +1,14 @@
-import {
-  cp,
-  mkdtemp,
-  readFile,
-  rm,
-  stat,
-  writeFile
-} from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  WorkspaceRegistry,
-  buildWorkspaceId
-} from "../src/cli/workspace-registry.js";
+import { WorkspaceRegistry, buildWorkspaceId } from "../src/cli/workspace-registry.js";
 import { FileHarnessStore } from "../src/storage/file-store.js";
 import { STORE_NS } from "../src/storage/namespaces.js";
-import type {
-  BlobRef,
-  ChangeEvent,
-  HarnessStore,
-  ReadLogOptions
-} from "../src/storage/store.js";
+import type { BlobRef, ChangeEvent, HarnessStore, ReadLogOptions } from "../src/storage/store.js";
 
 /**
  * Minimal in-memory HarnessStore. Only the methods WorkspaceRegistry
@@ -59,11 +44,7 @@ class FakeHarnessStore implements HarnessStore {
     throw new Error("FakeHarnessStore.appendLog is not implemented");
   }
 
-  async readLog<T>(
-    _ns: string,
-    _id: string,
-    _opts?: ReadLogOptions
-  ): Promise<T[]> {
+  async readLog<T>(_ns: string, _id: string, _opts?: ReadLogOptions): Promise<T[]> {
     throw new Error("FakeHarnessStore.readLog is not implemented");
   }
 
@@ -75,11 +56,7 @@ class FakeHarnessStore implements HarnessStore {
     throw new Error("FakeHarnessStore.getBlob is not implemented");
   }
 
-  async mutate<T>(
-    ns: string,
-    id: string,
-    fn: (prev: T | null) => T
-  ): Promise<T> {
+  async mutate<T>(ns: string, id: string, fn: (prev: T | null) => T): Promise<T> {
     this.mutateCalls.push({ ns, id });
     const prev = (this.docs.get(this.key(ns, id)) as T | undefined) ?? null;
     const next = fn(prev);
@@ -117,7 +94,7 @@ describe("WorkspaceRegistry with HarnessStore injection", () => {
 
     expect(fake.mutateCalls).toContainEqual({
       ns: STORE_NS.workspace,
-      id: "registry"
+      id: "registry",
     });
 
     const rec = await fake.getDoc<{ updatedAt: string; count: number }>(
@@ -154,14 +131,10 @@ describe("WorkspaceRegistry with HarnessStore injection", () => {
     expect(resolvedA!.workspaceId).toBe(a.workspaceId);
 
     const all = await registry.list();
-    expect(all.map((w) => w.workspaceId).sort()).toEqual(
-      [a.workspaceId, b.workspaceId].sort()
-    );
+    expect(all.map((w) => w.workspaceId).sort()).toEqual([a.workspaceId, b.workspaceId].sort());
 
     // Unregistered path returns null
-    const missing = await registry.resolveForRepo(
-      join(relayDir, "does-not-exist")
-    );
+    const missing = await registry.resolveForRepo(join(relayDir, "does-not-exist"));
     expect(missing).toBeNull();
   });
 
@@ -225,12 +198,8 @@ describe("WorkspaceRegistry with HarnessStore injection", () => {
 
       // Operator-visible diagnostic was emitted.
       const warnings = warnSpy.mock.calls.map((c) => c.join(" "));
-      expect(
-        warnings.some((w) => w.includes("coordination-record mutate failed"))
-      ).toBe(true);
-      expect(
-        warnings.some((w) => w.includes("coordination store exploded"))
-      ).toBe(true);
+      expect(warnings.some((w) => w.includes("coordination-record mutate failed"))).toBe(true);
+      expect(warnings.some((w) => w.includes("coordination store exploded"))).toBe(true);
     } finally {
       warnSpy.mockRestore();
       mutateSpy.mockRestore();
@@ -249,7 +218,7 @@ describe("WorkspaceRegistry with HarnessStore injection", () => {
 
     const [entryX, entryY] = await Promise.all([
       registry.register(pathX),
-      registry.register(pathY)
+      registry.register(pathY),
     ]);
 
     expect(entryX.repoPath).toBe(pathX);
@@ -291,35 +260,24 @@ describe("WorkspaceRegistry reads legacy Rust-layout fixtures", () => {
   it("reads a pre-migration registry file from its Rust-compat path", async () => {
     const storeRoot = await mkdtemp(join(tmpdir(), "ws-reg-legacy-store-"));
     try {
-      const registry = new WorkspaceRegistry(
-        workDir,
-        new FileHarnessStore(storeRoot)
-      );
+      const registry = new WorkspaceRegistry(workDir, new FileHarnessStore(storeRoot));
 
       const doc = await registry.read();
       expect(doc.workspaces).toHaveLength(2);
-      expect(doc.workspaces.map((w) => w.workspaceId)).toEqual([
-        "ws-legacy-1",
-        "ws-legacy-2"
-      ]);
+      expect(doc.workspaces.map((w) => w.workspaceId)).toEqual(["ws-legacy-1", "ws-legacy-2"]);
       expect(doc.workspaces[0].repoPath).toBe("/home/user/projects/legacy-a");
 
       // The pre-migration fixture uses hand-picked workspaceIds that don't
       // match `buildWorkspaceId(repoPath)`, so `resolveForRepo` (which hashes
       // the path to look up) legitimately returns null — that's the current
       // contract, and the list above proves the data round-tripped.
-      const resolved = await registry.resolveForRepo(
-        "/home/user/projects/legacy-a"
-      );
+      const resolved = await registry.resolveForRepo("/home/user/projects/legacy-a");
       expect(resolved).toBeNull();
 
       // Coordination record is untouched by reads — only writes bump it.
-      await expect(
-        stat(join(storeRoot, "workspace", "registry.json"))
-      ).rejects.toThrow();
+      await expect(stat(join(storeRoot, "workspace", "registry.json"))).rejects.toThrow();
     } finally {
       await rm(storeRoot, { recursive: true, force: true });
     }
   });
 });
-

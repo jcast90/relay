@@ -17,7 +17,7 @@ function buildEvent(overrides: Record<string, unknown> = {}) {
     timestamp: new Date("2026-04-20T12:00:00.000Z"),
     message: "PR updated",
     data: {},
-    ...overrides
+    ...overrides,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
 }
@@ -30,7 +30,7 @@ describe("HarnessChannelNotifier", () => {
       const channel = await store.createChannel({ name: "#main", description: "" });
       const notifier = new HarnessChannelNotifier({
         channelStore: store,
-        defaultChannelId: channel.channelId
+        defaultChannelId: channel.channelId,
       });
 
       const data = { prNumber: 42, reviewer: "alice", labels: ["urgent", "bug"] };
@@ -67,12 +67,12 @@ describe("HarnessChannelNotifier", () => {
       const channel = await store.createChannel({ name: "#main", description: "" });
       const notifier = new HarnessChannelNotifier({
         channelStore: store,
-        defaultChannelId: channel.channelId
+        defaultChannelId: channel.channelId,
       });
 
       await notifier.notifyWithActions(buildEvent(), [
         { label: "View PR", url: "https://example.com/pr/1" },
-        { label: "Ack", callbackEndpoint: "https://example.com/ack" }
+        { label: "Ack", callbackEndpoint: "https://example.com/ack" },
       ]);
 
       const feed = await store.readFeed(channel.channelId);
@@ -94,7 +94,7 @@ describe("HarnessChannelNotifier", () => {
       const otherChannel = await store.createChannel({ name: "#other", description: "" });
       const notifier = new HarnessChannelNotifier({
         channelStore: store,
-        defaultChannelId: defaultChannel.channelId
+        defaultChannelId: defaultChannel.channelId,
       });
 
       const entryId = await notifier.post("hi", { channel: otherChannel.channelId });
@@ -119,7 +119,7 @@ describe("HarnessChannelNotifier", () => {
       const channel = await store.createChannel({ name: "#default", description: "" });
       const notifier = new HarnessChannelNotifier({
         channelStore: store,
-        defaultChannelId: channel.channelId
+        defaultChannelId: channel.channelId,
       });
 
       await notifier.post("ping", { sessionId: "s-1", projectId: "p-1", prUrl: "u" });

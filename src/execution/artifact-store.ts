@@ -12,7 +12,7 @@ import type {
   HarnessRun,
   PhaseLedgerEntry,
   RunEvent,
-  RunIndexEntry
+  RunIndexEntry,
 } from "../domain/run.js";
 import { buildHarnessStore } from "../storage/factory.js";
 import { STORE_NS } from "../storage/namespaces.js";
@@ -73,13 +73,8 @@ export interface ArtifactStore {
   }): Promise<ArtifactRecord>;
   readCommandResult(path: string): Promise<CommandArtifactContent>;
   readFailureClassification(path: string): Promise<FailureClassificationArtifactContent>;
-  savePhaseLedger(input: {
-    runId: string;
-    phaseLedger: PhaseLedgerEntry[];
-  }): Promise<string>;
-  saveRunsIndex(input: {
-    entry: RunIndexEntry;
-  }): Promise<string>;
+  savePhaseLedger(input: { runId: string; phaseLedger: PhaseLedgerEntry[] }): Promise<string>;
+  saveRunsIndex(input: { entry: RunIndexEntry }): Promise<string>;
   readRunsIndex(): Promise<RunIndexEntry[]>;
   saveRunSnapshot(run: HarnessRun): Promise<string>;
   readRunSnapshot(runId: string): Promise<RunSnapshot | null>;
@@ -89,10 +84,19 @@ export interface ArtifactStore {
   readPrLifecycle(runId: string): Promise<PrLifecycle | null>;
   saveTicketLedger(input: { runId: string; ticketLedger: TicketLedgerEntry[] }): Promise<string>;
   readTicketLedger(runId: string): Promise<TicketLedgerEntry[] | null>;
-  saveClassification(input: { runId: string; classification: ClassificationResult }): Promise<string>;
+  saveClassification(input: {
+    runId: string;
+    classification: ClassificationResult;
+  }): Promise<string>;
   saveDesignDoc(input: { runId: string; content: string }): Promise<string>;
-  saveApprovalRecord(input: { runId: string; decision: "approved" | "rejected"; feedback?: string }): Promise<string>;
-  readApprovalRecord(runId: string): Promise<{ decision: "approved" | "rejected"; feedback?: string; timestamp: string } | null>;
+  saveApprovalRecord(input: {
+    runId: string;
+    decision: "approved" | "rejected";
+    feedback?: string;
+  }): Promise<string>;
+  readApprovalRecord(
+    runId: string
+  ): Promise<{ decision: "approved" | "rejected"; feedback?: string; timestamp: string } | null>;
 }
 
 /**
@@ -148,16 +152,12 @@ function buildBlobUri(id: string): string {
  *   the caller should fall through to the pre-T-103 legacy absolute-path
  *   read. Existing run histories still carry absolute paths in `run.json`.
  */
-function parseBlobUri(
-  uri: string
-): { ns: string; id: string } | null {
+function parseBlobUri(uri: string): { ns: string; id: string } | null {
   if (!uri.startsWith(BLOB_URI_PREFIX)) return null;
   const rest = uri.slice(BLOB_URI_PREFIX.length);
   const slash = rest.indexOf("/");
   if (slash < 0) {
-    throw new Error(
-      `Invalid blob URI (missing '/'): ${uri}`
-    );
+    throw new Error(`Invalid blob URI (missing '/'): ${uri}`);
   }
   const ns = rest.slice(0, slash);
   const id = rest.slice(slash + 1);
@@ -229,9 +229,7 @@ export class LocalArtifactStore implements ArtifactStore {
     this.store = store ?? buildHarnessStore();
   }
 
-  async saveCommandResult(
-    input: SaveCommandArtifactInput
-  ): Promise<ArtifactRecord> {
+  async saveCommandResult(input: SaveCommandArtifactInput): Promise<ArtifactRecord> {
     const artifactId = buildArtifactId();
     const content: CommandArtifactContent = {
       artifactId,
@@ -241,7 +239,7 @@ export class LocalArtifactStore implements ArtifactStore {
       exitCode: input.result.exitCode,
       stdout: input.result.stdout,
       stderr: input.result.stderr,
-      capturedAt: new Date().toISOString()
+      capturedAt: new Date().toISOString(),
     };
 
     const id = blobId(input.runId, input.phaseId, artifactId);
@@ -250,7 +248,7 @@ export class LocalArtifactStore implements ArtifactStore {
       contentType: "application/json",
       runId: input.runId,
       phaseId: input.phaseId,
-      artifactType: "command_result"
+      artifactType: "command_result",
     });
 
     return {
@@ -259,7 +257,7 @@ export class LocalArtifactStore implements ArtifactStore {
       type: "command_result",
       path: buildBlobUri(id),
       command: input.command,
-      exitCode: input.result.exitCode
+      exitCode: input.result.exitCode,
     };
   }
 
@@ -269,7 +267,7 @@ export class LocalArtifactStore implements ArtifactStore {
       const bytes = await this.store.getBlob({
         ns: ref.ns,
         id: ref.id,
-        size: 0
+        size: 0,
       });
       return JSON.parse(new TextDecoder().decode(bytes)) as CommandArtifactContent;
     }
@@ -292,7 +290,7 @@ export class LocalArtifactStore implements ArtifactStore {
       category: input.classification.category,
       rationale: input.classification.rationale,
       nextAction: input.classification.nextAction,
-      capturedAt: new Date().toISOString()
+      capturedAt: new Date().toISOString(),
     };
 
     const id = blobId(input.runId, input.phaseId, artifactId);
@@ -301,7 +299,7 @@ export class LocalArtifactStore implements ArtifactStore {
       contentType: "application/json",
       runId: input.runId,
       phaseId: input.phaseId,
-      artifactType: "failure_classification"
+      artifactType: "failure_classification",
     });
 
     return {
@@ -311,28 +309,22 @@ export class LocalArtifactStore implements ArtifactStore {
       path: buildBlobUri(id),
       category: input.classification.category,
       rationale: input.classification.rationale,
-      nextAction: input.classification.nextAction
+      nextAction: input.classification.nextAction,
     };
   }
 
-  async readFailureClassification(
-    path: string
-  ): Promise<FailureClassificationArtifactContent> {
+  async readFailureClassification(path: string): Promise<FailureClassificationArtifactContent> {
     const ref = parseBlobUri(path);
     if (ref) {
       const bytes = await this.store.getBlob({
         ns: ref.ns,
         id: ref.id,
-        size: 0
+        size: 0,
       });
-      return JSON.parse(
-        new TextDecoder().decode(bytes)
-      ) as FailureClassificationArtifactContent;
+      return JSON.parse(new TextDecoder().decode(bytes)) as FailureClassificationArtifactContent;
     }
     warnLegacyArtifactPath(path);
-    return JSON.parse(
-      await readLegacyArtifactFile(path)
-    ) as FailureClassificationArtifactContent;
+    return JSON.parse(await readLegacyArtifactFile(path)) as FailureClassificationArtifactContent;
   }
 
   async savePhaseLedger(input: {
@@ -342,7 +334,7 @@ export class LocalArtifactStore implements ArtifactStore {
     const runDir = join(this.rootDir, input.runId);
 
     await mkdir(runDir, {
-      recursive: true
+      recursive: true,
     });
 
     const path = join(runDir, "phase-ledger.json");
@@ -353,7 +345,7 @@ export class LocalArtifactStore implements ArtifactStore {
         {
           runId: input.runId,
           updatedAt: new Date().toISOString(),
-          phases: input.phaseLedger
+          phases: input.phaseLedger,
         },
         null,
         2
@@ -364,14 +356,12 @@ export class LocalArtifactStore implements ArtifactStore {
     return path;
   }
 
-  async saveRunsIndex(input: {
-    entry: RunIndexEntry;
-  }): Promise<string> {
+  async saveRunsIndex(input: { entry: RunIndexEntry }): Promise<string> {
     const path = join(this.rootDir, "runs-index.json");
     const existing = await this.readRunsIndex();
     const next = [
       input.entry,
-      ...existing.filter((entry) => entry.runId !== input.entry.runId)
+      ...existing.filter((entry) => entry.runId !== input.entry.runId),
     ].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 
     await writeFile(
@@ -379,7 +369,7 @@ export class LocalArtifactStore implements ArtifactStore {
       JSON.stringify(
         {
           updatedAt: new Date().toISOString(),
-          runs: next
+          runs: next,
         },
         null,
         2
@@ -403,9 +393,7 @@ export class LocalArtifactStore implements ArtifactStore {
         return [];
       }
       throw new Error(
-        `Failed to read runs index at ${path}: ${
-          err instanceof Error ? err.message : String(err)
-        }`
+        `Failed to read runs index at ${path}: ${err instanceof Error ? err.message : String(err)}`
       );
     }
 
@@ -414,9 +402,7 @@ export class LocalArtifactStore implements ArtifactStore {
       return raw.runs ?? [];
     } catch (err) {
       throw new Error(
-        `Failed to parse runs index at ${path}: ${
-          err instanceof Error ? err.message : String(err)
-        }`
+        `Failed to parse runs index at ${path}: ${err instanceof Error ? err.message : String(err)}`
       );
     }
   }
@@ -441,7 +427,7 @@ export class LocalArtifactStore implements ArtifactStore {
       artifacts: run.artifacts,
       phaseLedger: run.phaseLedger,
       ticketLedger: run.ticketLedger,
-      eventCount: run.events.length
+      eventCount: run.events.length,
     };
 
     await writeFile(path, JSON.stringify(snapshot, null, 2));
@@ -497,9 +483,7 @@ export class LocalArtifactStore implements ArtifactStore {
         return [];
       }
       throw new Error(
-        `Failed to read event log at ${path}: ${
-          err instanceof Error ? err.message : String(err)
-        }`
+        `Failed to read event log at ${path}: ${err instanceof Error ? err.message : String(err)}`
       );
     }
 
@@ -511,9 +495,7 @@ export class LocalArtifactStore implements ArtifactStore {
         .map((line) => JSON.parse(line) as RunEvent);
     } catch (err) {
       throw new Error(
-        `Failed to parse event log at ${path}: ${
-          err instanceof Error ? err.message : String(err)
-        }`
+        `Failed to parse event log at ${path}: ${err instanceof Error ? err.message : String(err)}`
       );
     }
   }
@@ -571,18 +553,14 @@ export class LocalArtifactStore implements ArtifactStore {
         {
           runId: input.runId,
           updatedAt: new Date().toISOString(),
-          tickets: input.ticketLedger
+          tickets: input.ticketLedger,
         },
         null,
         2
       )
     );
 
-    await this.writeCoordRecord(
-      input.runId,
-      "ticket-ledger",
-      input.ticketLedger.length
-    );
+    await this.writeCoordRecord(input.runId, "ticket-ledger", input.ticketLedger.length);
     return path;
   }
 
@@ -623,22 +601,19 @@ export class LocalArtifactStore implements ArtifactStore {
     const doc = {
       runId: input.runId,
       ...input.classification,
-      classifiedAt: new Date().toISOString()
+      classifiedAt: new Date().toISOString(),
     };
     await this.store.putDoc(STORE_NS.runArtifacts, id, doc);
     return buildBlobUri(id);
   }
 
-  async saveDesignDoc(input: {
-    runId: string;
-    content: string;
-  }): Promise<string> {
+  async saveDesignDoc(input: { runId: string; content: string }): Promise<string> {
     const id = `${input.runId}__design-doc`;
     const bytes = new TextEncoder().encode(input.content);
     await this.store.putBlob(STORE_NS.runArtifacts, id, bytes, {
       contentType: "text/markdown",
       runId: input.runId,
-      artifactType: "design_doc"
+      artifactType: "design_doc",
     });
     return buildBlobUri(id);
   }
@@ -653,7 +628,7 @@ export class LocalArtifactStore implements ArtifactStore {
       runId: input.runId,
       decision: input.decision,
       feedback: input.feedback ?? null,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     };
     await this.store.putDoc(STORE_NS.runArtifacts, id, doc);
     return buildBlobUri(id);
@@ -675,7 +650,7 @@ export class LocalArtifactStore implements ArtifactStore {
     return {
       decision: doc.decision,
       feedback: doc.feedback ?? undefined,
-      timestamp: doc.timestamp
+      timestamp: doc.timestamp,
     };
   }
 
@@ -696,7 +671,7 @@ export class LocalArtifactStore implements ArtifactStore {
       () => ({
         kind,
         updatedAt: new Date().toISOString(),
-        ...(count !== undefined ? { count } : {})
+        ...(count !== undefined ? { count } : {}),
       })
     );
   }

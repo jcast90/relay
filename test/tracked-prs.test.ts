@@ -28,8 +28,8 @@ describe("tracked-prs persistence (OSS-05)", () => {
           ci: "passing",
           review: "pending",
           prState: "open",
-          updatedAt: new Date().toISOString()
-        }
+          updatedAt: new Date().toISOString(),
+        },
       ];
       await store.writeTrackedPrs(channel.channelId, rows);
 
@@ -43,10 +43,7 @@ describe("tracked-prs persistence (OSS-05)", () => {
       // The on-disk file layout must match the shape the Rust crate expects
       // (an object with updatedAt + rows). Breaking the envelope would
       // silently blank the TUI tab.
-      const raw = await readFile(
-        join(dir, channel.channelId, "tracked-prs.json"),
-        "utf8"
-      );
+      const raw = await readFile(join(dir, channel.channelId, "tracked-prs.json"), "utf8");
       const parsed = JSON.parse(raw);
       expect(parsed.rows).toHaveLength(1);
       expect(typeof parsed.updatedAt).toBe("string");
@@ -86,8 +83,8 @@ describe("tracked-prs persistence (OSS-05)", () => {
           ci: null,
           review: null,
           prState: null,
-          updatedAt: now
-        }
+          updatedAt: now,
+        },
       ]);
       await store.writeTrackedPrs(channel.channelId, []);
       expect(await store.readTrackedPrs(channel.channelId)).toEqual([]);

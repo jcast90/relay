@@ -1,12 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type {
-  Channel,
-  ChannelRunLink,
-  RunIndexEntry,
-  Spawn,
-  TrackedPrRow,
-} from "../types";
+import type { Channel, ChannelRunLink, RunIndexEntry, Spawn, TrackedPrRow } from "../types";
 import { SessionList } from "./SessionList";
 
 type Props = {
@@ -16,12 +10,7 @@ type Props = {
   refreshTick: number;
 };
 
-export function RightPane({
-  channel,
-  sessionId,
-  onSelectSession,
-  refreshTick,
-}: Props) {
+export function RightPane({ channel, sessionId, onSelectSession, refreshTick }: Props) {
   const [runs, setRuns] = useState<RunInfo[]>([]);
 
   useEffect(() => {
@@ -37,7 +26,7 @@ export function RightPane({
           const ws = await api.listRuns(link.workspaceId);
           const match = ws.find((r) => r.runId === link.runId);
           return match ? { run: match, workspaceId: link.workspaceId } : null;
-        }),
+        })
       );
       if (cancelled) return;
       setRuns(all.filter((x): x is RunInfo => x !== null));
@@ -76,8 +65,7 @@ export function RightPane({
         <h4>Repos ({channel.repoAssignments.length})</h4>
         {channel.repoAssignments.map((r) => {
           const isPrimary =
-            channel.primaryWorkspaceId &&
-            r.workspaceId === channel.primaryWorkspaceId;
+            channel.primaryWorkspaceId && r.workspaceId === channel.primaryWorkspaceId;
           return (
             <div key={r.workspaceId} className="row">
               <span>
@@ -116,13 +104,7 @@ export function RightPane({
  * narrow right pane: state / CI / review get a colored dot instead of
  * text (kept accessible via `title`).
  */
-function TrackedPrs({
-  channelId,
-  refreshTick,
-}: {
-  channelId: string;
-  refreshTick: number;
-}) {
+function TrackedPrs({ channelId, refreshTick }: { channelId: string; refreshTick: number }) {
   const [rows, setRows] = useState<TrackedPrRow[]>([]);
 
   useEffect(() => {
@@ -164,10 +146,7 @@ function TrackedPrs({
               className={`pr-dot pr-state-${r.prState ?? "unknown"}`}
               title={`state: ${r.prState ?? "-"}`}
             />
-            <span
-              className={`pr-dot pr-ci-${r.ci ?? "unknown"}`}
-              title={`ci: ${r.ci ?? "-"}`}
-            />
+            <span className={`pr-dot pr-ci-${r.ci ?? "unknown"}`} title={`ci: ${r.ci ?? "-"}`} />
             <span
               className={`pr-dot pr-review-${r.review ?? "unknown"}`}
               title={`review: ${r.review ?? "-"}`}
@@ -191,13 +170,7 @@ type RunInfo = { run: RunIndexEntry; workspaceId: string };
  * surfaces trigger spawns. Kill is optimistic: we drop the row from
  * local state before the async call resolves, then rollback if it fails.
  */
-function SpawnedAgents({
-  channelId,
-  refreshTick,
-}: {
-  channelId: string;
-  refreshTick: number;
-}) {
+function SpawnedAgents({ channelId, refreshTick }: { channelId: string; refreshTick: number }) {
   const [spawns, setSpawns] = useState<Spawn[]>([]);
   const [killError, setKillError] = useState<string | null>(null);
 

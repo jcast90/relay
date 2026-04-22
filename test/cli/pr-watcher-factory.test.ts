@@ -10,7 +10,7 @@ import {
   createPrWatcherFactory,
   getActiveWatcher,
   parseGithubRemote,
-  type ExecGit
+  type ExecGit,
 } from "../../src/cli/pr-watcher-factory.js";
 import type { HarnessRun } from "../../src/domain/run.js";
 import type { TicketScheduler } from "../../src/orchestrator/ticket-scheduler.js";
@@ -41,7 +41,7 @@ function minimalRun(overrides: Partial<HarnessRun> = {}): HarnessRun {
     ticketLedger: [],
     ticketLedgerPath: null,
     runIndexPath: null,
-    ...overrides
+    ...overrides,
   };
 }
 
@@ -52,7 +52,7 @@ function stubScheduler(): Pick<TicketScheduler, "enqueue"> {
   return {
     enqueue: vi.fn(async () => {
       /* no-op */
-    })
+    }),
   } as unknown as Pick<TicketScheduler, "enqueue">;
 }
 
@@ -60,22 +60,22 @@ describe("parseGithubRemote", () => {
   it("parses HTTPS remotes with and without .git", () => {
     expect(parseGithubRemote("https://github.com/owner/repo.git")).toEqual({
       owner: "owner",
-      name: "repo"
+      name: "repo",
     });
     expect(parseGithubRemote("https://github.com/owner/repo")).toEqual({
       owner: "owner",
-      name: "repo"
+      name: "repo",
     });
   });
 
   it("parses SSH remotes", () => {
     expect(parseGithubRemote("git@github.com:owner/repo.git")).toEqual({
       owner: "owner",
-      name: "repo"
+      name: "repo",
     });
     expect(parseGithubRemote("git@github.com:owner/repo")).toEqual({
       owner: "owner",
-      name: "repo"
+      name: "repo",
     });
   });
 
@@ -115,12 +115,12 @@ describe("createPrWatcherFactory", () => {
     const factory = createPrWatcherFactory({
       channelStore,
       repoRoot: "/irrelevant",
-      execGit
+      execGit,
     });
 
     const handle = factory({
       run: minimalRun(),
-      scheduler: stubScheduler() as TicketScheduler
+      scheduler: stubScheduler() as TicketScheduler,
     });
 
     expect(handle).not.toBeNull();
@@ -146,19 +146,19 @@ describe("createPrWatcherFactory", () => {
     // the stdout info message above.
     const channel = await channelStore.createChannel({
       name: "#test",
-      description: "missing-token test"
+      description: "missing-token test",
     });
 
     const factory = createPrWatcherFactory({
       channelStore,
       repoRoot: "/irrelevant",
       defaultChannelId: channel.channelId,
-      execGit
+      execGit,
     });
 
     factory({
       run: minimalRun(),
-      scheduler: stubScheduler() as TicketScheduler
+      scheduler: stubScheduler() as TicketScheduler,
     });
 
     // Let the fire-and-forget postEntry settle. postEntry awaits mkdir,
@@ -168,9 +168,7 @@ describe("createPrWatcherFactory", () => {
 
     const entries = await channelStore.readFeed(channel.channelId);
     const warning = entries.find(
-      (e) =>
-        e.type === "status_update" &&
-        e.metadata.warning === "missing_github_token"
+      (e) => e.type === "status_update" && e.metadata.warning === "missing_github_token"
     );
     expect(warning).toBeDefined();
     expect(warning!.fromDisplayName).toBe("PR Watcher");
@@ -186,21 +184,21 @@ describe("createPrWatcherFactory", () => {
 
     const channel = await channelStore.createChannel({
       name: "#test-dedupe",
-      description: "dedupe test"
+      description: "dedupe test",
     });
 
     const factory = createPrWatcherFactory({
       channelStore,
       repoRoot: "/irrelevant",
       defaultChannelId: channel.channelId,
-      execGit
+      execGit,
     });
 
     // Invoke the factory three times — simulating three back-to-back runs.
     for (let i = 0; i < 3; i += 1) {
       factory({
         run: minimalRun(),
-        scheduler: stubScheduler() as TicketScheduler
+        scheduler: stubScheduler() as TicketScheduler,
       });
     }
 
@@ -208,9 +206,7 @@ describe("createPrWatcherFactory", () => {
 
     const entries = await channelStore.readFeed(channel.channelId);
     const warnings = entries.filter(
-      (e) =>
-        e.type === "status_update" &&
-        e.metadata.warning === "missing_github_token"
+      (e) => e.type === "status_update" && e.metadata.warning === "missing_github_token"
     );
     expect(warnings).toHaveLength(1);
 
@@ -227,12 +223,12 @@ describe("createPrWatcherFactory", () => {
     const factory = createPrWatcherFactory({
       channelStore,
       repoRoot: "/not/a/repo",
-      execGit
+      execGit,
     });
 
     const handle = factory({
       run: minimalRun(),
-      scheduler: stubScheduler() as TicketScheduler
+      scheduler: stubScheduler() as TicketScheduler,
     });
 
     expect(handle).not.toBeNull();
@@ -255,7 +251,7 @@ describe("createPrWatcherFactory", () => {
     process.env.GITHUB_TOKEN = "fake-token";
     const execGit: ExecGit = vi.fn(async () => ({
       stdout: "git@github.com:acme/widgets.git\n",
-      stderr: ""
+      stderr: "",
     }));
 
     // Use a large intervalMs so the branch-detection setInterval never fires
@@ -264,12 +260,12 @@ describe("createPrWatcherFactory", () => {
       channelStore,
       repoRoot: "/repo",
       intervalMs: 60_000,
-      execGit
+      execGit,
     });
 
     const handle = factory({
       run: minimalRun(),
-      scheduler: stubScheduler() as TicketScheduler
+      scheduler: stubScheduler() as TicketScheduler,
     });
 
     handle!.start();

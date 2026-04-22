@@ -5,12 +5,7 @@
  * rest of the codebase never imports AO types directly. Do not leak
  * `@aoagents/ao-core` types out of this module.
  */
-import type {
-  PRInfo,
-  ProjectConfig,
-  SCM,
-  Session,
-} from "@aoagents/ao-core";
+import type { PRInfo, ProjectConfig, SCM, Session } from "@aoagents/ao-core";
 import { create as createGithubScm } from "@aoagents/ao-plugin-scm-github";
 
 import { withEnvOverride } from "./plugin-env-mutex.js";
@@ -33,11 +28,7 @@ export interface HarnessProject {
 }
 
 export type CiSummary = "pending" | "passing" | "failing" | "none";
-export type ReviewDecision =
-  | "approved"
-  | "changes_requested"
-  | "pending"
-  | "none";
+export type ReviewDecision = "approved" | "changes_requested" | "pending" | "none";
 
 export interface PendingComment {
   id: string;
@@ -54,10 +45,7 @@ export interface EnrichedPR {
 }
 
 export interface HarnessScm {
-  detectPR(
-    branch: string,
-    repo: { owner: string; name: string },
-  ): Promise<HarnessPR | null>;
+  detectPR(branch: string, repo: { owner: string; name: string }): Promise<HarnessPR | null>;
   getCiSummary(pr: HarnessPR): Promise<CiSummary>;
   getReviewDecision(pr: HarnessPR): Promise<ReviewDecision>;
   getPendingComments(pr: HarnessPR): Promise<PendingComment[]>;
@@ -77,18 +65,9 @@ export interface HarnessScm {
  *    builds with different tokens can't observe each other's values.
  */
 export function createScm(kind: "github"): SCM;
-export function createScm(
-  kind: "github",
-  opts: { token?: undefined },
-): SCM;
-export function createScm(
-  kind: "github",
-  opts: { token: string },
-): Promise<SCM>;
-export function createScm(
-  kind: "github",
-  opts: { token?: string } = {},
-): SCM | Promise<SCM> {
+export function createScm(kind: "github", opts: { token?: undefined }): SCM;
+export function createScm(kind: "github", opts: { token: string }): Promise<SCM>;
+export function createScm(kind: "github", opts: { token?: string } = {}): SCM | Promise<SCM> {
   if (kind !== "github") {
     throw new Error(`createScm: unsupported kind "${kind as string}"`);
   }
@@ -98,9 +77,7 @@ export function createScm(
   // The github plugin shells out to `gh`, which reads GITHUB_TOKEN from env.
   // Serialize overlays so two concurrent calls with different tokens can't
   // race through the env.
-  return withEnvOverride({ GITHUB_TOKEN: opts.token }, () =>
-    createGithubScm(),
-  );
+  return withEnvOverride({ GITHUB_TOKEN: opts.token }, () => createGithubScm());
 }
 
 /** Produce the narrow facade from a raw AO `SCM`. */

@@ -47,7 +47,7 @@ export const DEFAULT_ENV_WHITELIST: ReadonlySet<string> = new Set([
   "TMP",
   "TERM",
   "PWD",
-  "NODE_ENV"
+  "NODE_ENV",
 ]);
 
 /**
@@ -55,11 +55,7 @@ export const DEFAULT_ENV_WHITELIST: ReadonlySet<string> = new Set([
  * full locale family; `HARNESS_*` / `RELAY_*` are the harness's own namespace
  * for wiring workspace paths + feature flags into dispatched subprocesses.
  */
-const DEFAULT_PREFIX_WHITELIST: readonly string[] = [
-  "LC_",
-  "HARNESS_",
-  "RELAY_"
-];
+const DEFAULT_PREFIX_WHITELIST: readonly string[] = ["LC_", "HARNESS_", "RELAY_"];
 
 /**
  * Matches env var names that look like credentials. Covers suffix forms
@@ -113,10 +109,7 @@ export function sanitizeEnv(
   opts: SanitizeEnvOptions = {}
 ): Record<string, string> {
   const passEnvSet = new Set(opts.passEnv ?? []);
-  const explicitKeys = new Set<string>([
-    ...passEnvSet,
-    ...Object.keys(opts.env ?? {})
-  ]);
+  const explicitKeys = new Set<string>([...passEnvSet, ...Object.keys(opts.env ?? {})]);
   const result: Record<string, string> = {};
 
   for (const [key, value] of Object.entries(parentEnv)) {
@@ -153,7 +146,7 @@ export function sanitizeEnv(
 function buildChildEnv(invocation: CommandInvocation): Record<string, string> {
   return sanitizeEnv(process.env, {
     passEnv: invocation.passEnv,
-    env: invocation.env
+    env: invocation.env,
   });
 }
 
@@ -179,9 +172,7 @@ export interface SpawnedProcess {
   /** Subscribe to stderr chunks as the child emits them. */
   onStderr(listener: (chunk: string) => void): void;
   /** Fires exactly once when the child exits (code/signal per Node semantics). */
-  onExit(
-    listener: (exitCode: number | null, signal: NodeJS.Signals | null) => void
-  ): void;
+  onExit(listener: (exitCode: number | null, signal: NodeJS.Signals | null) => void): void;
   /** Fires when the spawn itself fails (e.g. ENOENT for a missing binary). */
   onError(listener: (error: Error) => void): void;
   /**
@@ -217,15 +208,11 @@ export interface CommandInvoker {
 export class NodeCommandInvoker implements CommandInvoker {
   async exec(invocation: CommandInvocation): Promise<CommandResult> {
     return new Promise((resolve, reject) => {
-      const child: ChildProcessWithoutNullStreams = spawn(
-        invocation.command,
-        invocation.args,
-        {
-          cwd: invocation.cwd,
-          env: buildChildEnv(invocation),
-          stdio: "pipe"
-        }
-      );
+      const child: ChildProcessWithoutNullStreams = spawn(invocation.command, invocation.args, {
+        cwd: invocation.cwd,
+        env: buildChildEnv(invocation),
+        stdio: "pipe",
+      });
 
       let stdout = "";
       let stderr = "";
@@ -260,7 +247,7 @@ export class NodeCommandInvoker implements CommandInvoker {
         resolve({
           stdout,
           stderr,
-          exitCode: code ?? 1
+          exitCode: code ?? 1,
         });
       });
 
@@ -285,15 +272,11 @@ export class NodeCommandInvoker implements CommandInvoker {
    * same child.
    */
   spawn(invocation: CommandInvocation): SpawnedProcess {
-    const child: ChildProcessWithoutNullStreams = spawn(
-      invocation.command,
-      invocation.args,
-      {
-        cwd: invocation.cwd,
-        env: buildChildEnv(invocation),
-        stdio: "pipe"
-      }
-    );
+    const child: ChildProcessWithoutNullStreams = spawn(invocation.command, invocation.args, {
+      cwd: invocation.cwd,
+      env: buildChildEnv(invocation),
+      stdio: "pipe",
+    });
 
     if (invocation.stdin) {
       child.stdin.write(invocation.stdin);
@@ -319,7 +302,7 @@ export class NodeCommandInvoker implements CommandInvoker {
       },
       kill(signal) {
         return child.kill(signal);
-      }
+      },
     };
   }
 }

@@ -12,7 +12,7 @@ import {
   type CrosslinkSession,
   type CrosslinkMessage,
   type MessageStatus,
-  type MessageType
+  type MessageType,
 } from "./types.js";
 
 const STALE_HEARTBEAT_MS = 120_000;
@@ -73,10 +73,7 @@ function warnIfLegacyLayoutPresent(baseDir: string): void {
   const legacySessionsDir = join(legacyRoot, "sessions");
   const legacyMailboxesDir = join(legacyRoot, "mailboxes");
 
-  if (
-    hasNonEmptyDir(legacySessionsDir) ||
-    hasNonEmptyDir(legacyMailboxesDir)
-  ) {
+  if (hasNonEmptyDir(legacySessionsDir) || hasNonEmptyDir(legacyMailboxesDir)) {
     warnedLegacyRoots.add(legacyRoot);
     console.warn(
       `[crosslink] legacy layout detected at ${legacyRoot}. ` +
@@ -151,7 +148,7 @@ export class CrosslinkStore {
       ...session,
       sessionId: buildCrosslinkId("session"),
       registeredAt: now,
-      lastHeartbeat: now
+      lastHeartbeat: now,
     };
 
     await this.store.putDoc(STORE_NS.crosslinkSession, full.sessionId, full);
@@ -171,7 +168,7 @@ export class CrosslinkStore {
     const updated: CrosslinkSession = {
       ...session,
       ...patch,
-      lastHeartbeat: new Date().toISOString()
+      lastHeartbeat: new Date().toISOString(),
     };
 
     await this.store.putDoc(STORE_NS.crosslinkSession, sessionId, updated);
@@ -255,7 +252,7 @@ export class CrosslinkStore {
       status: "pending",
       createdAt: now,
       deliveredAt: null,
-      repliedAt: null
+      repliedAt: null,
     };
 
     await this.store.putDoc(
@@ -375,10 +372,7 @@ export class CrosslinkStore {
   // --- Internal helpers ---
 
   private async readSession(sessionId: string): Promise<CrosslinkSession | null> {
-    const doc = await this.store.getDoc<unknown>(
-      STORE_NS.crosslinkSession,
-      sessionId
-    );
+    const doc = await this.store.getDoc<unknown>(STORE_NS.crosslinkSession, sessionId);
     return doc ? safeParseSession(doc) : null;
   }
 }

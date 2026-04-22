@@ -21,7 +21,7 @@ export const ChannelEntryTypeSchema = z.enum([
   "agent_left",
   "ref_added",
   "run_started",
-  "run_completed"
+  "run_completed",
 ]);
 export type ChannelEntryType = z.infer<typeof ChannelEntryTypeSchema>;
 

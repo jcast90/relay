@@ -14,11 +14,7 @@ function resolveRepoRoot(): string {
   return fileURLToPath(new URL("../..", import.meta.url));
 }
 
-async function runTool(
-  command: string,
-  args: string[],
-  cwd: string
-): Promise<number> {
+async function runTool(command: string, args: string[], cwd: string): Promise<number> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd, stdio: "inherit" });
     child.on("error", reject);
@@ -54,11 +50,7 @@ export async function launchTui(userCwd: string): Promise<number> {
   if (!existsSync(tuiBinary)) {
     console.log("[rly tui] building release binary (first run — takes ~1 min)…");
     await requireCargo();
-    const buildExit = await runTool(
-      "cargo",
-      ["build", "--release", "-p", "relay-tui"],
-      repoRoot
-    );
+    const buildExit = await runTool("cargo", ["build", "--release", "-p", "relay-tui"], repoRoot);
     if (buildExit !== 0) {
       console.error("[rly tui] build failed — aborting launch.");
       return buildExit;
@@ -70,7 +62,7 @@ export async function launchTui(userCwd: string): Promise<number> {
     command: tuiBinary,
     args: [],
     cwd: userCwd,
-    env: { CLAUDE_BIN: claudeBin }
+    env: { CLAUDE_BIN: claudeBin },
   });
 }
 
@@ -107,19 +99,10 @@ export async function launchGui(options: LaunchGuiOptions = {}): Promise<number>
   // Cargo workspace target, same as relay-tui — gui/src-tauri is a workspace
   // member, so Tauri's bundle lands under <root>/target, not
   // <root>/gui/src-tauri/target.
-  const appPath = join(
-    repoRoot,
-    "target",
-    "release",
-    "bundle",
-    "macos",
-    "Relay.app"
-  );
+  const appPath = join(repoRoot, "target", "release", "bundle", "macos", "Relay.app");
 
   if (options.rebuild || !existsSync(appPath)) {
-    console.log(
-      "[rly gui] building release bundle (first run — takes ~2-3 min)…"
-    );
+    console.log("[rly gui] building release bundle (first run — takes ~2-3 min)…");
     await requireCargo();
     const buildExit = await runTool("pnpm", ["gui:build"], repoRoot);
     if (buildExit !== 0) {
@@ -144,13 +127,11 @@ export function parseGuiFlags(args: string[]): LaunchGuiOptions {
   const known = new Set(["--dev", "--rebuild"]);
   for (const arg of args) {
     if (arg.startsWith("--") && !known.has(arg)) {
-      console.warn(
-        `[rly gui] ignoring unknown flag ${arg}. Supported: --dev, --rebuild.`
-      );
+      console.warn(`[rly gui] ignoring unknown flag ${arg}. Supported: --dev, --rebuild.`);
     }
   }
   return {
     dev: args.includes("--dev"),
-    rebuild: args.includes("--rebuild")
+    rebuild: args.includes("--rebuild"),
   };
 }

@@ -6,17 +6,12 @@ import {
   rename,
   rm,
   stat,
-  writeFile
+  writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-import type {
-  BlobRef,
-  ChangeEvent,
-  HarnessStore,
-  ReadLogOptions
-} from "./store.js";
+import type { BlobRef, ChangeEvent, HarnessStore, ReadLogOptions } from "./store.js";
 
 /**
  * Filesystem-backed implementation of `HarnessStore`. Layout under `rootDir`:
@@ -88,9 +83,7 @@ export class FileHarnessStore implements HarnessStore {
         return null;
       }
       throw new Error(
-        `Failed to read doc at ${path}: ${
-          err instanceof Error ? err.message : String(err)
-        }`
+        `Failed to read doc at ${path}: ${err instanceof Error ? err.message : String(err)}`
       );
     }
 
@@ -101,9 +94,7 @@ export class FileHarnessStore implements HarnessStore {
       // Callers rely on corrupt→throw to avoid overwriting real data via a
       // subsequent putDoc.
       throw new Error(
-        `Corrupt doc at ${path}: ${
-          err instanceof Error ? err.message : String(err)
-        }`
+        `Corrupt doc at ${path}: ${err instanceof Error ? err.message : String(err)}`
       );
     }
   }
@@ -153,11 +144,7 @@ export class FileHarnessStore implements HarnessStore {
     await appendFile(path, JSON.stringify(entry) + "\n");
   }
 
-  async readLog<T>(
-    ns: string,
-    id: string,
-    opts?: ReadLogOptions
-  ): Promise<T[]> {
+  async readLog<T>(ns: string, id: string, opts?: ReadLogOptions): Promise<T[]> {
     assertSafeSegment(ns, "ns");
     assertSafeSegment(id, "id");
     const path = this.logPath(ns, id);
@@ -180,9 +167,7 @@ export class FileHarnessStore implements HarnessStore {
         // Match `getDoc`'s corruption posture: surface with file + line so
         // operators can repair instead of silently dropping the bad record.
         throw new Error(
-          `Corrupt log at ${path} line ${i}: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
+          `Corrupt log at ${path} line ${i}: ${err instanceof Error ? err.message : String(err)}`,
           { cause: err }
         );
       }
@@ -191,9 +176,7 @@ export class FileHarnessStore implements HarnessStore {
     let filtered = entries;
     if (opts?.after !== undefined) {
       const cursor = opts.after;
-      const idx = filtered.findIndex(
-        (e) => cursorKey(e) !== undefined && cursorKey(e) === cursor
-      );
+      const idx = filtered.findIndex((e) => cursorKey(e) !== undefined && cursorKey(e) === cursor);
       // Cursor not found → return []. Returning the full log would cause
       // duplicate delivery on resume; the contract is documented on
       // `ReadLogOptions.after`.
@@ -220,9 +203,7 @@ export class FileHarnessStore implements HarnessStore {
 
     const hasMeta = meta !== undefined && Object.keys(meta).length > 0;
     const blobTmp = `${path}.tmp.${process.pid}.${tmpCounter++}`;
-    const metaTmp = hasMeta
-      ? `${metaPath}.tmp.${process.pid}.${tmpCounter++}`
-      : null;
+    const metaTmp = hasMeta ? `${metaPath}.tmp.${process.pid}.${tmpCounter++}` : null;
 
     // Stage both tmp files BEFORE either rename so we never end up with a
     // durable blob that's missing its sidecar metadata.
@@ -262,7 +243,7 @@ export class FileHarnessStore implements HarnessStore {
       ns,
       id,
       size: bytes.byteLength,
-      contentType: hasMeta ? meta?.["contentType"] : undefined
+      contentType: hasMeta ? meta?.["contentType"] : undefined,
     };
   }
 
@@ -274,11 +255,7 @@ export class FileHarnessStore implements HarnessStore {
     return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
   }
 
-  async mutate<T>(
-    ns: string,
-    id: string,
-    fn: (prev: T | null) => T
-  ): Promise<T> {
+  async mutate<T>(ns: string, id: string, fn: (prev: T | null) => T): Promise<T> {
     assertSafeSegment(ns, "ns");
     assertSafeSegment(id, "id");
     return withKeyLock(ns, id, async () => {
@@ -312,11 +289,7 @@ export class FileHarnessStore implements HarnessStore {
     assertSafeSegment(ns, "ns");
     assertSafeSegment(id, "id");
     const pollIntervalMs = 250;
-    const candidates = [
-      this.docPath(ns, id),
-      this.logPath(ns, id),
-      this.blobPath(ns, id)
-    ];
+    const candidates = [this.docPath(ns, id), this.logPath(ns, id), this.blobPath(ns, id)];
 
     let lastMtimes = await readMtimes(candidates);
     let closed = false;
@@ -375,11 +348,7 @@ export class FileHarnessStore implements HarnessStore {
  * tail and installs its own. Self-cleans when no successor is queued.
  * In-process only.
  */
-async function withKeyLock<T>(
-  ns: string,
-  id: string,
-  fn: () => Promise<T>
-): Promise<T> {
+async function withKeyLock<T>(ns: string, id: string, fn: () => Promise<T>): Promise<T> {
   const key = `${ns}\u0000${id}`;
   const prev = keyLocks.get(key) ?? Promise.resolve();
   let resolveCurrent!: () => void;

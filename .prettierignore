@@ -1,0 +1,15 @@
+dist/
+node_modules/
+.claude/
+.relay/
+gui/dist/
+gui/src-tauri/target/
+tui/target/
+target/
+Cargo.lock
+pnpm-lock.yaml
+gui/pnpm-lock.yaml
+*.min.js
+*.min.css
+.changeset/
+CHANGELOG.md

@@ -5,7 +5,7 @@ import {
   linearizeTickets,
   getReadyTickets,
   initializeTicketLedger,
-  type TicketDefinition
+  type TicketDefinition,
 } from "../src/domain/ticket.js";
 
 const retryPolicy = { maxAgentAttempts: 2, maxTestFixLoops: 2 };
@@ -21,18 +21,13 @@ function ticket(id: string, deps: string[] = []): TicketDefinition {
     verificationCommands: [],
     docsToUpdate: [],
     dependsOn: deps,
-    retryPolicy
+    retryPolicy,
   };
 }
 
 describe("ticket DAG validation", () => {
   it("validates a valid DAG", () => {
-    const tickets = [
-      ticket("a"),
-      ticket("b", ["a"]),
-      ticket("c", ["a"]),
-      ticket("d", ["b", "c"])
-    ];
+    const tickets = [ticket("a"), ticket("b", ["a"]), ticket("c", ["a"]), ticket("d", ["b", "c"])];
 
     const result = validateTicketDag(tickets);
 
@@ -45,11 +40,7 @@ describe("ticket DAG validation", () => {
   });
 
   it("detects a cycle", () => {
-    const tickets = [
-      ticket("a", ["c"]),
-      ticket("b", ["a"]),
-      ticket("c", ["b"])
-    ];
+    const tickets = [ticket("a", ["c"]), ticket("b", ["a"]), ticket("c", ["b"])];
 
     const result = validateTicketDag(tickets);
 
@@ -80,11 +71,7 @@ describe("linearizeTickets", () => {
 
 describe("getReadyTickets", () => {
   it("returns tickets with all deps completed", () => {
-    const ledger = initializeTicketLedger([
-      ticket("a"),
-      ticket("b", ["a"]),
-      ticket("c")
-    ]);
+    const ledger = initializeTicketLedger([ticket("a"), ticket("b", ["a"]), ticket("c")]);
 
     // a and c should be ready (no deps or deps met)
     const ready = getReadyTickets(ledger);
@@ -96,10 +83,7 @@ describe("getReadyTickets", () => {
   });
 
   it("unblocks tickets when deps complete", () => {
-    const ledger = initializeTicketLedger([
-      ticket("a"),
-      ticket("b", ["a"])
-    ]);
+    const ledger = initializeTicketLedger([ticket("a"), ticket("b", ["a"])]);
 
     // Mark a as completed
     ledger[0].status = "completed";
@@ -111,11 +95,7 @@ describe("getReadyTickets", () => {
 
 describe("initializeTicketLedger", () => {
   it("sets correct initial statuses based on dependencies", () => {
-    const ledger = initializeTicketLedger([
-      ticket("a"),
-      ticket("b", ["a"]),
-      ticket("c")
-    ]);
+    const ledger = initializeTicketLedger([ticket("a"), ticket("b", ["a"]), ticket("c")]);
 
     expect(ledger[0].status).toBe("ready");
     expect(ledger[1].status).toBe("blocked");

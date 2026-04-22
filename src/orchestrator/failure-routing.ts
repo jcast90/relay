@@ -22,7 +22,8 @@ export function fallbackFailureClassification(input: {
   artifactContext: string[];
   rejectedCommands: string[];
 }): FailureClassification {
-  const combined = `${input.artifactContext.join("\n")}\n${input.rejectedCommands.join("\n")}`.toLowerCase();
+  const combined =
+    `${input.artifactContext.join("\n")}\n${input.rejectedCommands.join("\n")}`.toLowerCase();
 
   if (
     input.rejectedCommands.length > 0 ||
@@ -33,7 +34,7 @@ export function fallbackFailureClassification(input: {
     return {
       category: "bad_command_plan",
       rationale: "The failure points to a command-plan or execution-environment issue.",
-      nextAction: "Adjust the verification command plan before changing product code."
+      nextAction: "Adjust the verification command plan before changing product code.",
     };
   }
 
@@ -45,20 +46,18 @@ export function fallbackFailureClassification(input: {
     return {
       category: "fix_test",
       rationale: "The failing artifact looks isolated to tests or verification setup.",
-      nextAction: "Repair tests, fixtures, mocks, or verification setup."
+      nextAction: "Repair tests, fixtures, mocks, or verification setup.",
     };
   }
 
   return {
     category: "fix_code",
     rationale: "The failing artifact most likely points to implementation logic.",
-    nextAction: "Repair the product or business logic implicated by the failure."
+    nextAction: "Repair the product or business logic implicated by the failure.",
   };
 }
 
-export function buildRetryContext(
-  classification: FailureClassification | null
-): string[] {
+export function buildRetryContext(classification: FailureClassification | null): string[] {
   if (!classification) {
     return [];
   }
@@ -66,12 +65,10 @@ export function buildRetryContext(
   return [
     `Failure category: ${classification.category}`,
     `Failure rationale: ${classification.rationale}`,
-    `Suggested next action: ${classification.nextAction}`
+    `Suggested next action: ${classification.nextAction}`,
   ];
 }
 
-export function isVerificationPlanIssue(
-  category: FailureCategory | null
-): boolean {
+export function isVerificationPlanIssue(category: FailureCategory | null): boolean {
   return category === "bad_command_plan";
 }

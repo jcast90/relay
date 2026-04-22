@@ -10,11 +10,7 @@ function resolveRepoRoot(): string {
   return fileURLToPath(new URL("../..", import.meta.url));
 }
 
-async function runTool(
-  command: string,
-  args: string[],
-  cwd: string
-): Promise<number> {
+async function runTool(command: string, args: string[], cwd: string): Promise<number> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd, stdio: "inherit" });
     child.on("error", reject);
@@ -40,13 +36,7 @@ export function parseRebuildFlags(args: string[]): RebuildOptions {
   const explicitDist = args.includes("--dist");
   const anyExplicit = explicitTui || explicitGui || explicitDist;
 
-  const known = new Set([
-    "--all",
-    "--tui",
-    "--gui",
-    "--dist",
-    "--skip-install"
-  ]);
+  const known = new Set(["--all", "--tui", "--gui", "--dist", "--skip-install"]);
   for (const arg of args) {
     if (arg.startsWith("--") && !known.has(arg)) {
       console.warn(
@@ -59,7 +49,7 @@ export function parseRebuildFlags(args: string[]): RebuildOptions {
     dist: all || explicitDist || !anyExplicit,
     tui: all || explicitTui,
     gui: all || explicitGui,
-    skipInstall: args.includes("--skip-install")
+    skipInstall: args.includes("--skip-install"),
   };
 }
 
@@ -97,11 +87,7 @@ export async function runRebuild(options: RebuildOptions): Promise<number> {
 
   if (options.tui) {
     console.log("[rly rebuild] TUI — cargo build --release -p relay-tui");
-    const exit = await runTool(
-      "cargo",
-      ["build", "--release", "-p", "relay-tui"],
-      repoRoot
-    );
+    const exit = await runTool("cargo", ["build", "--release", "-p", "relay-tui"], repoRoot);
     if (exit !== 0) {
       console.error("[rly rebuild] TUI build failed — stopping.");
       return exit;

@@ -33,9 +33,7 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
   // first row, at which point we auto-set to that row. If the current
   // primary is later unchecked, we reassign to the earliest still-
   // selected row (by master-array order, not visible order).
-  const [primaryWorkspaceId, setPrimaryWorkspaceId] = useState<string | null>(
-    null,
-  );
+  const [primaryWorkspaceId, setPrimaryWorkspaceId] = useState<string | null>(null);
   const filterRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -54,7 +52,7 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
           selected: false,
           alias: defaultAlias(w.repoPath),
           spawn: false,
-        })),
+        }))
       );
     });
   }, [open]);
@@ -68,11 +66,7 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
       .map((r, origIndex) => ({ row: r, origIndex }))
       .filter(({ row }) => {
         if (tokens.length === 0) return true;
-        const haystack = [
-          row.workspace.repoPath,
-          row.workspace.workspaceId,
-          row.alias,
-        ]
+        const haystack = [row.workspace.repoPath, row.workspace.workspaceId, row.alias]
           .join(" ")
           .toLowerCase();
         return tokens.every((tok) => haystack.includes(tok));
@@ -128,9 +122,7 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
     // Radio-click: assumes the row is already selected (the radio is only
     // rendered on selected rows). Defensive: verify and no-op otherwise.
     setRepos((prev) => {
-      const match = prev.find(
-        (r) => r.workspace.workspaceId === workspaceId && r.selected,
-      );
+      const match = prev.find((r) => r.workspace.workspaceId === workspaceId && r.selected);
       if (!match) return prev;
       setPrimaryWorkspaceId(workspaceId);
       return prev;
@@ -139,16 +131,12 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
 
   const toggleSpawn = (origIndex: number) => {
     setRepos((prev) =>
-      prev.map((row, j) =>
-        j === origIndex ? { ...row, spawn: !row.spawn } : row,
-      ),
+      prev.map((row, j) => (j === origIndex ? { ...row, spawn: !row.spawn } : row))
     );
   };
 
   const updateAlias = (origIndex: number, alias: string) => {
-    setRepos((prev) =>
-      prev.map((row, j) => (j === origIndex ? { ...row, alias } : row)),
-    );
+    setRepos((prev) => prev.map((row, j) => (j === origIndex ? { ...row, alias } : row)));
   };
 
   const onFilterKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -198,7 +186,7 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
         name.trim(),
         description.trim(),
         selected,
-        effectivePrimary,
+        effectivePrimary
       );
 
       // Spawn all non-primary rows that were opted-in. Run in parallel; a
@@ -206,31 +194,25 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
       // the channel was created successfully, and the user can still
       // launch agents later from the right pane.
       const toSpawn = selectedRows.filter(
-        (r) =>
-          r.spawn &&
-          r.workspace.workspaceId !== effectivePrimary,
+        (r) => r.spawn && r.workspace.workspaceId !== effectivePrimary
       );
       if (toSpawn.length > 0) {
         const results = await Promise.all(
           toSpawn.map(async (r) => {
             const alias = r.alias.trim() || defaultAlias(r.workspace.repoPath);
             try {
-              await api.spawnAgent(
-                result.channelId,
-                alias,
-                r.workspace.repoPath,
-              );
+              await api.spawnAgent(result.channelId, alias, r.workspace.repoPath);
               return { alias, ok: true as const };
             } catch (e) {
               return { alias, ok: false as const, error: String(e) };
             }
-          }),
+          })
         );
         const failures = results.filter((x) => !x.ok);
         if (failures.length > 0) {
           setSpawnWarning(
             `Channel created, but ${failures.length}/${results.length} spawn(s) failed: ` +
-              failures.map((f) => `@${f.alias}`).join(", "),
+              failures.map((f) => `@${f.alias}`).join(", ")
           );
         }
       }
@@ -274,9 +256,7 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
               </span>
             </div>
             {repos.length === 0 ? (
-              <div className="empty">
-                No registered workspaces. Run `rly up` in a repo first.
-              </div>
+              <div className="empty">No registered workspaces. Run `rly up` in a repo first.</div>
             ) : (
               <>
                 <input
@@ -293,8 +273,7 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
                   ) : (
                     visible.map(({ row, origIndex }, i) => {
                       const isPrimary =
-                        row.selected &&
-                        primaryWorkspaceId === row.workspace.workspaceId;
+                        row.selected && primaryWorkspaceId === row.workspace.workspaceId;
                       return (
                         <div
                           key={row.workspace.workspaceId}
@@ -307,14 +286,9 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
                             onChange={() => toggleSelected(origIndex)}
                             title="Include this repo in the channel"
                           />
-                          <span
-                            className="repo-path"
-                            title={row.workspace.repoPath}
-                          >
+                          <span className="repo-path" title={row.workspace.repoPath}>
                             {basename(row.workspace.repoPath)}
-                            {isPrimary && (
-                              <span className="primary-badge">PRIMARY</span>
-                            )}
+                            {isPrimary && <span className="primary-badge">PRIMARY</span>}
                           </span>
                           <input
                             className="alias-input"
@@ -335,9 +309,7 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
                                 type="radio"
                                 name="primary-workspace"
                                 checked={isPrimary}
-                                onChange={() =>
-                                  setPrimary(row.workspace.workspaceId)
-                                }
+                                onChange={() => setPrimary(row.workspace.workspaceId)}
                               />
                               primary
                             </label>
@@ -392,5 +364,8 @@ function basename(p: string): string {
 }
 
 function defaultAlias(repoPath: string): string {
-  return basename(repoPath).replace(/[^a-z0-9-]/gi, "").toLowerCase().slice(0, 12);
+  return basename(repoPath)
+    .replace(/[^a-z0-9-]/gi, "")
+    .toLowerCase()
+    .slice(0, 12);
 }

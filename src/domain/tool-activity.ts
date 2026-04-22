@@ -104,9 +104,7 @@ export function parseClaudeStreamLine(line: string): string | null {
     const name = typeof b.name === "string" ? b.name : "tool";
     const inputRaw = b.input;
     const input =
-      inputRaw && typeof inputRaw === "object"
-        ? (inputRaw as Record<string, unknown>)
-        : undefined;
+      inputRaw && typeof inputRaw === "object" ? (inputRaw as Record<string, unknown>) : undefined;
     return describeToolUse(name, input);
   }
   return null;

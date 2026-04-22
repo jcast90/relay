@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  isLoopbackHost,
-  validateServeOptions
-} from "../../src/mcp/serve-validation.js";
+import { isLoopbackHost, validateServeOptions } from "../../src/mcp/serve-validation.js";
 
 /**
  * OSS-03: `rly serve` must hard-stop when asked to bind non-loopback
@@ -40,7 +37,7 @@ describe("validateServeOptions", () => {
     const result = validateServeOptions({
       host: "0.0.0.0",
       token: undefined,
-      allowUnauthenticatedRemote: false
+      allowUnauthenticatedRemote: false,
     });
 
     expect(result.kind).toBe("error");
@@ -54,7 +51,7 @@ describe("validateServeOptions", () => {
     const result = validateServeOptions({
       host: "192.168.1.10",
       token: undefined,
-      allowUnauthenticatedRemote: false
+      allowUnauthenticatedRemote: false,
     });
 
     expect(result.kind).toBe("error");
@@ -67,7 +64,7 @@ describe("validateServeOptions", () => {
     const result = validateServeOptions({
       host: "0.0.0.0",
       token: "s3cret",
-      allowUnauthenticatedRemote: false
+      allowUnauthenticatedRemote: false,
     });
 
     expect(result.kind).toBe("ok");
@@ -80,7 +77,7 @@ describe("validateServeOptions", () => {
     const result = validateServeOptions({
       host: "0.0.0.0",
       token: undefined,
-      allowUnauthenticatedRemote: true
+      allowUnauthenticatedRemote: true,
     });
 
     expect(result.kind).toBe("ok");
@@ -98,7 +95,7 @@ describe("validateServeOptions", () => {
     const result = validateServeOptions({
       host: "127.0.0.1",
       token: undefined,
-      allowUnauthenticatedRemote: false
+      allowUnauthenticatedRemote: false,
     });
 
     expect(result.kind).toBe("ok");
@@ -114,7 +111,7 @@ describe("validateServeOptions", () => {
     const result = validateServeOptions({
       host: "127.0.0.1",
       token: "s3cret",
-      allowUnauthenticatedRemote: false
+      allowUnauthenticatedRemote: false,
     });
 
     expect(result.kind).toBe("ok");
@@ -127,7 +124,7 @@ describe("validateServeOptions", () => {
     const result = validateServeOptions({
       host: "::1",
       token: undefined,
-      allowUnauthenticatedRemote: false
+      allowUnauthenticatedRemote: false,
     });
     expect(result.kind).toBe("ok");
   });
@@ -140,7 +137,7 @@ describe("validateServeOptions", () => {
     const result = validateServeOptions({
       host: "localhost",
       token: undefined,
-      allowUnauthenticatedRemote: false
+      allowUnauthenticatedRemote: false,
     });
 
     expect(result.kind).toBe("error");

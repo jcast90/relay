@@ -9,7 +9,7 @@ import {
   type AgentCapability,
   type FailureClassification,
   type AgentProvider,
-  type WorkRequest
+  type WorkRequest,
 } from "../domain/agent.js";
 import { parsePhasePlan, type PhasePlan } from "../domain/phase-plan.js";
 import type { CommandInvoker } from "./command-invoker.js";
@@ -80,7 +80,7 @@ const CLAUDE_PASS_ENV: readonly string[] = [
   // legacy alias. Keep both so users on either convention work.
   "GOOGLE_CLOUD_PROJECT",
   "GOOGLE_CLOUD_QUOTA_PROJECT",
-  "CLOUDSDK_CORE_PROJECT"
+  "CLOUDSDK_CORE_PROJECT",
 ];
 
 /**
@@ -100,7 +100,7 @@ const CODEX_PASS_ENV: readonly string[] = [
   "AZURE_OPENAI_API_VERSION",
   "AZURE_OPENAI_DEPLOYMENT",
   "AZURE_OPENAI_DEPLOYMENT_NAME",
-  "CODEX_HOME"
+  "CODEX_HOME",
 ];
 
 abstract class CliAgentBase implements Agent {
@@ -129,7 +129,7 @@ abstract class CliAgentBase implements Agent {
 
     return {
       ...response.parsed,
-      rawResponse: response.rawResponse
+      rawResponse: response.rawResponse,
     };
   }
 
@@ -142,9 +142,7 @@ abstract class CliAgentBase implements Agent {
       proposedCommands: baseResult.proposedCommands,
       blockers: baseResult.blockers,
       failureClassification: baseResult.failureClassification,
-      phasePlan: baseResult.phasePlan
-        ? parsePhasePlan(baseResult.phasePlan)
-        : undefined
+      phasePlan: baseResult.phasePlan ? parsePhasePlan(baseResult.phasePlan) : undefined,
     };
   }
 
@@ -178,7 +176,7 @@ export class CodexCliAgent extends CliAgentBase {
         "--output-schema",
         schemaPath,
         "-o",
-        outputPath
+        outputPath,
       ];
 
       if (autoApprove) {
@@ -199,7 +197,7 @@ export class CodexCliAgent extends CliAgentBase {
         // Codex authenticates via its own config or API key env vars. The
         // invoker strips secrets by default (OSS-03); opt these back in so
         // users who rely on env-based auth aren't silently broken.
-        passEnv: [...CODEX_PASS_ENV]
+        passEnv: [...CODEX_PASS_ENV],
       });
 
       if (result.exitCode !== 0) {
@@ -210,12 +208,12 @@ export class CodexCliAgent extends CliAgentBase {
 
       return {
         rawResponse,
-        parsed: this.normalizePayload(JSON.parse(rawResponse))
+        parsed: this.normalizePayload(JSON.parse(rawResponse)),
       };
     } finally {
       await rm(tempDir, {
         recursive: true,
-        force: true
+        force: true,
       });
     }
   }
@@ -245,7 +243,7 @@ export class ClaudeCliAgent extends CliAgentBase {
       "--output-format",
       "json",
       "--json-schema",
-      JSON.stringify(agentResultJsonSchema)
+      JSON.stringify(agentResultJsonSchema),
     ];
 
     if (autoApprove) {
@@ -268,7 +266,7 @@ export class ClaudeCliAgent extends CliAgentBase {
       // Claude CLI authenticates via its own config dir or API key env vars.
       // The invoker strips secrets by default (OSS-03); opt these back in so
       // users who rely on env-based auth aren't silently broken.
-      passEnv: [...CLAUDE_PASS_ENV]
+      passEnv: [...CLAUDE_PASS_ENV],
     });
 
     if (result.exitCode !== 0) {
@@ -277,7 +275,7 @@ export class ClaudeCliAgent extends CliAgentBase {
 
     return {
       rawResponse: result.stdout,
-      parsed: this.normalizePayload(JSON.parse(result.stdout))
+      parsed: this.normalizePayload(JSON.parse(result.stdout)),
     };
   }
 
@@ -298,7 +296,7 @@ export class ClaudeCliAgent extends CliAgentBase {
       "stream-json",
       "--verbose",
       "--json-schema",
-      JSON.stringify(agentResultJsonSchema)
+      JSON.stringify(agentResultJsonSchema),
     ];
     if (autoApprove) args.push("--dangerously-skip-permissions");
     else args.push("--permission-mode", "default");
@@ -310,7 +308,7 @@ export class ClaudeCliAgent extends CliAgentBase {
       command: "claude",
       args,
       cwd: this.cwd,
-      timeoutMs: 300_000
+      timeoutMs: 300_000,
     });
 
     let stdoutBuf = "";
@@ -377,7 +375,7 @@ export class ClaudeCliAgent extends CliAgentBase {
     }
     return {
       rawResponse: raw,
-      parsed: this.normalizePayload(JSON.parse(raw))
+      parsed: this.normalizePayload(JSON.parse(raw)),
     };
   }
 }
@@ -433,7 +431,7 @@ function buildPrompt(agentName: string, request: WorkRequest): string {
     "If this is classification work (kind=classify_request), return a classification object with: tier (trivial|bugfix|feature_small|feature_large|architectural|multi_repo), rationale, suggestedSpecialties, estimatedTicketCount, needsDesignDoc, needsUserApproval.",
     "If this is ticket decomposition work (kind=decompose_tickets), return a ticketPlan object with parallelizable tickets and dependsOn edges.",
     "If this is design doc work (kind=generate_design_doc), provide the design document in your summary.",
-    "Otherwise, omit phasePlan, classification, and ticketPlan."
+    "Otherwise, omit phasePlan, classification, and ticketPlan.",
   ];
 
   return lines.join("\n");

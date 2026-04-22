@@ -11,7 +11,7 @@ import {
   mirrorLinearProject,
   mirrorTicketId,
   toMirrorTicket,
-  type LinearIssueNode
+  type LinearIssueNode,
 } from "../../src/integrations/linear-mirror.js";
 import { FileHarnessStore } from "../../src/storage/file-store.js";
 
@@ -30,7 +30,7 @@ function stubFetch(responses: Array<unknown>): typeof fetch {
     i += 1;
     return new Response(JSON.stringify(body), {
       status: 200,
-      headers: { "content-type": "application/json" }
+      headers: { "content-type": "application/json" },
     });
   }) as unknown as typeof fetch;
 }
@@ -43,7 +43,7 @@ function issue(
     url: `https://linear.app/acme/issue/${overrides.identifier}`,
     state: { type: "unstarted", name: "Todo" },
     updatedAt: "2026-04-21T00:00:00.000Z",
-    ...overrides
+    ...overrides,
   };
 }
 
@@ -75,7 +75,7 @@ describe("linear-mirror", () => {
         id: "issue-uuid-1",
         identifier: "ENG-42",
         title: "Rate-limit search",
-        state: { type: "started", name: "In Progress" }
+        state: { type: "started", name: "In Progress" },
       }),
       "2026-04-21T10:00:00.000Z"
     );
@@ -101,7 +101,7 @@ describe("linear-mirror", () => {
         id: "b",
         identifier: "ENG-2",
         state: { type: "completed", name: "Done" },
-        updatedAt: "2026-04-20T00:00:00.000Z"
+        updatedAt: "2026-04-20T00:00:00.000Z",
       }),
       "2026-04-21T00:00:00.000Z"
     );
@@ -112,25 +112,23 @@ describe("linear-mirror", () => {
     const fetchImpl = stubFetch([{ data: { project: null } }]);
     const out = await fetchLinearProject("missing", {
       apiKey: "lin_api_x",
-      fetch: fetchImpl
+      fetch: fetchImpl,
     });
     expect(out).toBeNull();
   });
 
   it("surfaces Linear GraphQL errors so the CLI can stop before writing", async () => {
-    const fetchImpl = stubFetch([
-      { errors: [{ message: "Invalid project id" }] }
-    ]);
-    await expect(
-      fetchLinearProject("bad", { apiKey: "k", fetch: fetchImpl })
-    ).rejects.toThrow(/Invalid project id/);
+    const fetchImpl = stubFetch([{ errors: [{ message: "Invalid project id" }] }]);
+    await expect(fetchLinearProject("bad", { apiKey: "k", fetch: fetchImpl })).rejects.toThrow(
+      /Invalid project id/
+    );
   });
 
   it("mirrors issues onto the channel board and preserves existing Relay tickets", async () => {
     await withStore(async (store) => {
       const channel = await store.createChannel({
         name: "mirror-test",
-        description: "test"
+        description: "test",
       });
 
       // Seed a Relay-authored ticket so we can prove the mirror is additive.
@@ -151,8 +149,8 @@ describe("linear-mirror", () => {
           startedAt: null,
           completedAt: null,
           updatedAt: "2026-04-21T00:00:00.000Z",
-          runId: null
-        }
+          runId: null,
+        },
       ]);
 
       const fetchImpl = stubFetch([
@@ -164,19 +162,19 @@ describe("linear-mirror", () => {
                 issue({
                   id: "li-2",
                   identifier: "ENG-2",
-                  state: { type: "started", name: "In Progress" }
-                })
-              ]
-            }
-          }
-        }
+                  state: { type: "started", name: "In Progress" },
+                }),
+              ],
+            },
+          },
+        },
       ]);
 
-      const result = await mirrorLinearProject(
-        channel.channelId,
-        "proj-uuid",
-        { store, apiKey: "lin_api_x", fetch: fetchImpl }
-      );
+      const result = await mirrorLinearProject(channel.channelId, "proj-uuid", {
+        store,
+        apiKey: "lin_api_x",
+        fetch: fetchImpl,
+      });
 
       expect(result.fetched).toBe(2);
       expect(result.mirrored).toHaveLength(2);
@@ -200,7 +198,7 @@ describe("linear-mirror", () => {
     await withStore(async (store) => {
       const channel = await store.createChannel({
         name: "resync",
-        description: "test"
+        description: "test",
       });
 
       const firstFetch = stubFetch([
@@ -211,17 +209,17 @@ describe("linear-mirror", () => {
                 issue({
                   id: "li-1",
                   identifier: "ENG-7",
-                  state: { type: "unstarted", name: "Todo" }
-                })
-              ]
-            }
-          }
-        }
+                  state: { type: "unstarted", name: "Todo" },
+                }),
+              ],
+            },
+          },
+        },
       ]);
       await mirrorLinearProject(channel.channelId, "proj", {
         store,
         apiKey: "k",
-        fetch: firstFetch
+        fetch: firstFetch,
       });
 
       const secondFetch = stubFetch([
@@ -233,17 +231,17 @@ describe("linear-mirror", () => {
                   id: "li-1",
                   identifier: "ENG-7",
                   state: { type: "completed", name: "Done" },
-                  updatedAt: "2026-04-22T00:00:00.000Z"
-                })
-              ]
-            }
-          }
-        }
+                  updatedAt: "2026-04-22T00:00:00.000Z",
+                }),
+              ],
+            },
+          },
+        },
       ]);
       await mirrorLinearProject(channel.channelId, "proj", {
         store,
         apiKey: "k",
-        fetch: secondFetch
+        fetch: secondFetch,
       });
 
       const board = await store.readChannelTickets(channel.channelId);
@@ -259,20 +257,20 @@ describe("linear-mirror", () => {
       async () =>
         new Response("rate limited", {
           status: 429,
-          headers: { "content-type": "text/plain" }
+          headers: { "content-type": "text/plain" },
         })
     ) as unknown as typeof fetch;
 
     await withStore(async (store) => {
       const channel = await store.createChannel({
         name: "err",
-        description: "test"
+        description: "test",
       });
       await expect(
         mirrorLinearProject(channel.channelId, "proj", {
           store,
           apiKey: "k",
-          fetch: fetchImpl
+          fetch: fetchImpl,
         })
       ).rejects.toThrow(/HTTP 429/);
     });

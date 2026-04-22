@@ -4,18 +4,10 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import {
-  rewindApply,
-  rewindSnapshot,
-  type RewindDeps
-} from "../src/cli/chat-rewind.js";
+import { rewindApply, rewindSnapshot, type RewindDeps } from "../src/cli/chat-rewind.js";
 import { SessionStore } from "../src/cli/session-store.js";
 import type { Channel } from "../src/domain/channel.js";
-import type {
-  BlobRef,
-  ChangeEvent,
-  HarnessStore
-} from "../src/storage/store.js";
+import type { BlobRef, ChangeEvent, HarnessStore } from "../src/storage/store.js";
 
 // Minimal HarnessStore stub: the rewind flow only ever touches SessionStore,
 // which in turn writes/deletes an advisory coordination record. Anything
@@ -41,11 +33,7 @@ class NullHarnessStore implements HarnessStore {
   async getBlob(): Promise<Uint8Array> {
     throw new Error("NullHarnessStore.getBlob not used by rewind tests");
   }
-  async mutate<T>(
-    _ns: string,
-    _id: string,
-    fn: (prev: T | null) => T
-  ): Promise<T> {
+  async mutate<T>(_ns: string, _id: string, fn: (prev: T | null) => T): Promise<T> {
     return fn(null);
   }
   // eslint-disable-next-line require-yield
@@ -103,10 +91,10 @@ function makeChannel(repoPaths: string[]): Channel {
     repoAssignments: repoPaths.map((p, i) => ({
       alias: `repo${i + 1}`,
       workspaceId: `ws-${i + 1}`,
-      repoPath: p
+      repoPath: p,
     })),
     createdAt: "2025-01-01T00:00:00.000Z",
-    updatedAt: "2025-01-01T00:00:00.000Z"
+    updatedAt: "2025-01-01T00:00:00.000Z",
   };
 }
 
@@ -116,17 +104,17 @@ describe("rewindSnapshot", () => {
     const git = makeGit({
       stdoutByKey: {
         "/repos/a": { "rev-parse HEAD": "a1b2c3d\n" },
-        "/repos/b": { "rev-parse HEAD": "e4f5g6h\n" }
-      }
+        "/repos/b": { "rev-parse HEAD": "e4f5g6h\n" },
+      },
     });
     const deps: RewindDeps = {
       channelStore: fakeChannelStore(channel),
       sessionStore: {
         truncateBeforeTimestamp: async () => 0,
-        clearClaudeSessionIds: async () => null
+        clearClaudeSessionIds: async () => null,
       },
       gitExec: git.exec,
-      now: () => 1700000000000
+      now: () => 1700000000000,
     };
 
     const result = await rewindSnapshot("ch-1", "sess-1", deps);
@@ -137,26 +125,20 @@ describe("rewindSnapshot", () => {
         alias: "repo1",
         repoPath: "/repos/a",
         sha: "a1b2c3d",
-        ref: "refs/harness-rewind/sess-1/1700000000000"
+        ref: "refs/harness-rewind/sess-1/1700000000000",
       },
       {
         alias: "repo2",
         repoPath: "/repos/b",
         sha: "e4f5g6h",
-        ref: "refs/harness-rewind/sess-1/1700000000000"
-      }
+        ref: "refs/harness-rewind/sess-1/1700000000000",
+      },
     ]);
 
     // Every repo got exactly one rev-parse HEAD + one update-ref.
     const perRepo = (cwd: string) => git.calls.filter((c) => c.cwd === cwd);
-    expect(perRepo("/repos/a").map((c) => c.args[0])).toEqual([
-      "rev-parse",
-      "update-ref"
-    ]);
-    expect(perRepo("/repos/b").map((c) => c.args[0])).toEqual([
-      "rev-parse",
-      "update-ref"
-    ]);
+    expect(perRepo("/repos/a").map((c) => c.args[0])).toEqual(["rev-parse", "update-ref"]);
+    expect(perRepo("/repos/b").map((c) => c.args[0])).toEqual(["rev-parse", "update-ref"]);
   });
 
   it("throws a clear error when the channel is missing", async () => {
@@ -164,31 +146,27 @@ describe("rewindSnapshot", () => {
       channelStore: fakeChannelStore(null),
       sessionStore: {
         truncateBeforeTimestamp: async () => 0,
-        clearClaudeSessionIds: async () => null
+        clearClaudeSessionIds: async () => null,
       },
-      gitExec: makeGit().exec
+      gitExec: makeGit().exec,
     };
-    await expect(rewindSnapshot("missing", "sess-x", deps)).rejects.toThrow(
-      /Channel not found/
-    );
+    await expect(rewindSnapshot("missing", "sess-x", deps)).rejects.toThrow(/Channel not found/);
   });
 
   it("throws when `git rev-parse HEAD` produces empty output", async () => {
     const channel = makeChannel(["/repos/a"]);
     const git = makeGit({
-      stdoutByKey: { "/repos/a": { "rev-parse HEAD": "" } }
+      stdoutByKey: { "/repos/a": { "rev-parse HEAD": "" } },
     });
     const deps: RewindDeps = {
       channelStore: fakeChannelStore(channel),
       sessionStore: {
         truncateBeforeTimestamp: async () => 0,
-        clearClaudeSessionIds: async () => null
+        clearClaudeSessionIds: async () => null,
       },
-      gitExec: git.exec
+      gitExec: git.exec,
     };
-    await expect(rewindSnapshot("ch-1", "sess-1", deps)).rejects.toThrow(
-      /empty output/
-    );
+    await expect(rewindSnapshot("ch-1", "sess-1", deps)).rejects.toThrow(/empty output/);
   });
 });
 
@@ -202,20 +180,19 @@ describe("rewindApply", () => {
       stdoutByKey: {
         "/repos/a": {
           [`rev-parse --verify ${refName}^{commit}`]: "aaa\n",
-          "status --porcelain": ""
+          "status --porcelain": "",
         },
         "/repos/b": {
           [`rev-parse --verify ${refName}^{commit}`]: "bbb\n",
-          "status --porcelain": ""
-        }
-      }
+          "status --porcelain": "",
+        },
+      },
     });
   }
 
   it("pre-flight-verifies every ref + clean worktree before mutating", async () => {
     const git = happyPathGit();
-    const truncated: Array<{ channelId: string; sessionId: string; ts: string }> =
-      [];
+    const truncated: Array<{ channelId: string; sessionId: string; ts: string }> = [];
     const cleared: Array<{ channelId: string; sessionId: string }> = [];
     const deps: RewindDeps = {
       channelStore: fakeChannelStore(channel),
@@ -227,23 +204,17 @@ describe("rewindApply", () => {
         clearClaudeSessionIds: async (channelId, sessionId) => {
           cleared.push({ channelId, sessionId });
           return null;
-        }
+        },
       },
-      gitExec: git.exec
+      gitExec: git.exec,
     };
 
-    const result = await rewindApply(
-      "ch-1",
-      "sess-1",
-      refKey,
-      "2025-01-01T00:00:05.000Z",
-      deps
-    );
+    const result = await rewindApply("ch-1", "sess-1", refKey, "2025-01-01T00:00:05.000Z", deps);
 
     // Each reset advertises its SHA.
     expect(result.reset).toEqual([
       { alias: "repo1", repoPath: "/repos/a", sha: "aaa" },
-      { alias: "repo2", repoPath: "/repos/b", sha: "bbb" }
+      { alias: "repo2", repoPath: "/repos/b", sha: "bbb" },
     ]);
     expect(result.removedMessages).toBe(3);
 
@@ -254,11 +225,7 @@ describe("rewindApply", () => {
     const firstReset = kinds.findIndex((k) => k.startsWith("reset --hard"));
     const lastPreflight = Math.max(
       ...kinds
-        .map((k, i) =>
-          k.startsWith("rev-parse --verify") || k === "status --porcelain"
-            ? i
-            : -1
-        )
+        .map((k, i) => (k.startsWith("rev-parse --verify") || k === "status --porcelain" ? i : -1))
         .filter((i) => i >= 0)
     );
     expect(lastPreflight).toBeLessThan(firstReset);
@@ -272,13 +239,13 @@ describe("rewindApply", () => {
       stdoutByKey: {
         "/repos/a": {
           [`rev-parse --verify ${refName}^{commit}`]: "aaa\n",
-          "status --porcelain": ""
+          "status --porcelain": "",
         },
         "/repos/b": {
           [`rev-parse --verify ${refName}^{commit}`]: "bbb\n",
-          "status --porcelain": " M src/hand-edited.ts\n?? untracked.txt\n"
-        }
-      }
+          "status --porcelain": " M src/hand-edited.ts\n?? untracked.txt\n",
+        },
+      },
     });
     let truncated = false;
     let cleared = false;
@@ -292,9 +259,9 @@ describe("rewindApply", () => {
         clearClaudeSessionIds: async () => {
           cleared = true;
           return null;
-        }
+        },
       },
-      gitExec: git.exec
+      gitExec: git.exec,
     };
 
     await expect(
@@ -302,9 +269,7 @@ describe("rewindApply", () => {
     ).rejects.toThrow(/uncommitted or untracked/);
 
     // Pre-flight must fail BEFORE any reset --hard or session mutation.
-    expect(
-      git.calls.some((c) => c.args[0] === "reset" && c.args[1] === "--hard")
-    ).toBe(false);
+    expect(git.calls.some((c) => c.args[0] === "reset" && c.args[1] === "--hard")).toBe(false);
     expect(truncated).toBe(false);
     expect(cleared).toBe(false);
   });
@@ -314,14 +279,14 @@ describe("rewindApply", () => {
       stdoutByKey: {
         "/repos/a": {
           [`rev-parse --verify ${refName}^{commit}`]: "aaa\n",
-          "status --porcelain": ""
-        }
+          "status --porcelain": "",
+        },
       },
       throwByKey: {
         "/repos/b": {
-          [`rev-parse --verify ${refName}^{commit}`]: "fatal: Needed a single revision"
-        }
-      }
+          [`rev-parse --verify ${refName}^{commit}`]: "fatal: Needed a single revision",
+        },
+      },
     });
     let truncated = false;
     const deps: RewindDeps = {
@@ -331,18 +296,16 @@ describe("rewindApply", () => {
           truncated = true;
           return 0;
         },
-        clearClaudeSessionIds: async () => null
+        clearClaudeSessionIds: async () => null,
       },
-      gitExec: git.exec
+      gitExec: git.exec,
     };
 
     await expect(
       rewindApply("ch-1", "sess-1", refKey, "2025-01-01T00:00:00.000Z", deps)
     ).rejects.toThrow(/missing or unresolvable/);
 
-    expect(
-      git.calls.some((c) => c.args[0] === "reset" && c.args[1] === "--hard")
-    ).toBe(false);
+    expect(git.calls.some((c) => c.args[0] === "reset" && c.args[1] === "--hard")).toBe(false);
     expect(truncated).toBe(false);
   });
 
@@ -354,16 +317,16 @@ describe("rewindApply", () => {
       stdoutByKey: {
         "/repos/a": {
           [`rev-parse --verify ${refName}^{commit}`]: "aaa\n",
-          "status --porcelain": ""
+          "status --porcelain": "",
         },
         "/repos/b": {
           [`rev-parse --verify ${refName}^{commit}`]: "bbb\n",
-          "status --porcelain": ""
-        }
+          "status --porcelain": "",
+        },
       },
       throwByKey: {
-        "/repos/b": { "reset --hard bbb": "fatal: Unable to write new index file" }
-      }
+        "/repos/b": { "reset --hard bbb": "fatal: Unable to write new index file" },
+      },
     });
     let truncated = false;
     const deps: RewindDeps = {
@@ -373,9 +336,9 @@ describe("rewindApply", () => {
           truncated = true;
           return 0;
         },
-        clearClaudeSessionIds: async () => null
+        clearClaudeSessionIds: async () => null,
       },
-      gitExec: git.exec
+      gitExec: git.exec,
     };
 
     await expect(
@@ -406,7 +369,7 @@ describe("SessionStore.truncateBeforeTimestamp + clearClaudeSessionIds", () => {
       role: "user",
       content,
       timestamp: ts,
-      agentAlias: null
+      agentAlias: null,
     });
     await store.appendMessage("ch", session.sessionId, makeMsg("2025-01-01T00:00:00.000Z", "m1"));
     await store.appendMessage("ch", session.sessionId, makeMsg("2025-01-01T00:00:05.000Z", "m2"));
@@ -499,21 +462,19 @@ describe("SessionStore.deleteSession prunes rewind refs", () => {
       role: "user",
       content: "hi",
       timestamp: "2025-01-01T00:00:00.000Z",
-      agentAlias: null
+      agentAlias: null,
     });
 
     await store.deleteSession("ch", session.sessionId, {
-      repoPaths: ["/repos/a", "/repos/b"]
+      repoPaths: ["/repos/a", "/repos/b"],
     });
 
-    const deletes = gitCalls.filter(
-      (c) => c.args[0] === "update-ref" && c.args[1] === "-d"
-    );
+    const deletes = gitCalls.filter((c) => c.args[0] === "update-ref" && c.args[1] === "-d");
     const deleted = deletes.map((c) => `${c.cwd}::${c.args[2]}`).sort();
     expect(deleted).toEqual([
       `/repos/a::refs/harness-rewind/${session.sessionId}/k1`,
       `/repos/a::refs/harness-rewind/${session.sessionId}/k2`,
-      `/repos/b::refs/harness-rewind/${session.sessionId}/k3`
+      `/repos/b::refs/harness-rewind/${session.sessionId}/k3`,
     ]);
   });
 
@@ -525,7 +486,7 @@ describe("SessionStore.deleteSession prunes rewind refs", () => {
       if (args[0] === "for-each-ref") {
         return {
           stdout: `refs/harness-rewind/s/ref1\nrefs/harness-rewind/s/ref2\n`,
-          stderr: ""
+          stderr: "",
         };
       }
       if (
@@ -566,9 +527,7 @@ describe("SessionStore.deleteSession prunes rewind refs", () => {
 
     // Disk cleanup still happened.
     const sessionsAfter = await store.listSessions("ch");
-    expect(sessionsAfter.map((s) => s.sessionId)).not.toContain(
-      session.sessionId
-    );
+    expect(sessionsAfter.map((s) => s.sessionId)).not.toContain(session.sessionId);
   });
 
   it("is a no-op (no git calls) when repoPaths is not supplied", async () => {
@@ -609,20 +568,20 @@ describe("rewindSnapshot + rewindApply end-to-end with a real SessionStore", () 
       role: "user",
       content: "before",
       timestamp: "2025-01-01T00:00:00.000Z",
-      agentAlias: null
+      agentAlias: null,
     });
     await sessionStore.appendMessage("ch-e2e", session.sessionId, {
       role: "user",
       content: "cutoff",
       timestamp: "2025-01-01T00:00:05.000Z",
       agentAlias: null,
-      metadata: { rewindKey: "k1" }
+      metadata: { rewindKey: "k1" },
     });
     await sessionStore.appendMessage("ch-e2e", session.sessionId, {
       role: "assistant",
       content: "after",
       timestamp: "2025-01-01T00:00:10.000Z",
-      agentAlias: null
+      agentAlias: null,
     });
 
     const channel = makeChannel(["/fake/repo"]);
@@ -631,14 +590,14 @@ describe("rewindSnapshot + rewindApply end-to-end with a real SessionStore", () 
       stdoutByKey: {
         "/fake/repo": {
           [`rev-parse --verify ${refName}^{commit}`]: "deadbeef\n",
-          "status --porcelain": ""
-        }
-      }
+          "status --porcelain": "",
+        },
+      },
     });
     const deps: RewindDeps = {
       channelStore: fakeChannelStore(channel),
       sessionStore,
-      gitExec: git.exec
+      gitExec: git.exec,
     };
 
     const result = await rewindApply(
@@ -650,10 +609,7 @@ describe("rewindSnapshot + rewindApply end-to-end with a real SessionStore", () 
     );
 
     expect(result.removedMessages).toBe(2);
-    const remaining = await sessionStore.loadMessages(
-      "ch-e2e",
-      session.sessionId
-    );
+    const remaining = await sessionStore.loadMessages("ch-e2e", session.sessionId);
     expect(remaining.map((m) => m.content)).toEqual(["before"]);
 
     // JSONL file on disk matches what we expect — sanity check.
@@ -672,14 +628,14 @@ describe("rewindSnapshot + rewindApply end-to-end with a real SessionStore", () 
       role: "user",
       content: "m1",
       timestamp: "2025-01-01T00:00:00.000Z",
-      agentAlias: null
+      agentAlias: null,
     });
     await sessionStore.appendMessage("ch-fail", session.sessionId, {
       role: "user",
       content: "m2",
       timestamp: "2025-01-01T00:00:05.000Z",
       agentAlias: null,
-      metadata: { rewindKey: "boom" }
+      metadata: { rewindKey: "boom" },
     });
 
     const chatPath = join(dir, "ch-fail", "sessions", `${session.sessionId}.jsonl`);
@@ -691,23 +647,23 @@ describe("rewindSnapshot + rewindApply end-to-end with a real SessionStore", () 
       stdoutByKey: {
         "/repos/a": {
           [`rev-parse --verify ${refName}^{commit}`]: "aaa\n",
-          "status --porcelain": ""
+          "status --porcelain": "",
         },
         "/repos/b": {
           [`rev-parse --verify ${refName}^{commit}`]: "bbb\n",
-          "status --porcelain": ""
-        }
+          "status --porcelain": "",
+        },
       },
       throwByKey: {
-        "/repos/b": { "reset --hard bbb": "fatal: broken" }
-      }
+        "/repos/b": { "reset --hard bbb": "fatal: broken" },
+      },
     });
 
     await expect(
       rewindApply("ch-fail", session.sessionId, "boom", "2025-01-01T00:00:05.000Z", {
         channelStore: fakeChannelStore(channel),
         sessionStore,
-        gitExec: git.exec
+        gitExec: git.exec,
       })
     ).rejects.toThrow(/broken/);
 
@@ -719,4 +675,3 @@ describe("rewindSnapshot + rewindApply end-to-end with a real SessionStore", () 
     expect(stillThere!.messageCount).toBe(2);
   });
 });
-

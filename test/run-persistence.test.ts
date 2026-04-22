@@ -8,13 +8,17 @@ import { LocalArtifactStore } from "../src/execution/artifact-store.js";
 import { FileHarnessStore } from "../src/storage/file-store.js";
 import type { HarnessRun, RunEvent } from "../src/domain/run.js";
 
-async function makeStore(): Promise<{ root: string; store: LocalArtifactStore; storeRoot: string }> {
+async function makeStore(): Promise<{
+  root: string;
+  store: LocalArtifactStore;
+  storeRoot: string;
+}> {
   const root = await mkdtemp(join(tmpdir(), "run-persist-"));
   const storeRoot = await mkdtemp(join(tmpdir(), "run-persist-hs-"));
   return {
     root,
     storeRoot,
-    store: new LocalArtifactStore(root, new FileHarnessStore(storeRoot))
+    store: new LocalArtifactStore(root, new FileHarnessStore(storeRoot)),
   };
 }
 
@@ -37,8 +41,8 @@ function buildTestRun(overrides?: Partial<HarnessRun>): HarnessRun {
         type: "TaskSubmitted",
         phaseId: "phase_00",
         details: { featureRequest: "Add a widget" },
-        createdAt: now
-      }
+        createdAt: now,
+      },
     ],
     evidence: [],
     artifacts: [],
@@ -47,7 +51,7 @@ function buildTestRun(overrides?: Partial<HarnessRun>): HarnessRun {
     ticketLedger: [],
     ticketLedgerPath: null,
     runIndexPath: null,
-    ...overrides
+    ...overrides,
   };
 }
 
@@ -94,14 +98,14 @@ describe("run persistence", () => {
         type: "TaskSubmitted",
         phaseId: "phase_00",
         details: { featureRequest: "Test" },
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
       };
 
       const event2: RunEvent = {
         type: "PlanGenerated",
         phaseId: "phase_00",
         details: { state: "PLAN_REVIEW" },
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
       };
 
       await store.appendEvent("run-events-1", event1);

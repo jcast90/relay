@@ -8,10 +8,7 @@ import { ChannelStore } from "../src/channels/channel-store.js";
 import { initializeTicketLedger } from "../src/domain/ticket.js";
 import type { TicketDefinition, TicketLedgerEntry } from "../src/domain/ticket.js";
 
-function makeTicket(
-  id: string,
-  overrides: Partial<TicketDefinition> = {}
-): TicketDefinition {
+function makeTicket(id: string, overrides: Partial<TicketDefinition> = {}): TicketDefinition {
   return {
     id,
     title: `Ticket ${id}`,
@@ -23,7 +20,7 @@ function makeTicket(
     docsToUpdate: [],
     dependsOn: [],
     retryPolicy: { maxAgentAttempts: 1, maxTestFixLoops: 1 },
-    ...overrides
+    ...overrides,
   };
 }
 
@@ -83,7 +80,7 @@ describe("channel ticket board (unified)", () => {
         ...initial[0],
         status: "completed",
         completedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date().toISOString(),
       };
 
       const merged = await store.upsertChannelTickets(channel.channelId, [completedT1]);

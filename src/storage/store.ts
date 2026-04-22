@@ -141,4 +141,3 @@ export interface HarnessStore {
    */
   watch(ns: string, id: string): AsyncIterable<ChangeEvent>;
 }
-

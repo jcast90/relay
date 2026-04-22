@@ -5,14 +5,9 @@ import type {
   ExecutionHandle,
   ExecutionResult,
   ExecutionStatus,
-  ExecutorStartOptions
+  ExecutorStartOptions,
 } from "./executor.js";
-import type {
-  DestroyResult,
-  RepoRef,
-  SandboxProvider,
-  SandboxRef
-} from "./sandbox.js";
+import type { DestroyResult, RepoRef, SandboxProvider, SandboxRef } from "./sandbox.js";
 import { resolveLocalPath } from "./sandbox.js";
 
 export class NoopSandboxProvider implements SandboxProvider {
@@ -26,7 +21,7 @@ export class NoopSandboxProvider implements SandboxProvider {
     return {
       id,
       workdir: { kind: "local", path: repo.root },
-      meta: { base }
+      meta: { base },
     };
   }
 
@@ -55,9 +50,7 @@ class NoopExecutionHandle implements ExecutionHandle {
     if (this.cachedResult) {
       // wait() resolved normally; if kill() fires afterward it's a no-op and
       // we stay `exited` per the documented contract on ExecutionHandle.kill.
-      return this.killed && this.cachedResult.exitCode === 137
-        ? "killed"
-        : "exited";
+      return this.killed && this.cachedResult.exitCode === 137 ? "killed" : "exited";
     }
 
     return this.killed ? "killed" : "running";
@@ -92,7 +85,7 @@ class NoopExecutionHandle implements ExecutionHandle {
     yield {
       kind: "exit",
       at: new Date().toISOString(),
-      data: String(result.exitCode)
+      data: String(result.exitCode),
     };
   }
 }
@@ -107,10 +100,7 @@ class NoopExecutionHandle implements ExecutionHandle {
 export class NoopExecutor implements AgentExecutor {
   private counter = 0;
 
-  async start(
-    _ticket: TicketDefinition,
-    opts: ExecutorStartOptions
-  ): Promise<ExecutionHandle> {
+  async start(_ticket: TicketDefinition, opts: ExecutorStartOptions): Promise<ExecutionHandle> {
     const id = `noop-exec-${++this.counter}`;
     // `sandbox` is optional on ExecutorStartOptions so executors that manage
     // their own lifecycle can skip it. NoopExecutor does not create sandboxes;

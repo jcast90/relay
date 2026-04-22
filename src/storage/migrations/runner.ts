@@ -32,17 +32,13 @@ CREATE TABLE IF NOT EXISTS harness_schema_migrations (
 )
 `;
 
-export async function migrate(
-  opts: MigrateOptions = {}
-): Promise<AppliedMigration[]> {
+export async function migrate(opts: MigrateOptions = {}): Promise<AppliedMigration[]> {
   const { pool, ownsPool } = resolvePool(opts);
   const dir = opts.migrationsDir ?? defaultMigrationsDir();
 
   try {
     await pool.query(SCHEMA_TABLE_DDL);
-    const files = (await readdir(dir))
-      .filter((f) => /^\d+_.*\.sql$/.test(f))
-      .sort();
+    const files = (await readdir(dir)).filter((f) => /^\d+_.*\.sql$/.test(f)).sort();
 
     const applied: AppliedMigration[] = [];
     for (const file of files) {
@@ -61,10 +57,9 @@ export async function migrate(
         }
         const sql = await readFile(join(dir, file), "utf8");
         await client.query(sql);
-        await client.query(
-          "INSERT INTO harness_schema_migrations (version) VALUES ($1)",
-          [version]
-        );
+        await client.query("INSERT INTO harness_schema_migrations (version) VALUES ($1)", [
+          version,
+        ]);
         await client.query("COMMIT");
         applied.push({ version, alreadyApplied: false });
       } catch (err) {
@@ -89,8 +84,7 @@ function resolvePool(opts: MigrateOptions): {
   ownsPool: boolean;
 } {
   if (opts.pool) return { pool: opts.pool, ownsPool: false };
-  const connectionString =
-    opts.connectionString ?? process.env["HARNESS_POSTGRES_URL"];
+  const connectionString = opts.connectionString ?? process.env["HARNESS_POSTGRES_URL"];
   if (!connectionString) {
     throw new Error(
       "migrate(): pass { pool } or { connectionString }, or set HARNESS_POSTGRES_URL"
@@ -118,9 +112,7 @@ if (isMain && process.argv[2] === "migrate") {
       }
     })
     .catch((err) => {
-      process.stderr.write(
-        `migrate failed: ${err instanceof Error ? err.message : String(err)}\n`
-      );
+      process.stderr.write(`migrate failed: ${err instanceof Error ? err.message : String(err)}\n`);
       process.exit(1);
     });
 }
