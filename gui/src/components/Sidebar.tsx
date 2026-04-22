@@ -6,6 +6,8 @@ type Props = {
   channels: Channel[];
   selectedId: string | null;
   includeArchived: boolean;
+  sessionCounts: Record<string, number>;
+  runningStreams: number;
   onSelect: (id: string) => void;
   onNewChannel: () => void;
   onNewDm: () => void;
@@ -30,6 +32,8 @@ export function Sidebar({
   channels,
   selectedId,
   includeArchived,
+  sessionCounts,
+  runningStreams,
   onSelect,
   onNewChannel,
   onNewDm,
@@ -67,7 +71,11 @@ export function Sidebar({
       </div>
 
       <div className="sidebar-scroll">
-        <ActivityBlock channels={active} />
+        <ActivityBlock
+          channels={active}
+          sessionCounts={sessionCounts}
+          runningStreams={runningStreams}
+        />
 
         <section className="sidebar-section">
           <header
@@ -243,12 +251,18 @@ function ChannelRow({
   );
 }
 
-function ActivityBlock({ channels }: { channels: Channel[] }) {
-  // "Activity" = channels updated in the last hour. "Threads" and
-  // "Running" rows are scaffolded with 0 counts — the data paths are
-  // per-channel inside CenterPane today, so a cross-channel count would
-  // need App-level state. Keeping the rows visible matches the spec and
-  // keeps the scaffold in place for a follow-up pass.
+function ActivityBlock({
+  channels,
+  sessionCounts,
+  runningStreams,
+}: {
+  channels: Channel[];
+  sessionCounts: Record<string, number>;
+  runningStreams: number;
+}) {
+  // Activity = channels updated in the last hour.
+  // Threads = total sessions across all channels (from list_session_counts).
+  // Running = count of active chat streams (pushed up from CenterPane).
   const recentThreshold = Date.now() - 60 * 60 * 1000;
   const activeCount = channels.filter((c) => {
     const raw = c.updatedAt ?? c.createdAt;
@@ -256,11 +270,12 @@ function ActivityBlock({ channels }: { channels: Channel[] }) {
     const ts = Date.parse(raw);
     return Number.isFinite(ts) && ts >= recentThreshold;
   }).length;
+  const threadCount = Object.values(sessionCounts).reduce((a, b) => a + b, 0);
   return (
     <section className="sidebar-section">
       <NavRow label="Activity" sigil="◔" count={activeCount} />
-      <NavRow label="Threads" sigil="☰" count={0} />
-      <NavRow label="Running" sigil="▶" count={0} />
+      <NavRow label="Threads" sigil="☰" count={threadCount} />
+      <NavRow label="Running" sigil="▶" count={runningStreams} />
     </section>
   );
 }

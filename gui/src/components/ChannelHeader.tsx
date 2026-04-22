@@ -1,5 +1,6 @@
 import { api } from "../api";
 import { agentAvatar } from "../lib/agents";
+import { useAppearance } from "../lib/appearance";
 import type { Channel, ChannelTier } from "../types";
 import { RepoChipRow } from "./RepoChipRow";
 
@@ -35,6 +36,7 @@ export function ChannelHeader({
   hideTabs,
 }: Props) {
   const isDm = channel.kind === "dm";
+  const [appearance] = useAppearance();
   const toggleStar = async () => {
     try {
       await api.setChannelStarred(channel.channelId, !channel.starred);
@@ -66,7 +68,7 @@ export function ChannelHeader({
         {channel.description && <div className="channel-header-topic">{channel.description}</div>}
         <div className="agent-stack">
           {channel.members.slice(0, 4).map((m) => {
-            const av = agentAvatar(m.agentId, m.displayName);
+            const av = agentAvatar(m.agentId, m.displayName, appearance.avatarStyle);
             return (
               <span
                 key={m.agentId}

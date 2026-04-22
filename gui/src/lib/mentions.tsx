@@ -1,10 +1,10 @@
 import type { ReactNode } from "react";
-import type { UiChannel } from "./channel";
+import type { MentionContext } from "./channel";
 
 // `@alias` | `**bold**` | `` `code` ``. No other markdown, no autolinks.
 const TOKEN_RE = /(@[a-zA-Z0-9][a-zA-Z0-9_-]*)|(\*\*[^*]+\*\*)|(`[^`]+`)/g;
 
-type ChannelLike = Pick<UiChannel, "repos" | "primaryRepo"> | null | undefined;
+type ChannelLike = MentionContext | null | undefined;
 
 /**
  * Render a message body as React nodes, recognising mention chips and

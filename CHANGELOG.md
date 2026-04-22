@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.0
+
+### Minor Changes
+
+- Final Tidewater polish — every deferred item from v0.3.0 shipped.
+  - **Tier auto-classification**: heuristic classifier in `harness-data` stamps `Channel.tier` on create based on name + description keywords. Manual override in the About tab still wins; the real orchestrator classifier can refine later.
+  - **Sidebar Threads / Running** now show real counts. Threads = total sessions across all channels (new `list_session_counts` Tauri command). Running = live chat-stream count pushed up from CenterPane.
+  - **Appearance settings** (§8.3): new Settings section with Avatar style (glyph | initial) and Density (compact | medium | spacious). Persists to `localStorage`, applied across all surfaces via a `useAppearance()` hook.
+  - **`UiChannel.repos` dual-repr dropped**: single source of truth is `repoAssignments`. Callers use `channelAliases(ui)` for a flat alias list and `mentionContext(ui)` for the renderer.
+  - **Gui-local vitest** with 11 `renderWithMentions` tests covering primary/attached/human chip classification, case-insensitivity, bold, code, and mixed-token tokenization. Root `pnpm test` chains to `pnpm -C gui test` so CI runs both.
+  - 5 new Rust tests for `classify_tier_heuristic`; `Channel.kind` handled in existing harness-data test fixtures.
+
 ## 0.3.0
 
 ### Minor Changes

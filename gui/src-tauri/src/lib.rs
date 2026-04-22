@@ -74,6 +74,20 @@ fn list_sessions(channel_id: String) -> Result<Vec<data::ChatSession>, String> {
     Ok(data::load_sessions(&channel_id))
 }
 
+/// Aggregate session counts across all active channels for the Sidebar's
+/// Threads row. One call instead of N `list_sessions` round-trips.
+#[tauri::command]
+fn list_session_counts() -> std::collections::HashMap<String, usize> {
+    let channels = data::load_channels_with_status(true);
+    channels
+        .into_iter()
+        .map(|c| {
+            let count = data::load_sessions(&c.channel_id).len();
+            (c.channel_id, count)
+        })
+        .collect()
+}
+
 #[tauri::command]
 fn load_session(
     channel_id: String,
@@ -335,17 +349,32 @@ fn create_channel(
         .and_then(|id| repos.iter().find(|r| &r.workspace_id == id))
         .map(|r| r.alias.clone());
 
-    let repos = repos_arg(&repos);
+    let repos_str = repos_arg(&repos);
     let mut args: Vec<&str> = vec!["channel", "create", &name, &description, "--json"];
-    if !repos.is_empty() {
+    if !repos_str.is_empty() {
         args.push("--repos");
-        args.push(&repos);
+        args.push(&repos_str);
     }
     if let Some(ref alias) = primary_alias {
         args.push("--primary");
         args.push(alias);
     }
-    cli_json(&args)
+    let result = cli_json(&args)?;
+
+    // Stamp a heuristic tier on the newly-created channel so the header
+    // pill shows a best-guess immediately. Best-effort — if the CLI
+    // returned a different shape or the channel file isn't readable yet,
+    // skip silently; the user can set tier manually in the About tab and
+    // the real orchestrator classifier will refine it on first dispatch.
+    if let Some(channel_id) = result.get("channelId").and_then(|v| v.as_str()) {
+        if let Some(mut ch) = data::load_channel(channel_id) {
+            if ch.tier.is_none() {
+                ch.tier = Some(data::classify_tier_heuristic(&name, &description));
+                let _ = data::save_channel(&ch);
+            }
+        }
+    }
+    Ok(result)
 }
 
 /// Mint a DM channel directly from Rust (no CLI round-trip). A DM is a
@@ -2022,6 +2051,7 @@ pub fn run() {
             get_channel,
             list_feed,
             list_sessions,
+            list_session_counts,
             load_session,
             list_channel_tickets,
             list_channel_decisions,

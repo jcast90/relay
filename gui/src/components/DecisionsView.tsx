@@ -1,5 +1,5 @@
 import type { Channel, Decision } from "../types";
-import { toUiChannel } from "../lib/channel";
+import { mentionContext, toUiChannel } from "../lib/channel";
 import { renderWithMentions } from "../lib/mentions";
 
 type Props = {
@@ -8,7 +8,7 @@ type Props = {
 };
 
 export function DecisionsView({ decisions, channel }: Props) {
-  const ui = toUiChannel(channel);
+  const ui = mentionContext(toUiChannel(channel));
   if (decisions.length === 0) {
     return <div className="chat-empty">No decisions recorded</div>;
   }

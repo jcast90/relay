@@ -52,6 +52,14 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   grid-template-columns: var(--layout-workspace-rail) var(--layout-sidebar) 1fr 0;
 }
 
+/* Appearance density (set by useAppearance on <div class="app">) */
+.app.density-compact .chat-scroll { padding: var(--space-5) var(--space-6); }
+.app.density-compact .message { margin-bottom: var(--space-4); }
+.app.density-compact .composer { padding: var(--space-4) var(--space-6); }
+.app.density-spacious .chat-scroll { padding: var(--space-8) var(--space-10); }
+.app.density-spacious .message { margin-bottom: var(--space-8); }
+.app.density-spacious .composer { padding: var(--space-6) var(--space-10); }
+
 /* ── Workspace rail (far left, 58px, ink) ─────────────────────── */
 
 .workspace-rail {

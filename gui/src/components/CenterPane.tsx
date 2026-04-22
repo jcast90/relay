@@ -26,6 +26,7 @@ type Props = {
   onToggleRail: () => void;
   onRefresh: () => void;
   onSessionCreated: (sessionId: string) => void;
+  onStreamingChanged?: (count: number) => void;
   onChannelRemoved: (id: string) => void;
 };
 
@@ -38,6 +39,7 @@ export function CenterPane({
   onToggleRail,
   onRefresh,
   onSessionCreated,
+  onStreamingChanged,
   onChannelRemoved,
 }: Props) {
   const [tab, setTab] = useState<ChannelTab>("chat");
@@ -47,6 +49,12 @@ export function CenterPane({
   const [sessionMessages, setSessionMessages] = useState<PersistedChatMessage[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [stream, setStream] = useState<ActiveStream | null>(null);
+
+  // Push streaming presence up to App so the Sidebar's Running row can
+  // show a real count. Single-center-pane app → count is 0 or 1.
+  useEffect(() => {
+    onStreamingChanged?.(stream ? 1 : 0);
+  }, [stream, onStreamingChanged]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [promoteOpen, setPromoteOpen] = useState(false);
 
