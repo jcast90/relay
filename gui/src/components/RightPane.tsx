@@ -183,6 +183,11 @@ export function RightPane({ channel, sessionId, onSelectSession, refreshTick, on
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [prs, setPrs] = useState<TrackedPrRow[]>([]);
   const [runs, setRuns] = useState<Array<{ run: RunIndexEntry; workspaceId: string }>>([]);
+  // AL-10 previously resolved the active autonomous session here for its
+  // ApprovalsPanel. Dropped — AL-8's `ApprovalsSection` below handles its
+  // own session discovery against AL-7's queue. The CenterPane keeps its
+  // own autonomous-session lookup for the header; the RightPane no longer
+  // needs one.
 
   useEffect(() => {
     let cancelled = false;
@@ -231,6 +236,9 @@ export function RightPane({ channel, sessionId, onSelectSession, refreshTick, on
           </div>
         ))}
       </div>
+      {/* AL-10 previously rendered its own ApprovalsPanel here. Dropped —
+          AL-8's `ApprovalsSection` below owns the GUI approvals surface
+          and reads AL-7's canonical queue. */}
       <div className="rail-scroll">
         <ApprovalsSection sessionId={sessionId} refreshTick={refreshTick} onChanged={onRefresh} />
         {tab === "threads" && (

@@ -1,7 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AgentNameEntry,
   ApprovalQueueRecord,
+  AutonomousSessionState,
+  AutonomousSessionSummary,
   Channel,
   ChannelEntry,
   ChannelRunLink,
@@ -17,7 +20,6 @@ import type {
   TicketLedgerEntry,
   TrackedPrRow,
   WorkspaceEntry,
-  AgentNameEntry,
 } from "./types";
 
 export const api = {
@@ -172,6 +174,18 @@ export const api = {
   rejectQueueEntry: (id: string, feedback?: string) =>
     invoke<unknown>("reject_queue_entry", { id, feedback }),
   approveQueueAll: (sessionId?: string) => invoke<unknown>("approve_queue_all", { sessionId }),
+
+  // AL-10: autonomous-session status readers. All three are no-op friendly —
+  // they return empty / None when the on-disk files are missing, so the GUI
+  // can poll them every 5s without plumbing a "session exists" predicate
+  // ahead of each call.
+  listAutonomousSessions: () => invoke<AutonomousSessionSummary[]>("list_autonomous_sessions"),
+  getSessionState: (sessionId: string) =>
+    invoke<AutonomousSessionState | null>("get_session_state", { sessionId }),
+  // AL-9 owns the kill-switch command — writes a STOP file under the
+  // session dir for the autonomous driver to observe. AL-10 reuses it
+  // for the session-header stop button.
+  stopSession: (sessionId: string) => invoke<void>("stop_session", { sessionId }),
 };
 
 export type ChatEvent =
