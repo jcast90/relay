@@ -230,7 +230,7 @@ rly gui --dev                   # hot-reload Vite + Tauri window
 rly gui --rebuild               # force rebuild
 ```
 
-Catppuccin Mocha theme (matches the CMUX ghostty config). Three tabs per channel:
+Catppuccin Mocha theme. Three tabs per channel:
 
 - **Chat** — live streaming with thinking previews + tool-call rail + pulsing accent indicator
 - **Board** — kanban with empty columns hidden, per-column scroll, click-any-ticket detail modal with dependency tree
@@ -480,5 +480,5 @@ MIT — see [`LICENSE`](./LICENSE).
 ## Acknowledgements
 
 - [Composio](https://github.com/ComposioHQ/agent-orchestrator) for `@aoagents/ao-core` and the tracker / SCM plugin surface.
-- [Catppuccin Mocha](https://github.com/catppuccin/catppuccin) palette (via the CMUX ghostty theme).
+- [Catppuccin Mocha](https://github.com/catppuccin/catppuccin) palette.
 - [Tauri](https://tauri.app/), [Ratatui](https://ratatui.rs/), [vitest](https://vitest.dev/), [tsx](https://tsx.is/) — the foundations everything rests on.

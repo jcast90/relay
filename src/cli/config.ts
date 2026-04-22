@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { getRelayDir } from "./paths.js";
 
 export interface HarnessGlobalConfig {
-  /** Directories to scan for git repos (e.g. ["~/projects", "~/turingon/Dev"]) */
+  /** Directories to scan for git repos (e.g. ["~/projects", "~/work"]) */
   projectDirs: string[];
 }
 

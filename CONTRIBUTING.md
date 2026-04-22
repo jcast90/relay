@@ -84,4 +84,4 @@ The templates ask the questions we'll otherwise have to ask you anyway — filli
 
 ## Security issues
 
-If you think you've found a security issue, **don't open a public issue**. Email `uruguay90@gmail.com` with the details and we'll triage privately before any disclosure.
+If you think you've found a security issue, **don't open a public issue**. Use GitHub's [private vulnerability reporting](https://github.com/jcast90/relay/security/advisories/new) and we'll triage privately before any disclosure. See [`SECURITY.md`](./SECURITY.md) for the full policy.

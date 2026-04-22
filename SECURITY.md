@@ -4,7 +4,7 @@ Relay is a personal open-source project, not a corporate product. This policy is
 
 ## Reporting a vulnerability
 
-Email **uruguay90@gmail.com** with:
+Please use GitHub's [private vulnerability reporting](https://github.com/jcast90/relay/security/advisories/new) to open a draft advisory. Include:
 
 - Affected version — a commit hash, or the output of `rly --version`.
 - A reproduction — minimal steps or a small script. Private repro repos are fine.

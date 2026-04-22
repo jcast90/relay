@@ -255,7 +255,7 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
               autoFocus
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. proposal-pilot"
+              placeholder="e.g. my-project"
             />
           </label>
           <label>

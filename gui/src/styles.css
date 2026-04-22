@@ -1,8 +1,7 @@
 :root {
-  /* Catppuccin Mocha — matches the CMUX ghostty theme.
+  /* Catppuccin Mocha palette.
      Mantle for sidebars is darker than base so the center pane sits a touch
-     elevated; alt surfaces stay sunken (same aesthetic as the old Tokyo Night
-     theme, just different hues). */
+     elevated; alt surfaces stay sunken. */
   --bg: #1e1e2e;            /* base */
   --bg-alt: #181825;        /* mantle — sunken card / entry surface */
   --bg-panel: #11111b;      /* crust — darker sidebars */
