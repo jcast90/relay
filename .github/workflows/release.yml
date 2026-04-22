@@ -156,21 +156,27 @@ jobs:
       fail-fast: false
       matrix:
         platform:
+          # Tauri writes bundles to the workspace-shared `target/` at the
+          # repo root (Cargo.lock lives at the root, so this is a single
+          # Cargo workspace shared across tui/, crates/harness-data/, and
+          # gui/src-tauri/). The earlier `gui/src-tauri/target/...` globs
+          # never matched — upload-artifact warned and uploaded nothing,
+          # leaving the GitHub Release with zero installers.
           - os: macos-latest
             rust_target: aarch64-apple-darwin
             artifact_glob: |
-              gui/src-tauri/target/release/bundle/dmg/*.dmg
-              gui/src-tauri/target/release/bundle/macos/*.app.tar.gz
+              target/release/bundle/dmg/*.dmg
+              target/release/bundle/macos/*.app.tar.gz
           - os: ubuntu-22.04
             rust_target: x86_64-unknown-linux-gnu
             artifact_glob: |
-              gui/src-tauri/target/release/bundle/appimage/*.AppImage
-              gui/src-tauri/target/release/bundle/deb/*.deb
+              target/release/bundle/appimage/*.AppImage
+              target/release/bundle/deb/*.deb
           - os: windows-latest
             rust_target: x86_64-pc-windows-msvc
             artifact_glob: |
-              gui/src-tauri/target/release/bundle/msi/*.msi
-              gui/src-tauri/target/release/bundle/nsis/*.exe
+              target/release/bundle/msi/*.msi
+              target/release/bundle/nsis/*.exe
     runs-on: ${{ matrix.platform.os }}
     steps:
       - name: Checkout

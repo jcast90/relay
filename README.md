@@ -59,9 +59,7 @@ CLI: **`rly`**.
 
 ## Install
 
-### Quick start _(coming soon — blocked on first tagged release)_
-
-Once `v0.1.0` ships to npm, this will be the one-liner:
+### Quick start
 
 ```bash
 npm install -g @jcast90/relay
@@ -78,7 +76,7 @@ The npm package is published under the `@jcast90` scope because both
 unscoped `relay` and `rly` were already taken on npm when Relay shipped.
 The binary exposed on `$PATH` is still `rly`.
 
-### From source _(available today)_
+### From source
 
 ```bash
 git clone https://github.com/jcast90/relay
@@ -93,9 +91,14 @@ Prereq checks (`node >= 20`, `pnpm`, `git`; plus `cargo` if you add `--with-tui`
 - `--with-gui` also builds the Tauri desktop app. On Linux, the preflight will offer to `apt-get install` the required system libraries if they're missing.
 - `--skip-link` skips the global link (useful in CI).
 
-### GUI app _(coming soon)_
+### GUI app
 
-Download the `.dmg` / `.AppImage` / `.deb` / `.msi` from the [latest release](https://github.com/jcast90/relay/releases/latest).
+Download the `.dmg` (macOS) / `.AppImage` + `.deb` (Linux) / `.msi` (Windows) from the [latest release](https://github.com/jcast90/relay/releases/latest).
+
+> **Note:** pre-release builds are **unsigned**. macOS will show a
+> Gatekeeper warning on first open — right-click → _Open_ the first
+> time. Windows SmartScreen will ask for a click-through. Code
+> signing + notarization is on the [Roadmap](#roadmap).
 
 ### Manual
 
@@ -534,9 +537,8 @@ Honest snapshot — most of these haven't started. Order is rough priority, not 
 - **Postgres backend for multi-agent coordination** _(exploratory, stubbed)_ — the file backend serializes writes per-host via tmp+rename atomics. A Postgres-backed `HarnessStore` would let multiple agents (same box or different) share state through `LISTEN/NOTIFY` cross-agent decision broadcasts and row-locked decision writes. Postgres here runs locally (`brew install postgresql && createdb relay`) or remote — this isn't a cloud-only feature. Source stub lives at `src/storage/postgres-store.ts`; not wired into the factory and the integration tests are skipped.
 - **Pod executor (Kubernetes)** _(exploratory)_ — verification runs off the dev box in per-ticket pods. Prototype was removed in OSS-08 until it's wired end-to-end again.
 - **S3 artifacts** _(exploratory)_ — moving ticket evidence off the local filesystem so it survives pod/host churn. Pairs with the pod executor.
-- **Distribution: Homebrew tap + winget manifest** _(planned)_ — for one-line `brew install rly` / `winget install rly` after the first tagged release.
+- **Distribution: Homebrew tap + winget manifest** _(planned)_ — for one-line `brew install rly` / `winget install rly` on top of the existing `npm install -g @jcast90/relay` path.
 - **Code signing + notarization** _(planned)_ — macOS `.dmg` (Developer ID + `notarytool`) and Windows `.msi` (Authenticode) so downloads don't need right-click-open / SmartScreen bypass. Requires paid certificates and a secret-management pass in the release workflow.
-- **npm publish** _(planned, name resolved)_ — the package is published as `@jcast90/relay` once an admin toggles the `NPM_PUBLISH_ENABLED` repo variable. Unscoped `relay` and `rly` are both taken on npm so the scope is permanent.
 - **Cost guardrails** _(in design)_ — token usage tracking per run, per ticket, per channel, with a soft cap that pauses scheduling when hit. Prerequisite to making `RELAY_AUTO_APPROVE=1` safer for multi-hour runs.
 - **Integration test coverage off macOS** _(in progress)_ — Linux and Windows spawn paths are compile-checked but only smoke-tested; promoting them to the fast CI tier is the gate to tagging cross-platform releases.
 

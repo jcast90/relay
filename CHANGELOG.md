@@ -15,6 +15,24 @@ Workspace versions are kept in lockstep across the npm package
 
 _Nothing yet._
 
+## [0.1.2] - 2026-04-22
+
+### Fixed
+
+- Release workflow now uploads Tauri GUI bundles to the GitHub Release.
+  The upload glob pointed at `gui/src-tauri/target/release/bundle/...`
+  but this is a Cargo workspace with a shared `target/` at the repo
+  root, so Tauri's actual output (`target/release/bundle/...`) was
+  being silently dropped by `upload-artifact`'s `if-no-files-found: warn`.
+  The `v0.1.0` and `v0.1.1` releases shipped with zero installers; this
+  is the first release with `.dmg` / `.AppImage` / `.deb` / `.msi`
+  downloads attached.
+
+### Changed
+
+- README: removed the "coming soon" banners now that npm publish is
+  live; documented that pre-release GUI installers are unsigned.
+
 ## [0.1.0] - 2026-04-22
 
 First public OSS release. Everything below was done under the `OSS-01..23` hardening +
