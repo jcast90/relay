@@ -216,7 +216,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 .sidebar-section-head .section-add:hover {
   color: var(--color-text-on-dark);
-  background: var(--color-ink-panel);
+  background: var(--color-ink-hover);
 }
 .sidebar-section-body {
   display: flex;
@@ -255,7 +255,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   text-transform: none;
   letter-spacing: 0;
 }
-.section-menu button:hover:not(:disabled) { background: var(--color-ink-raised); }
+.section-menu button:hover:not(:disabled) { background: var(--color-ink-hover); }
 .section-menu button.danger { color: #f4978e; }
 .section-menu button:disabled {
   color: var(--color-text-on-dark-muted);
@@ -289,8 +289,8 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .sidebar-new-menu-btn:hover,
 .sidebar-new-menu-btn[aria-expanded="true"] {
   color: var(--color-text-on-dark);
-  border-color: var(--color-text-on-dark-muted);
-  background: var(--color-ink-panel);
+  border-color: var(--color-text-on-dark);
+  background: var(--color-ink-hover);
 }
 .sidebar-new-menu {
   position: absolute;
@@ -319,7 +319,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   cursor: pointer;
 }
 .sidebar-new-menu button:hover {
-  background: var(--color-ink-raised);
+  background: var(--color-ink-hover);
 }
 
 .sidebar-item {
@@ -542,7 +542,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 .sidebar-footer-btn:hover {
   opacity: 1;
-  background: var(--color-ink-panel);
+  background: var(--color-ink-hover);
 }
 
 /* ── Center pane (paper) ──────────────────────────────────────── */
@@ -782,14 +782,17 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
    and the primary (coral) chip looked like "dark red on dark red"
    on hover. Explicit bg swaps here so text stays readable. */
 .repo-chip.primary:hover {
-  /* Deep salmon that's clearly distinct from the resting coral-soft
-     and still gives >4.5:1 contrast against the coral text. */
+  /* Deep salmon bg + darkened text. The resting-state coral text
+     (#e65a4f) on this bg only gave 2.66:1 — darkening the text to
+     primary (#1b1f2a) brings contrast to ~10:1. */
   background: #f0a79b;
   border-color: var(--color-accent-coral);
+  color: var(--color-text-primary);
 }
 .repo-chip.attached:hover {
   background: #a6bfdf;
   border-color: var(--color-mention-attached-fg);
+  color: var(--color-text-primary);
 }
 .repo-chip.add:hover {
   background: var(--color-paper-hover);
@@ -1985,6 +1988,11 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   z-index: 1000;
 }
 .modal {
+  /* Pin the text color at the modal root so callers that render the
+     modal as a child of a dark surface (e.g. Sidebar opens PromptModal
+     inline) don't inherit `text-on-dark` and render near-white text on
+     the paper-base fill. */
+  color: var(--color-text-primary);
   background: var(--color-paper-base);
   border-radius: var(--radius-modal);
   box-shadow: var(--shadow-modal);
