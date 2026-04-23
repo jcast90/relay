@@ -418,15 +418,9 @@ export function Sidebar({
         placeholder="e.g. Billing, Infrastructure"
         initialValue={sectionPrompt?.kind === "rename" ? sectionPrompt.section.name : ""}
         submitLabel={sectionPrompt?.kind === "rename" ? "Rename" : "Create"}
-        onSubmit={async (value) => {
-          try {
-            await submitSectionPrompt(value);
-          } catch (err) {
-            const verb = sectionPrompt?.kind === "rename" ? "Rename" : "Create";
-            await notifyError(`${verb} failed: ${err}`);
-            throw err;
-          }
-        }}
+        // PromptModal renders thrown errors inline; no outer notifyError
+        // wrapper here (would double-surface — inline + native dialog).
+        onSubmit={submitSectionPrompt}
         onClose={() => setSectionPrompt(null)}
       />
     </div>
