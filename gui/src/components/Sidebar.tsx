@@ -70,9 +70,7 @@ export function Sidebar({
 
   // Section prompt state — replaces window.prompt (no-op'd by Tauri v2
   // WKWebView on macOS, see gui/src/lib/dialogs.ts header).
-  type SectionPrompt =
-    | { kind: "create" }
-    | { kind: "rename"; section: Section };
+  type SectionPrompt = { kind: "create" } | { kind: "rename"; section: Section };
   const [sectionPrompt, setSectionPrompt] = useState<SectionPrompt | null>(null);
 
   useEffect(() => {
