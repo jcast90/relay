@@ -26,7 +26,8 @@ button {
   cursor: pointer;
   transition: var(--anim-hover-fast);
 }
-button:hover:not(:disabled) { background: var(--color-paper-alt); }
+button:hover:not(:disabled) { background: var(--color-paper-hover); }
+button:active:not(:disabled) { background: var(--color-paper-pressed); }
 button.primary {
   background: var(--color-accent-coral);
   border-color: var(--color-accent-coral);
@@ -328,7 +329,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   position: relative;
   transition: background 0.1s ease, color 0.1s ease;
 }
-.sidebar-item:hover { background: var(--color-ink-panel); color: var(--color-text-on-dark); }
+.sidebar-item:hover { background: var(--color-ink-hover); color: var(--color-text-on-dark); }
 .sidebar-item.active {
   background: var(--color-accent-coral);
   color: #fff;
@@ -667,7 +668,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   flex-shrink: 0;
   transition: var(--anim-hover-fast);
 }
-.rail-toggle:hover { background: var(--color-paper-alt); color: var(--color-text-primary); }
+.rail-toggle:hover { background: var(--color-paper-hover); color: var(--color-text-primary); }
 .rail-toggle.active {
   background: var(--color-accent-coral-soft);
   color: var(--color-accent-coral);
@@ -770,7 +771,23 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   color: var(--color-text-muted);
   border: 1px dashed var(--color-paper-line);
 }
-.repo-chip:hover { filter: brightness(0.97); }
+/* Per-variant hovers — `filter: brightness()` darkens text and
+   background equally, so the contrast between them does not change
+   and the primary (coral) chip looked like "dark red on dark red"
+   on hover. Explicit bg swaps here so text stays readable. */
+.repo-chip.primary:hover {
+  background: #f6c9c0;
+  border-color: var(--color-accent-coral);
+}
+.repo-chip.attached:hover {
+  background: #c2d3ea;
+  border-color: var(--color-mention-attached-fg);
+}
+.repo-chip.add:hover {
+  background: var(--color-paper-hover);
+  border-color: var(--color-text-muted);
+  color: var(--color-text-primary);
+}
 .repo-chip .detach-x {
   opacity: 0;
   margin-left: var(--space-2);
@@ -788,7 +805,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   color: var(--color-text-muted);
   font-size: 14px;
 }
-.gear-btn:hover { background: var(--color-paper-alt); color: var(--color-text-primary); }
+.gear-btn:hover { background: var(--color-paper-hover); color: var(--color-text-primary); }
 
 /* Attach-repo popover (the `+` chip in RepoChipRow) — scrollable
  * multi-select list view. Shows basename only; repoPath in tooltip on
@@ -855,7 +872,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   color: var(--color-text-primary);
   text-align: left;
 }
-.attach-row:hover { background: var(--color-paper-alt); }
+.attach-row:hover { background: var(--color-paper-hover); }
 .attach-row.picked { background: var(--color-accent-coral-soft); }
 .attach-row.picked .attach-row-name { font-weight: var(--font-weight-semibold); }
 .attach-check {
@@ -927,7 +944,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   cursor: pointer;
   color: var(--color-text-primary);
 }
-.popover-item:hover { background: var(--color-paper-alt); }
+.popover-item:hover { background: var(--color-paper-hover); }
 .popover-item.danger { color: var(--color-accent-coral); }
 .popover-item .item-sub {
   margin-left: auto;
@@ -1814,7 +1831,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   cursor: pointer;
   font-family: inherit;
 }
-.rail-back:hover { background: var(--color-paper-alt); color: var(--color-text-primary); }
+.rail-back:hover { background: var(--color-paper-hover); color: var(--color-text-primary); }
 .rail-detail-tag {
   display: flex;
   align-items: center;
@@ -2409,7 +2426,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   cursor: pointer;
 }
 .board-list-row:last-child { border-bottom: none; }
-.board-list-row:hover { background: var(--color-paper-alt); }
+.board-list-row:hover { background: var(--color-paper-hover); }
 .board-list-row .ticket-id {
   font-family: var(--font-mono);
   font-size: var(--font-size-xs);
@@ -2662,7 +2679,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   border: 1px solid transparent;
   font-size: var(--font-size-base);
 }
-.repo-row:hover { background: var(--color-paper-alt); }
+.repo-row:hover { background: var(--color-paper-hover); }
 .repo-row.highlighted { border-color: var(--color-accent-coral); background: var(--color-accent-coral-soft); }
 .repo-row .repo-path { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .repo-row .primary-badge {
