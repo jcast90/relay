@@ -434,6 +434,10 @@ export class RepoAdminPool {
       // session's behalf (in-process path) uses it + session.alias to
       // populate coordination state at construction.
       coordinator: this.coordinator,
+      // AL-16 IPC follow-up: let the spawner set RELAY_SESSION_ID on
+      // the child so its MCP server can resolve coordination file paths
+      // when the in-process Coordinator isn't reachable.
+      autonomousSessionId: this.lifecycle.sessionId,
     };
     const session = new RepoAdminSession(sessionOpts);
 
