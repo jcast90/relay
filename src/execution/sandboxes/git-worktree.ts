@@ -44,6 +44,17 @@ export interface GitWorktreeStateFile {
   createdAt: string;
   base: string;
   branch: string;
+  /**
+   * Absolute path of the origin repo this worktree was cut from. Added
+   * for the AL-14 follow-up `rly sweep-worktrees` crash-recovery path:
+   * the sweeping process doesn't have the original `SandboxProvider`
+   * instance's in-memory `ownerRepo` map, so it relies on this stamp
+   * to drive `git worktree remove` against the correct repo. Optional
+   * for back-compat — stamps written before the field existed keep
+   * deserializing, and the sweep falls back to "skip destroy, mark
+   * ticket completed anyway" when `repoRoot` is absent.
+   */
+  repoRoot?: string;
 }
 
 export interface CreateOptions {
@@ -194,6 +205,10 @@ export class GitWorktreeSandboxProvider implements SandboxProvider {
       createdAt: new Date().toISOString(),
       base,
       branch,
+      // AL-14 follow-up: stamp the origin repo so a later crash-recovery
+      // sweep (different process, different SandboxProvider instance) can
+      // still drive `git worktree remove` against the correct repo.
+      repoRoot: repo.root,
     };
 
     try {

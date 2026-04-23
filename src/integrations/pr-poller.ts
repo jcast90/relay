@@ -86,6 +86,38 @@ export interface PrPollerOptions {
    * and logged — a misbehaving reviewer must not poison tracking.
    */
   onTrack?: (entry: TrackedPr) => void;
+  /**
+   * AL-14 follow-up: fired exactly once per tracked PR when the poller
+   * observes a `prState` transition to `"merged"`. The autonomous-loop
+   * driver subscribes so it can drive `TicketRunner.handlePrMerged` and
+   * destroy the ticket's worktree within one poll tick of the merge —
+   * regardless of whether the merge was performed by a user, an agent,
+   * or an external webhook.
+   *
+   * Fires BEFORE `untrack()` inside the same `onPrStateChange` handler so
+   * subscribers that look up other tracked state (e.g. via `listTracked`)
+   * still see the entry. Errors thrown by the listener are caught and
+   * logged — a misbehaving subscriber must not stop the poller from
+   * cleaning up its internal state.
+   */
+  onMerged?: (evt: PrMergedEvent) => void;
+}
+
+/**
+ * Payload for {@link PrPollerOptions.onMerged} subscribers. Fires once per
+ * tracked PR when the poller observes `prState` flip to `"merged"`.
+ */
+export interface PrMergedEvent {
+  /** The ticket that spawned the worker that opened this PR. */
+  ticketId: string;
+  /** Channel the PR was tracked under. */
+  channelId: string;
+  /** Browser-usable PR URL, preserved verbatim from `TrackedPr.pr.url`. */
+  prUrl: string;
+  /** `(owner, name)` of the repo the PR lives in. */
+  repo: { owner: string; name: string };
+  /** GitHub PR number. */
+  prNumber: number;
 }
 
 interface TrackedState {
@@ -110,6 +142,15 @@ export class PrPoller {
   private readonly tracked = new Map<string, TrackedState>();
   private readonly onSnapshot?: (rows: TrackedPrSnapshot[]) => void;
   private readonly onTrackListener?: (entry: TrackedPr) => void;
+  /**
+   * AL-14 follow-up: dynamic merge-event subscribers. The constructor
+   * option {@link PrPollerOptions.onMerged} pre-registers one listener;
+   * {@link onMerged} adds further listeners at runtime. The autonomous-
+   * loop driver subscribes via the runtime API after construction so the
+   * pr-poller can be shared across multiple subscribers (reviewer + sweep)
+   * without forcing a factory-composition pattern.
+   */
+  private readonly mergedListeners: Array<(evt: PrMergedEvent) => void> = [];
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
@@ -121,6 +162,20 @@ export class PrPoller {
     this.intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
     this.onSnapshot = options.onSnapshot;
     this.onTrackListener = options.onTrack;
+    if (options.onMerged) this.mergedListeners.push(options.onMerged);
+  }
+
+  /**
+   * Register a dynamic merge-event listener. Returns an `unsubscribe`
+   * function so callers can detach cleanly — used by the autonomous-
+   * loop driver to remove its listener on terminal exit.
+   */
+  onMerged(listener: (evt: PrMergedEvent) => void): () => void {
+    this.mergedListeners.push(listener);
+    return () => {
+      const idx = this.mergedListeners.indexOf(listener);
+      if (idx >= 0) this.mergedListeners.splice(idx, 1);
+    };
   }
 
   track(entry: TrackedPr): void {
@@ -313,6 +368,27 @@ export class PrPoller {
       prUrl: entry.pr.url,
       prState: to,
     });
+    // AL-14 follow-up: fire merge-event listeners BEFORE `untrack()`
+    // removes the row so any synchronous subscriber that consults other
+    // tracked state (e.g. `listTracked()`) still sees the entry.
+    if (to === "merged" && this.mergedListeners.length > 0) {
+      const payload: PrMergedEvent = {
+        ticketId: entry.ticketId,
+        channelId: entry.channelId,
+        prUrl: entry.pr.url,
+        repo: entry.repo,
+        prNumber: entry.pr.number,
+      };
+      // Snapshot so a listener that unsubscribes mid-dispatch doesn't
+      // skip siblings registered against the same event.
+      for (const listener of this.mergedListeners.slice()) {
+        try {
+          listener(payload);
+        } catch (err) {
+          console.warn("[pr-poller] onMerged listener threw; ignoring", err);
+        }
+      }
+    }
     if (to === "merged" || to === "closed") this.untrack(entry.ticketId);
   }
 

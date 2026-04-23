@@ -4,6 +4,7 @@ import type { Channel, RepoAssignment } from "../domain/channel.js";
 import type { TicketLedgerEntry } from "../domain/ticket.js";
 import { ChannelStore } from "../channels/channel-store.js";
 import { Coordinator } from "../crosslink/coordinator.js";
+import type { PrMergedEvent, PrPoller } from "../integrations/pr-poller.js";
 import { runPostCompletionAudit, type AuditInvoker, type AuditRunResult } from "./audit-agent.js";
 import { RepoAdminPool, isRepoAdminPoolEnabled } from "./repo-admin-pool.js";
 import type { RepoAdminProcessSpawner, RepoAdminSession } from "./repo-admin-session.js";
@@ -16,6 +17,7 @@ import {
 import { TicketRouter } from "./ticket-router.js";
 import { TicketRunner } from "./ticket-runner.js";
 import { WorkerSpawner } from "./worker-spawner.js";
+import { type GhPrView, sweepAbandonedWorktrees } from "./worktree-sweep.js";
 
 /**
  * Env var gating AL-14's worker-drain phase. Distinct from the pool-enabled
@@ -138,6 +140,25 @@ export interface StartAutonomousSessionOptions {
      * instead of stalling on the default one-second cadence.
      */
     pollIntervalMs?: number;
+    /**
+     * AL-14 follow-up: optional pr-poller hook injected so the driver can
+     * subscribe to merge events. When set, the driver registers an
+     * `onMerged` listener; each merged PR is routed to the matching
+     * {@link TicketRunner.handlePrMerged} so the worktree is destroyed
+     * within one poll tick of the merge (AC1 of the AL-14 follow-up).
+     *
+     * Production callers are expected to pass a live {@link PrPoller};
+     * tests inject a fake that fires `onMerged` synchronously so the
+     * invariant ("merge event → worktree destroyed") can be asserted
+     * without a real GitHub round-trip.
+     */
+    prPoller?: Pick<PrPoller, "onMerged">;
+    /**
+     * AL-14 follow-up: test seam for the terminal sweep pass. When set,
+     * replaces the default `gh pr view` probe with a fake so tests can
+     * assert the driver's terminal-sweep behaviour without shelling out.
+     */
+    ghPrView?: GhPrView;
   };
   /**
    * AL-6 seam: invoked exactly once when the driver reaches "all
@@ -594,6 +615,7 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
       lifecycle,
       workerSpawner: testOverrides?.workerSpawner ?? new WorkerSpawner(),
       pollIntervalMs: testOverrides?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+      prPoller: testOverrides?.prPoller,
     });
     terminalState = result.state;
     terminalReason = result.reason;
@@ -644,6 +666,35 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
       })
     )
   );
+
+  // AL-14 follow-up: terminal worktree sweep. Before we transition the
+  // lifecycle, walk any ticket in `verifying` state whose PR has already
+  // merged and destroy the worktree. The driver's steady-state merge
+  // subscription (above) covers mid-run merges; this sweep covers the
+  // race where a PR merged AFTER the driver exited its loop but BEFORE
+  // the terminal transition fired. `olderThanHours: 0` so a freshly-
+  // merged ticket isn't skipped by the 24h grace window — the grace
+  // window exists for the cross-session CLI crash-recovery case, not
+  // for a driver that just observed the merge itself.
+  if (pool && drainEnabled) {
+    try {
+      await sweepAbandonedWorktrees({
+        channelStore,
+        spawner: testOverrides?.workerSpawner ?? new WorkerSpawner(),
+        channelId: channel.channelId,
+        ghPrView: testOverrides?.ghPrView,
+        olderThanHours: 0,
+        dryRun: false,
+        rootDir: testOverrides?.rootDir,
+      });
+    } catch (err) {
+      console.warn(
+        `[autonomous-loop] terminal worktree sweep failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+  }
 
   // AL-6: post-completion audit hook. Fires exactly once per session, in
   // the window between "last ticket drained" and "terminal lifecycle
@@ -967,6 +1018,15 @@ interface SteadyStateDriverArgs {
   lifecycle: SessionLifecycle;
   workerSpawner: WorkerSpawner;
   pollIntervalMs: number;
+  /**
+   * AL-14 follow-up: optional merge-event subscription bus. When set,
+   * the driver registers an `onMerged` listener and routes each merge
+   * event to the matching {@link TicketRunner.handlePrMerged} so the
+   * ticket's worktree is destroyed within one tick of the merge.
+   * Absent = no steady-state merge cleanup (the terminal sweep still
+   * runs on driver exit).
+   */
+  prPoller?: Pick<PrPoller, "onMerged">;
 }
 
 interface SteadyStateDriverResult {
@@ -1005,10 +1065,60 @@ interface SteadyStateDriverResult {
  *      static but a runner is still waiting on a worker exit) and loop.
  */
 async function runSteadyStateDriver(args: SteadyStateDriverArgs): Promise<SteadyStateDriverResult> {
-  const { pool, channel, channelStore, allowedRepos, lifecycle, workerSpawner, pollIntervalMs } =
-    args;
+  const {
+    pool,
+    channel,
+    channelStore,
+    allowedRepos,
+    lifecycle,
+    workerSpawner,
+    pollIntervalMs,
+    prPoller,
+  } = args;
 
   const router = new TicketRouter({ pool, channel, channelStore });
+
+  /**
+   * AL-14 follow-up: reverse index from ticketId back to the runner that
+   * owns it. Populated when a runner fires `worker-pr-opened` (the earliest
+   * point we know a worktree exists for that ticket) and consumed by the
+   * pr-poller `onMerged` bridge below. We keep this as a flat map rather
+   * than walking every runner's `listInflight()` on each event because
+   * merge events can fire long after the drain loop has moved on — the
+   * owning runner may no longer have the ticket in its in-flight map by
+   * the time `handlePrMerged` is called. The runner's own idempotency
+   * guard handles that case, but the lookup has to still find the
+   * runner first.
+   */
+  const runnerByTicketId = new Map<string, TicketRunner>();
+
+  /**
+   * AL-14 follow-up: unsubscribe from the pr-poller's merge bus when the
+   * driver returns. Held here (not inside the `try/finally` below) so
+   * the detach happens even on early `break` paths.
+   */
+  let unsubscribePrPoller: (() => void) | null = null;
+  if (prPoller) {
+    unsubscribePrPoller = prPoller.onMerged((evt: PrMergedEvent) => {
+      const runner = runnerByTicketId.get(evt.ticketId);
+      if (!runner) {
+        // Merge event for a ticket this driver doesn't own (e.g. a
+        // ticket routed by a prior session, or a manual `pr-watch`
+        // track). The terminal sweep catches this — we skip here so a
+        // stale subscription doesn't log noise per tick.
+        return;
+      }
+      // Kick off the merge handler but don't block the pr-poller's
+      // tick — the handler does its own error logging.
+      void runner.handlePrMerged(evt.ticketId).catch((err) => {
+        console.warn(
+          `[autonomous-loop] handlePrMerged(${evt.ticketId}) threw: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+      });
+    });
+  }
 
   /**
    * Tickets we've already handed to the router this session. Prevents a
@@ -1247,6 +1357,23 @@ async function runSteadyStateDriver(args: SteadyStateDriverArgs): Promise<Steady
         if (!acceptingNew) runner.stopAcceptingNew();
         runnersByAlias.set(admin.alias, runner);
         runnerAdminSessionByAlias.set(admin.alias, admin.sessionId);
+
+        // AL-14 follow-up: register this runner as the owner of any
+        // ticket it spawns a worker for, so a later pr-poller merge
+        // event can route back to it. We subscribe to the runner's
+        // `worker-pr-opened` event (the earliest point where a worktree
+        // exists + the PR URL is known) rather than `worker-started`
+        // because tickets that fail without opening a PR will never
+        // receive a merge event.
+        runner.on("worker-pr-opened", (evt) => {
+          runnerByTicketId.set(evt.ticketId, runner);
+        });
+        // Drop the map entry when the runner itself finalises the
+        // merge so a late event (e.g. a duplicate poll hit) doesn't
+        // fire `handlePrMerged` twice.
+        runner.on("ticket-merged", (evt) => {
+          runnerByTicketId.delete(evt.ticketId);
+        });
       }
 
       // Kick + await drain. Runners serialize internally, parallelize
@@ -1339,6 +1466,7 @@ async function runSteadyStateDriver(args: SteadyStateDriverArgs): Promise<Steady
     }
   } finally {
     unsubscribeLifecycle();
+    if (unsubscribePrPoller) unsubscribePrPoller();
   }
 
   const runners = Array.from(runnersByAlias.values());
