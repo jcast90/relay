@@ -722,6 +722,127 @@ fn set_channel_tier(channel_id: String, tier: Option<String>) -> Result<(), Stri
     data::save_channel(&ch)
 }
 
+// ─── Provider profiles ───────────────────────────────────────────
+// Added by PR 3 of the multi-provider series. All commands shell out
+// to the `rly providers …` / `rly channel set-provider` CLI paths
+// added by PRs 1 and 2 respectively — keeping one mutation path
+// across CLI + GUI. When the underlying subcommand isn't available
+// yet (PR 1/2 not merged), `cli_json` surfaces the non-zero exit
+// with stderr attached so the GUI shows a clear error banner rather
+// than silently succeeding.
+
+#[tauri::command]
+fn list_provider_profiles() -> Result<serde_json::Value, String> {
+    cli_json(&["providers", "profiles", "list", "--json"])
+}
+
+/// Read the globally-selected default profile id. The CLI prints
+/// `{ "defaultProfileId": "<id>" | null }` in JSON mode; absence of
+/// a default is normal and maps to `Ok(null)` on the renderer side.
+#[tauri::command]
+fn get_default_provider_profile_id() -> Result<Option<String>, String> {
+    let value = cli_json(&["providers", "default", "--json"])?;
+    Ok(value
+        .get("defaultProfileId")
+        .and_then(|v| v.as_str())
+        .map(String::from))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderProfileInput {
+    pub id: String,
+    pub display_name: String,
+    pub adapter: String,
+    #[serde(default)]
+    pub env_overrides: BTreeMap<String, String>,
+    #[serde(default)]
+    pub api_key_env_ref: Option<String>,
+    #[serde(default)]
+    pub default_model: Option<String>,
+}
+
+#[tauri::command]
+fn upsert_provider_profile(profile: ProviderProfileInput) -> Result<serde_json::Value, String> {
+    validate_id_segment(&profile.id, "profile.id")?;
+    if profile.display_name.trim().is_empty() {
+        return Err("profile.displayName must not be empty".into());
+    }
+    if profile.adapter != "claude" && profile.adapter != "codex" {
+        return Err(format!(
+            "profile.adapter must be 'claude' or 'codex' (got '{}')",
+            profile.adapter
+        ));
+    }
+    let mut args: Vec<String> = vec![
+        "providers".into(),
+        "profiles".into(),
+        "add".into(),
+        profile.id.clone(),
+        "--adapter".into(),
+        profile.adapter.clone(),
+        "--display-name".into(),
+        profile.display_name.clone(),
+        "--upsert".into(),
+        "--json".into(),
+    ];
+    if let Some(ref model) = profile.default_model {
+        if !model.is_empty() {
+            args.push("--default-model".into());
+            args.push(model.clone());
+        }
+    }
+    if let Some(ref key) = profile.api_key_env_ref {
+        if !key.is_empty() {
+            args.push("--api-key-env-ref".into());
+            args.push(key.clone());
+        }
+    }
+    for (k, v) in profile.env_overrides.iter() {
+        if k.is_empty() {
+            continue;
+        }
+        args.push("--env".into());
+        args.push(format!("{}={}", k, v));
+    }
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    cli_json(&refs)
+}
+
+#[tauri::command]
+fn remove_provider_profile(id: String) -> Result<serde_json::Value, String> {
+    validate_id_segment(&id, "id")?;
+    cli_json(&["providers", "profiles", "remove", &id, "--json"])
+}
+
+#[tauri::command]
+fn set_default_provider_profile(id: Option<String>) -> Result<serde_json::Value, String> {
+    let target = match id.as_deref() {
+        None | Some("") => "clear".to_string(),
+        Some(s) => {
+            validate_id_segment(s, "id")?;
+            s.to_string()
+        }
+    };
+    cli_json(&["providers", "default", &target, "--json"])
+}
+
+#[tauri::command]
+fn set_channel_provider_profile(
+    channel_id: String,
+    profile_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    let target = match profile_id.as_deref() {
+        None | Some("") => "clear".to_string(),
+        Some(s) => {
+            validate_id_segment(s, "profileId")?;
+            s.to_string()
+        }
+    };
+    cli_json(&["channel", "set-provider", &channel_id, &target, "--json"])
+}
+
 #[tauri::command]
 fn get_settings() -> data::GuiSettings {
     data::load_gui_settings()
@@ -2745,6 +2866,13 @@ pub fn run() {
             // earlier (AL-9 owner); AL-10's duplicate was dropped.
             list_autonomous_sessions,
             get_session_state,
+            // Provider profiles (PR 3 of multi-provider series).
+            list_provider_profiles,
+            get_default_provider_profile_id,
+            upsert_provider_profile,
+            remove_provider_profile,
+            set_default_provider_profile,
+            set_channel_provider_profile,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

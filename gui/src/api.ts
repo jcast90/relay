@@ -13,6 +13,7 @@ import type {
   GuiSettings,
   PendingPlan,
   PersistedChatMessage,
+  ProviderProfile,
   RewindResult,
   RewindSnapshot,
   RunIndexEntry,
@@ -204,6 +205,23 @@ export const api = {
   // session dir for the autonomous driver to observe. AL-10 reuses it
   // for the session-header stop button.
   stopSession: (sessionId: string) => invoke<void>("stop_session", { sessionId }),
+
+  // Provider profiles — named bundles of adapter + env overrides that
+  // resolve into the environment handed to agent subprocesses. All
+  // writes round-trip through the `rly providers …` CLI so the CLI
+  // and GUI share a single mutation path. Added by PR 3 of the
+  // multi-provider series; PR 1 wires the CLI commands these invoke.
+  listProviderProfiles: () => invoke<ProviderProfile[]>("list_provider_profiles"),
+  getDefaultProviderProfileId: () =>
+    invoke<string | null>("get_default_provider_profile_id"),
+  upsertProviderProfile: (profile: ProviderProfile) =>
+    invoke<ProviderProfile>("upsert_provider_profile", { profile }),
+  removeProviderProfile: (id: string) =>
+    invoke<void>("remove_provider_profile", { id }),
+  setDefaultProviderProfile: (id: string | null) =>
+    invoke<void>("set_default_provider_profile", { id }),
+  setChannelProviderProfile: (channelId: string, profileId: string | null) =>
+    invoke<void>("set_channel_provider_profile", { channelId, profileId }),
 };
 
 export type ChatEvent =
