@@ -19,6 +19,7 @@ import { DecisionsView } from "./DecisionsView";
 import { DmHeader } from "./DmHeader";
 import { MessageList } from "./MessageList";
 import { PromoteDmModal } from "./PromoteDmModal";
+import { SpinoutSuggestion } from "./SpinoutSuggestion";
 
 type Props = {
   channel: Channel | null;
@@ -31,6 +32,12 @@ type Props = {
   onSessionCreated: (sessionId: string) => void;
   onStreamingChanged?: (count: number) => void;
   onChannelRemoved: (id: string) => void;
+  /**
+   * Spin-out bridge: called when the inline suggestion card in a
+   * general channel is accepted. Parent opens the new-channel modal
+   * with the kickoff + section pre-filled.
+   */
+  onSpinoutToChannel?: (kickoff: string, sectionId: string | null) => void;
 };
 
 export function CenterPane({
@@ -44,6 +51,7 @@ export function CenterPane({
   onSessionCreated,
   onStreamingChanged,
   onChannelRemoved,
+  onSpinoutToChannel,
 }: Props) {
   const [tab, setTab] = useState<ChannelTab>("chat");
   const [feed, setFeed] = useState<ChannelEntry[]>([]);
@@ -214,6 +222,13 @@ export function CenterPane({
       )}
       {(isDm || tab === "chat") && (
         <>
+          {!isDm && onSpinoutToChannel && (
+            <SpinoutSuggestion
+              channel={channel}
+              sessionMessages={sessionMessages}
+              onSpinout={(kickoff) => onSpinoutToChannel(kickoff, channel.sectionId ?? null)}
+            />
+          )}
           <MessageList
             channel={channel}
             sessionId={sessionId}
