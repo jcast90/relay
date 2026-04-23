@@ -13,19 +13,22 @@
   --color-paper-base:  #fbf9f4;
   --color-paper-alt:   #f3f0e7;
   --color-paper-line:  #e5e1d5;
-  /* Hover / pressed surfaces — meaningful luminance drops so state
-     changes are perceptible (WCAG 2.1 SC 1.4.11 asks ≥3:1 for
-     non-text UI indicators; `paper-alt` resting-state surfaces only
-     gave ~1.04:1 when also used as hover). Paper-hover is the
-     go-to for button/item hover on paper-base; paper-pressed is
-     reserved for active/focused controls. */
-  --color-paper-hover:   #e8e1cc;
-  --color-paper-pressed: #d9d0b4;
+  /* Hover / pressed surfaces — first pass shipped at ~1.22:1 which
+     was technically a drop but still read as "hover does nothing."
+     Second pass deepens to ~1.6:1 for hover and ~2.0:1 for pressed.
+     Still under WCAG 1.4.11's 3:1 target (that ratio on a paper-tone
+     surface looks like mud), but combined with the cursor pointer +
+     the border/outline bumps below it's a clearly perceptible state
+     change. If you need a stronger floor, use `prefers-contrast:
+     more` in a follow-up. */
+  --color-paper-hover:   #d8cfb0;
+  --color-paper-pressed: #bdb088;
   /* Dark-surface parallel: ink-deep is the sidebar ground; ink-hover
      is the explicit hover step. ink-panel remains a raised-surface
      resting token (e.g. sidebar group headers), which is why hover
-     needed its own value — one ≈4% step wasn't enough. */
-  --color-ink-hover:     #293553;
+     needed its own value — one ≈4% step wasn't enough. Tuned up
+     alongside the paper-side bump for parity. */
+  --color-ink-hover:     #364370;
 
   /* Text */
   --color-text-primary:      #1b1f2a;
