@@ -113,11 +113,13 @@ jobs:
 
       - name: No window.prompt/confirm/alert in gui/src
         # Tauri v2 WKWebView no-ops these (see gui/src/lib/dialogs.ts).
-        # Every past attempt cost real users a broken flow — keep them out.
-        # Uses `|| true` on the grep to let the script handle both matched
-        # and unmatched exits.
+        # Every past occurrence cost real users a broken flow — keep them
+        # out. Regex requires an immediate `(` so documentation prose
+        # that mentions the APIs (with a space before the paren) doesn't
+        # match. `|| true` lets the script handle both matched + unmatched
+        # grep exits.
         run: |
-          MATCHES=$(grep -rnE "\bwindow\.(prompt|confirm|alert)\s*\(" gui/src || true)
+          MATCHES=$(grep -rnE "\bwindow\.(prompt|confirm|alert)\(" gui/src || true)
           if [ -n "$MATCHES" ]; then
             echo "::error::window.prompt/confirm/alert no-op in Tauri v2 WKWebView. Route through PromptModal or gui/src/lib/dialogs.ts."
             echo "$MATCHES"
