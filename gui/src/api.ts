@@ -12,6 +12,7 @@ import type {
   RewindResult,
   RewindSnapshot,
   RunIndexEntry,
+  Section,
   Spawn,
   TicketLedgerEntry,
   TrackedPrRow,
@@ -63,6 +64,19 @@ export const api = {
     }),
   archiveChannel: (channelId: string) => invoke<unknown>("archive_channel", { channelId }),
   unarchiveChannel: (channelId: string) => invoke<unknown>("unarchive_channel", { channelId }),
+
+  // Sections — sidebar grouping above channels.
+  listSections: (includeDecommissioned = false) =>
+    invoke<Section[]>("list_sections", { includeDecommissioned }),
+  createSection: (name: string) => invoke<Section>("create_section", { name }),
+  renameSection: (sectionId: string, name: string) =>
+    invoke<Section>("rename_section", { sectionId, name }),
+  decommissionSection: (sectionId: string) =>
+    invoke<Section>("decommission_section", { sectionId }),
+  restoreSection: (sectionId: string) => invoke<Section>("restore_section", { sectionId }),
+  deleteSection: (sectionId: string) => invoke<{ ok: boolean }>("delete_section", { sectionId }),
+  assignChannelSection: (channelId: string, sectionId: string | null) =>
+    invoke<Channel>("assign_channel_section", { channelId, sectionId }),
   createDm: (workspaceId: string, workspacePath: string, alias: string) =>
     invoke<{ channelId: string }>("create_dm", { workspaceId, workspacePath, alias }),
   promoteDm: (

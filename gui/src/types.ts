@@ -66,7 +66,19 @@ export type Channel = {
   // + streaming path as a channel, but the sidebar segregates them and the
   // UI hides tabs + shows a Promote-to-channel affordance.
   kind?: "channel" | "dm";
+  // Sidebar grouping. `undefined` means the channel lives in the
+  // "Uncategorized" bucket at the bottom of the sidebar.
+  sectionId?: string;
   // ISO 8601; optional for back-compat with older channel files.
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type Section = {
+  sectionId: string;
+  name: string;
+  order: number;
+  status: "active" | "decommissioned";
   createdAt?: string;
   updatedAt?: string;
 };
