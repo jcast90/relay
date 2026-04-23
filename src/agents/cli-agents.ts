@@ -60,6 +60,25 @@ interface CliAgentOptions {
    * `--dangerously-skip-permissions` is set.
    */
   role?: AgentRoleName;
+  /**
+   * Provider-profile env overlay. Explicit key/value pairs merged into the
+   * sanitized subprocess env — these OVERRIDE any same-named var from the
+   * parent shell, which is the whole point: a channel bound to the
+   * "openrouter" profile can ship `OPENAI_BASE_URL=https://openrouter…`
+   * even when the user's shell exports a different value.
+   *
+   * Secrets do NOT belong here — the profile's `apiKeyEnvRef` is the
+   * channel to forward a raw key, and PR 1's store refuses to persist
+   * secret-shaped values under `envOverrides`.
+   */
+  envOverlay?: Record<string, string>;
+  /**
+   * Extra env-var names appended to the adapter's default pass-env list
+   * ({@link CLAUDE_PASS_ENV} / {@link CODEX_PASS_ENV}). Used to forward a
+   * profile's `apiKeyEnvRef` — Relay never dereferences the secret; the
+   * subprocess reads it from its own env.
+   */
+  extraPassEnv?: string[];
 }
 
 interface ParsedProviderResult {
@@ -169,6 +188,8 @@ abstract class CliAgentBase implements Agent {
    */
   protected readonly fullAccess: boolean;
   protected readonly role?: AgentRoleName;
+  protected readonly envOverlay?: Record<string, string>;
+  protected readonly extraPassEnv: readonly string[];
 
   constructor(options: CliAgentOptions) {
     this.id = options.id;
@@ -181,18 +202,32 @@ abstract class CliAgentBase implements Agent {
     this.onStreamLine = options.onStreamLine;
     this.fullAccess = options.fullAccess === true;
     this.role = options.role;
+    this.envOverlay = options.envOverlay;
+    // De-dupe so the invoker's allowlist set doesn't carry redundant
+    // names. Order doesn't matter; presence does.
+    this.extraPassEnv = Array.from(new Set(options.extraPassEnv ?? []));
   }
 
   /**
-   * AL-11: env overlay applied when spawning the CLI. Sets
-   * `RELAY_AGENT_ROLE=<role>` so the MCP server in the dispatched session
-   * activates per-role enforcement. Returns `undefined` when the agent is
-   * unrestricted so the invoker's default env is untouched (parity with
-   * pre-AL-11 behaviour).
+   * Combined env overlay applied when spawning the CLI:
+   *
+   *   - `RELAY_AGENT_ROLE=<role>` (AL-11) activates the MCP per-role
+   *     allowlist in the dispatched session.
+   *   - Provider-profile `envOverlay` entries override parent-shell values
+   *     so the adapter can switch base URL / model for this run only.
+   *
+   * Returns `undefined` when no overlay is needed, keeping the invoker's
+   * default env path untouched for pre-AL-11 / pre-profile callers.
    */
   protected roleEnvOverlay(): Record<string, string> | undefined {
-    if (!this.role) return undefined;
-    return { RELAY_AGENT_ROLE: this.role };
+    const out: Record<string, string> = {};
+    if (this.role) out.RELAY_AGENT_ROLE = this.role;
+    if (this.envOverlay) {
+      for (const [key, value] of Object.entries(this.envOverlay)) {
+        out[key] = value;
+      }
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
   }
 
   async run(request: WorkRequest) {
@@ -283,8 +318,10 @@ export class CodexCliAgent extends CliAgentBase {
         timeoutMs: 300_000,
         // Codex authenticates via its own config or API key env vars. The
         // invoker strips secrets by default (OSS-03); opt these back in so
-        // users who rely on env-based auth aren't silently broken.
-        passEnv: [...CODEX_PASS_ENV],
+        // users who rely on env-based auth aren't silently broken. The
+        // profile's `apiKeyEnvRef` (if any) is appended via
+        // `extraPassEnv` so Relay never has to dereference the secret.
+        passEnv: [...CODEX_PASS_ENV, ...this.extraPassEnv],
         env: this.roleEnvOverlay(),
       });
 
@@ -361,8 +398,10 @@ export class ClaudeCliAgent extends CliAgentBase {
       timeoutMs: 300_000,
       // Claude CLI authenticates via its own config dir or API key env vars.
       // The invoker strips secrets by default (OSS-03); opt these back in so
-      // users who rely on env-based auth aren't silently broken.
-      passEnv: [...CLAUDE_PASS_ENV],
+      // users who rely on env-based auth aren't silently broken. The
+      // profile's `apiKeyEnvRef` (if any) is appended via `extraPassEnv` so
+      // Relay never has to dereference the secret.
+      passEnv: [...CLAUDE_PASS_ENV, ...this.extraPassEnv],
       env: this.roleEnvOverlay(),
     });
 
@@ -408,7 +447,7 @@ export class ClaudeCliAgent extends CliAgentBase {
       args,
       cwd: this.cwd,
       timeoutMs: 300_000,
-      passEnv: [...CLAUDE_PASS_ENV],
+      passEnv: [...CLAUDE_PASS_ENV, ...this.extraPassEnv],
       env: this.roleEnvOverlay(),
     });
 
