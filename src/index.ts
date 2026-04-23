@@ -3348,28 +3348,42 @@ function printProfileHuman(profile: ProviderProfile): void {
 
 async function handleProviderDefaultCommand(args: string[]): Promise<number> {
   const store = new ProviderProfileStore();
-  const arg = args[0];
+  const jsonMode = args.includes("--json");
+  const positionals = args.filter((a) => a !== "--json");
+  const arg = positionals[0];
 
   if (!arg) {
     const current = await store.getDefaultProfileId();
-    console.log(current ?? "(no default profile set)");
+    if (jsonMode) {
+      console.log(JSON.stringify({ defaultProfileId: current }));
+    } else {
+      console.log(current ?? "(no default profile set)");
+    }
     return 0;
   }
 
   if (arg === "--help" || arg === "-h" || arg === "help") {
-    console.log("Usage: rly providers default [<id> | clear]");
+    console.log("Usage: rly providers default [<id> | clear] [--json]");
     return 0;
   }
 
   if (arg === "clear") {
     await store.setDefaultProfileId(null);
-    console.log("Cleared default profile.");
+    if (jsonMode) {
+      console.log(JSON.stringify({ defaultProfileId: null }));
+    } else {
+      console.log("Cleared default profile.");
+    }
     return 0;
   }
 
   try {
     await store.setDefaultProfileId(arg);
-    console.log(`Default profile set to '${arg}'.`);
+    if (jsonMode) {
+      console.log(JSON.stringify({ defaultProfileId: arg }));
+    } else {
+      console.log(`Default profile set to '${arg}'.`);
+    }
     return 0;
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));

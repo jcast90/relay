@@ -63,7 +63,7 @@ Known-good endpoints:
 
 Models with weak instruction-following or no structured-output support will produce results the orchestrator rejects. If a provider refuses Codex's `--output-schema` flag, it's not viable through this path.
 
-> Want to save these env vars under a reusable name? See [Named profiles](#named-profiles-experimental) below — `rly providers profiles add <id>` persists the recipe to `~/.relay/provider-profiles.json` (secrets stay in your shell).
+> Want to save these env vars under a reusable name? See [Named profiles](#named-profiles) below — `rly providers profiles add <id>` persists the recipe to `~/.relay/provider-profiles.json` (secrets stay in your shell).
 
 ### Anthropic-compatible providers through Claude
 
@@ -78,19 +78,9 @@ export ANTHROPIC_MODEL=<provider model id>
 
 This works for any proxy that speaks the Anthropic `/v1/messages` protocol (LiteLLM in Anthropic-compat mode, Bedrock proxies, etc.). For native Bedrock / Vertex, use the Claude CLI's own flags (`CLAUDE_CODE_USE_BEDROCK=1` / `CLAUDE_CODE_USE_VERTEX=1`) plus the appropriate cloud credentials — both are already in the env allowlist.
 
-## Smoke-testing your setup
+## Named profiles
 
-```bash
-rly providers check            # all configured providers
-rly providers check --provider codex
-rly providers list             # show what Relay sees in your env
-```
-
-`check` runs a short structured-output prompt end-to-end through the adapter you'd actually use at runtime, so it catches base-URL, auth, and schema-compat problems before a real `rly run` fails halfway through a plan.
-
-## Named profiles (experimental)
-
-A "provider profile" is a named bundle of adapter + env overrides + default model that you can save once and refer to by id later. Profiles live at `~/.relay/provider-profiles.json`. This PR adds the store and the CLI; the dispatch pipeline does not consume profiles yet — that is coming in a follow-up.
+A "provider profile" is a named bundle of adapter + env overrides + default model that you can save once and refer to by id later. Profiles live at `~/.relay/provider-profiles.json`. The dispatch path consumes them: a channel pinned to a profile via `rly channel set-provider` (or the GUI dropdown) runs through that profile's adapter + envOverrides + default model. Resolution order is channel profile → global default (`rly providers default <id>`) → legacy `HARNESS_PROVIDER` env.
 
 **Profiles never store secrets.** The profile JSON references env-var _names_ via `apiKeyEnvRef` and stores non-secret `envOverrides` (base URLs, org ids, model names). You still export the actual key in your shell the way you do today. `rly providers profiles add` rejects any `--env KEY=VAL` whose value looks like a raw API key and points you at `--api-key-ref` instead.
 
@@ -112,7 +102,16 @@ rly providers default             # print default
 rly providers default clear       # unset default
 ```
 
-`id` must match `[a-z0-9-]{1,32}`. `displayName` defaults to the id. `--env` can be repeated.
+`id` must match `[a-z0-9-]{1,32}`. `displayName` defaults to the id. `--env` can be repeated. Every CLI command above accepts `--json` for machine-readable output (which the GUI Tauri layer uses).
+
+To pin a channel to a profile:
+
+```bash
+rly channel set-provider <channelId> <profileId>   # pin
+rly channel set-provider <channelId> clear         # inherit default / HARNESS_PROVIDER
+```
+
+The GUI exposes the same surface: Settings drawer → About → Provider dropdown on each channel, and a Providers tab in the global Settings page for full CRUD.
 
 ## Native adapters (not yet)
 
