@@ -30,7 +30,13 @@ import { join } from "node:path";
 const REPO = process.env.RELAY_REPO ?? process.cwd();
 const CHANNEL_NAME = "autonomous-loop";
 
-type Effort = "S" | "M" | "L";
+// Effort band: widened to XS/S/M/L/XL to match AL-6's audit-agent
+// schema (`AuditEffortEstimateSchema`). Existing plan entries below
+// still use S/M/L; the widened type just unblocks the full band for
+// future plan additions and keeps every Effort surface in the repo
+// consistent. See `scripts/push-tickets-to-github.ts` for the GH
+// project-field side of the same widening.
+type Effort = "XS" | "S" | "M" | "L" | "XL";
 
 interface PlanItem {
   id: string;

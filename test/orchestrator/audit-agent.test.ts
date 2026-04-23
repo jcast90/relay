@@ -36,6 +36,7 @@ import { SessionLifecycle } from "../../src/lifecycle/session-lifecycle.js";
 import { TokenTracker } from "../../src/budget/token-tracker.js";
 import {
   AUDIT_MIN_HEADROOM_PCT,
+  DEFAULT_AUDIT_TIMEOUT_MS,
   runPostCompletionAudit,
   type AuditInvoker,
   type AuditResponse,
@@ -242,6 +243,45 @@ describe("runPostCompletionAudit — gating", () => {
       invokeAudit: invoker,
     });
     expect(result).toEqual({ kind: "skipped", reason: "agent_error" });
+    warnSpy.mockRestore();
+  });
+
+  it("returns agent_timeout when invoker hangs past auditTimeoutMs", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Invoker that never resolves — a stand-in for a wedged CLI child.
+    // Using an unresolved Promise rather than a long `setTimeout` keeps
+    // the test time-independent: the race inside the audit agent is what
+    // resolves the result, not the invoker's own timer.
+    const hangingInvoker: AuditInvoker = () => new Promise<string>(() => {});
+
+    const start = Date.now();
+    const result = await runPostCompletionAudit({
+      channel,
+      channelStore,
+      run: {
+        sessionId: "s-1",
+        tickets: [makeTicket("t-1", "primary", "completed")],
+        decisions: [],
+        recentCommits: [],
+      },
+      budgetHeadroomPct: 50,
+      invokeAudit: hangingInvoker,
+      // Short timeout so the test finishes quickly. The production
+      // default is 5 min; we're asserting the race itself, not the
+      // specific duration.
+      auditTimeoutMs: 50,
+    });
+    const elapsed = Date.now() - start;
+
+    expect(result).toEqual({ kind: "skipped", reason: "agent_timeout" });
+    // Generous upper bound: timeout + slack for macro task scheduling
+    // on a loaded CI box. Sanity-check only — if this trips it means
+    // the race isn't actually racing.
+    expect(elapsed).toBeLessThan(2_000);
+    // Make sure the production default is still the advertised 5
+    // minutes; a silent drop to a smaller number would be a regression
+    // callers rely on as the upper envelope.
+    expect(DEFAULT_AUDIT_TIMEOUT_MS).toBe(5 * 60 * 1000);
     warnSpy.mockRestore();
   });
 

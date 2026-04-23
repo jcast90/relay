@@ -155,7 +155,8 @@ export type AuditSkipReason =
   | "budget_headroom_too_low"
   | "ledger_had_failures"
   | "ledger_empty"
-  | "agent_error";
+  | "agent_error"
+  | "agent_timeout";
 
 export interface RunPostCompletionAuditOptions {
   /** Channel the session is running against. */
@@ -172,6 +173,15 @@ export interface RunPostCompletionAuditOptions {
   budgetHeadroomPct: number;
   /** LLM invocation callback. See {@link AuditInvoker}. */
   invokeAudit: AuditInvoker;
+  /**
+   * Hard ceiling on how long the invoker is allowed to run before the
+   * audit gives up. A hung CLI child would otherwise wedge the post-drain
+   * teardown path indefinitely; this race guarantees the caller gets a
+   * result within `auditTimeoutMs + ε`. Defaults to
+   * {@link DEFAULT_AUDIT_TIMEOUT_MS} (5 minutes) which is the envelope an
+   * interactive operator can absorb without noticing.
+   */
+  auditTimeoutMs?: number;
 }
 
 /**
@@ -180,6 +190,15 @@ export interface RunPostCompletionAuditOptions {
  * configurable per-channel) has a single site to revisit.
  */
 export const AUDIT_MIN_HEADROOM_PCT = 15;
+
+/**
+ * Default timeout for the audit invoker. 5 minutes is generous relative
+ * to a healthy Claude/Codex round-trip (seconds) but short enough that a
+ * wedged child process does not block the autonomous-loop's teardown
+ * past the point an operator would notice. Exported so tests can
+ * reference the number without duplicating it.
+ */
+export const DEFAULT_AUDIT_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
  * Prompt template. Intentionally a JSDoc constant rather than a separate
@@ -310,7 +329,14 @@ function isLedgerAllGreen(tickets: readonly TicketLedgerEntry[]): boolean {
 export async function runPostCompletionAudit(
   opts: RunPostCompletionAuditOptions
 ): Promise<AuditRunResult> {
-  const { channel, run, channelStore, budgetHeadroomPct, invokeAudit } = opts;
+  const {
+    channel,
+    run,
+    channelStore,
+    budgetHeadroomPct,
+    invokeAudit,
+    auditTimeoutMs = DEFAULT_AUDIT_TIMEOUT_MS,
+  } = opts;
 
   if (budgetHeadroomPct < AUDIT_MIN_HEADROOM_PCT) {
     return { kind: "skipped", reason: "budget_headroom_too_low" };
@@ -325,13 +351,34 @@ export async function runPostCompletionAudit(
 
   const prompt = renderAuditPrompt(channel, run);
   let rawResponse: string;
+  // Race the invoker against a wall-clock timeout. A hung CLI child
+  // would otherwise keep the post-drain path blocked forever; on
+  // timeout we return a distinct `agent_timeout` skip reason so the
+  // caller's metadata can differentiate "invoker threw" from "invoker
+  // never returned". The sentinel symbol is local so the timeout
+  // branch cannot be impersonated by a well-crafted invoker return.
+  const TIMEOUT_SENTINEL: unique symbol = Symbol("audit-agent-timeout");
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  const timeoutP = new Promise<typeof TIMEOUT_SENTINEL>((resolve) => {
+    timeoutHandle = setTimeout(() => resolve(TIMEOUT_SENTINEL), auditTimeoutMs);
+    // Don't let this timer prevent process exit — the race winner
+    // clears it on success, but belt-and-braces keep teardown clean.
+    if (typeof timeoutHandle.unref === "function") timeoutHandle.unref();
+  });
   try {
-    rawResponse = await invokeAudit(prompt);
+    const raced = await Promise.race([invokeAudit(prompt), timeoutP]);
+    if (raced === TIMEOUT_SENTINEL) {
+      console.warn(`[audit-agent] invoker timed out after ${auditTimeoutMs}ms`);
+      return { kind: "skipped", reason: "agent_timeout" };
+    }
+    rawResponse = raced;
   } catch (err) {
     console.warn(
       `[audit-agent] invoker threw: ${err instanceof Error ? err.message : String(err)}`
     );
     return { kind: "skipped", reason: "agent_error" };
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
   }
 
   let parsed: unknown;
