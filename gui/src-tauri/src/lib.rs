@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use tauri::Emitter;
 
 /// Defense-in-depth validator for IDs crossing the Tauri IPC boundary.
@@ -333,9 +333,68 @@ struct CliResult {
     code: Option<i32>,
 }
 
+/// Resolve the `rly` binary to an absolute path.
+///
+/// When the GUI is launched from Finder/Launchpad on macOS, it inherits
+/// launchd's minimal PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) — shell init
+/// files never run, so per-user install dirs (pnpm global, homebrew,
+/// npm-global, cargo, ~/.local/bin) aren't visible. A bare
+/// `Command::new("rly")` then fails ENOENT even though `rly` is installed.
+///
+/// Resolution order:
+///   1. `$RELAY_BIN` — explicit override, always wins.
+///   2. `$PATH` — works for terminal-launched sessions.
+///   3. Candidate user-local install dirs — covers Finder launches.
+///
+/// Resolved once per process (the CLI location doesn't change under us).
+fn resolve_rly_bin() -> String {
+    static RESOLVED: OnceLock<String> = OnceLock::new();
+    RESOLVED
+        .get_or_init(|| {
+            if let Ok(v) = std::env::var("RELAY_BIN") {
+                if !v.is_empty() {
+                    return v;
+                }
+            }
+            if let Some(p) = find_on_path("rly") {
+                return p;
+            }
+            let home = std::env::var("HOME").unwrap_or_default();
+            let candidates = [
+                format!("{home}/Library/pnpm/rly"),      // pnpm global, macOS
+                format!("{home}/.local/share/pnpm/rly"), // pnpm global, linux
+                "/opt/homebrew/bin/rly".to_string(),     // homebrew, apple silicon
+                "/usr/local/bin/rly".to_string(),        // homebrew intel + /usr/local
+                format!("{home}/.npm-global/bin/rly"),
+                format!("{home}/.local/bin/rly"),
+                format!("{home}/.cargo/bin/rly"),
+            ];
+            for c in &candidates {
+                if std::path::Path::new(c).is_file() {
+                    return c.clone();
+                }
+            }
+            // Nothing found — return the bare name so Command::new produces
+            // the ENOENT and cli_json wraps it with the full args for context.
+            "rly".to_string()
+        })
+        .clone()
+}
+
+fn find_on_path(name: &str) -> Option<String> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate.to_string_lossy().into_owned());
+        }
+    }
+    None
+}
+
 fn cli_run(args: &[&str]) -> CliResult {
-    let bin = std::env::var("RELAY_BIN").unwrap_or_else(|_| "rly".to_string());
-    match Command::new(bin)
+    let bin = resolve_rly_bin();
+    match Command::new(&bin)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -359,6 +418,18 @@ fn cli_run(args: &[&str]) -> CliResult {
 fn cli_json(args: &[&str]) -> Result<serde_json::Value, String> {
     let result = cli_run(args);
     if !result.success {
+        // code == None means spawn itself failed (ENOENT, EACCES) — the
+        // child never ran. Augment with the resolved path and the
+        // RELAY_BIN override so the user has an actionable message.
+        if result.code.is_none() {
+            return Err(format!(
+                "rly {} failed to launch: {} (resolved binary: {}). \
+                 Set RELAY_BIN or install rly on PATH.",
+                args.join(" "),
+                result.stderr.trim(),
+                resolve_rly_bin()
+            ));
+        }
         return Err(format!(
             "rly {} failed: {}",
             args.join(" "),
@@ -2367,6 +2438,47 @@ mod tests {
                 bad
             );
         }
+    }
+
+    // --- find_on_path ---
+
+    #[test]
+    fn find_on_path_discovers_executable_in_path_dirs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bin_path = dir.path().join("fake-rly-probe");
+        std::fs::write(&bin_path, b"#!/bin/sh\n").expect("write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&bin_path, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod");
+        }
+
+        // Prepend the tempdir to PATH and look for the fake binary.
+        let original_path = std::env::var_os("PATH");
+        let mut parts = vec![dir.path().to_path_buf()];
+        if let Some(ref p) = original_path {
+            parts.extend(std::env::split_paths(p));
+        }
+        let joined = std::env::join_paths(parts).expect("join_paths");
+        // SAFETY: tests in this file run single-threaded within this module;
+        // the env mutation is scoped to the test and restored before return.
+        unsafe { std::env::set_var("PATH", &joined) };
+
+        let found = find_on_path("fake-rly-probe");
+
+        // Restore before asserting so a failed assert doesn't leak PATH.
+        match original_path {
+            Some(v) => unsafe { std::env::set_var("PATH", v) },
+            None => unsafe { std::env::remove_var("PATH") },
+        }
+
+        assert_eq!(found.as_deref(), Some(bin_path.to_str().unwrap()));
+    }
+
+    #[test]
+    fn find_on_path_returns_none_when_absent() {
+        assert!(find_on_path("definitely-not-a-real-binary-xyz-7412").is_none());
     }
 
     // --- check_run_cli_allowed ---
