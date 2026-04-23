@@ -50,6 +50,13 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm build
 
+      - name: Test GUI (vitest)
+        # Regression guard for Tauri-WKWebView-specific UI bugs. If this
+        # fails, see gui/src/components/*.test.tsx for the scenarios.
+        run: |
+          cd gui
+          pnpm test
+
   rust-check:
     name: rust-check
     runs-on: ubuntu-latest
@@ -103,3 +110,16 @@ jobs:
 
       - name: Prettier check
         run: pnpm dlx prettier --check 'src/**/*.{ts,tsx}' 'test/**/*.{ts,tsx}' 'gui/src/**/*.{ts,tsx}' 'scripts/**/*.{ts,mts}' '*.md' 'docs/**/*.md'
+
+      - name: No window.prompt/confirm/alert in gui/src
+        # Tauri v2 WKWebView no-ops these (see gui/src/lib/dialogs.ts).
+        # Every past attempt cost real users a broken flow — keep them out.
+        # Uses `|| true` on the grep to let the script handle both matched
+        # and unmatched exits.
+        run: |
+          MATCHES=$(grep -rnE "\bwindow\.(prompt|confirm|alert)\s*\(" gui/src || true)
+          if [ -n "$MATCHES" ]; then
+            echo "::error::window.prompt/confirm/alert no-op in Tauri v2 WKWebView. Route through PromptModal or gui/src/lib/dialogs.ts."
+            echo "$MATCHES"
+            exit 1
+          fi

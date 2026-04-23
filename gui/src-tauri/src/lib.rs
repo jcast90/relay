@@ -2461,8 +2461,14 @@ mod tests {
             parts.extend(std::env::split_paths(p));
         }
         let joined = std::env::join_paths(parts).expect("join_paths");
-        // SAFETY: tests in this file run single-threaded within this module;
-        // the env mutation is scoped to the test and restored before return.
+        // NOTE: Rust tests default to parallel execution, so process-wide
+        // env mutation here is theoretically racy with any other test that
+        // reads PATH. Matches the existing pattern in this file (see the
+        // RELAY_HARNESS_ROOT-touching test). Keep the scope narrow and
+        // restore before assert; if a second PATH-mutating test is added,
+        // serialize them with `serial_test` (not yet a dep).
+        // The `unsafe` is required by Rust 2024 edition for env mutation,
+        // not a memory-safety claim.
         unsafe { std::env::set_var("PATH", &joined) };
 
         let found = find_on_path("fake-rly-probe");

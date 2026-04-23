@@ -261,26 +261,6 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   font-weight: var(--font-weight-regular);
 }
 
-.sidebar-new-section {
-  margin: var(--space-3) var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  background: transparent;
-  border: 1px dashed var(--color-ink-line);
-  color: var(--color-text-on-dark-muted);
-  border-radius: var(--radius-sm);
-  font: inherit;
-  font-size: var(--font-size-xs);
-  text-transform: uppercase;
-  letter-spacing: var(--letter-uppercase);
-  cursor: pointer;
-  text-align: left;
-}
-.sidebar-new-section:hover {
-  color: var(--color-text-on-dark);
-  border-color: var(--color-text-on-dark-muted);
-  background: var(--color-ink-panel);
-}
-
 .sidebar-new-menu-wrap {
   position: relative;
   padding: var(--space-3) var(--space-4);
