@@ -326,9 +326,8 @@ function AboutTab({
             color: "var(--color-text-muted)",
           }}
         >
-          Profile chosen here wins at dispatch. "Inherit default" falls back to
-          the global default profile, or <code>HARNESS_PROVIDER</code> if none
-          is set.
+          Profile chosen here wins at dispatch. "Inherit default" falls back to the global default
+          profile, or <code>HARNESS_PROVIDER</code> if none is set.
         </p>
         <select
           value={profileId}

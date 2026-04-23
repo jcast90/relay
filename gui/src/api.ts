@@ -212,12 +212,10 @@ export const api = {
   // and GUI share a single mutation path. Added by PR 3 of the
   // multi-provider series; PR 1 wires the CLI commands these invoke.
   listProviderProfiles: () => invoke<ProviderProfile[]>("list_provider_profiles"),
-  getDefaultProviderProfileId: () =>
-    invoke<string | null>("get_default_provider_profile_id"),
+  getDefaultProviderProfileId: () => invoke<string | null>("get_default_provider_profile_id"),
   upsertProviderProfile: (profile: ProviderProfile) =>
     invoke<ProviderProfile>("upsert_provider_profile", { profile }),
-  removeProviderProfile: (id: string) =>
-    invoke<void>("remove_provider_profile", { id }),
+  removeProviderProfile: (id: string) => invoke<void>("remove_provider_profile", { id }),
   setDefaultProviderProfile: (id: string | null) =>
     invoke<void>("set_default_provider_profile", { id }),
   setChannelProviderProfile: (channelId: string, profileId: string | null) =>

@@ -321,9 +321,9 @@ function ProvidersSection() {
       <div className="settings-section">
         <h3>Profiles</h3>
         <p className="help">
-          Each profile bundles an adapter (Claude or Codex CLI) with env overrides
-          that get applied when Relay dispatches an agent. Set one as default,
-          or pin a specific profile per channel in that channel's settings.
+          Each profile bundles an adapter (Claude or Codex CLI) with env overrides that get applied
+          when Relay dispatches an agent. Set one as default, or pin a specific profile per channel
+          in that channel's settings.
         </p>
         {profiles.length === 0 ? (
           <p className="help">
@@ -349,10 +349,7 @@ function ProvidersSection() {
             </thead>
             <tbody>
               {profiles.map((p) => (
-                <tr
-                  key={p.id}
-                  style={{ borderTop: "1px solid var(--color-paper-line)" }}
-                >
+                <tr key={p.id} style={{ borderTop: "1px solid var(--color-paper-line)" }}>
                   <td style={{ padding: "6px 8px", fontFamily: "var(--font-mono)" }}>
                     {p.id}
                     {defaultId === p.id && (
@@ -417,9 +414,7 @@ function ProvidersSection() {
           Adapter
           <select
             value={draft.adapter}
-            onChange={(e) =>
-              setDraft({ ...draft, adapter: e.target.value as "claude" | "codex" })
-            }
+            onChange={(e) => setDraft({ ...draft, adapter: e.target.value as "claude" | "codex" })}
           >
             <option value="claude">claude</option>
             <option value="codex">codex</option>
@@ -444,10 +439,7 @@ function ProvidersSection() {
         <div style={{ marginTop: 10 }}>
           <div style={{ fontWeight: 600, marginBottom: 4 }}>Env overrides</div>
           {draft.envRows.map((row, i) => (
-            <div
-              key={i}
-              style={{ display: "flex", gap: 6, marginBottom: 4, alignItems: "center" }}
-            >
+            <div key={i} style={{ display: "flex", gap: 6, marginBottom: 4, alignItems: "center" }}>
               <input
                 placeholder="KEY"
                 value={row.key}
@@ -480,8 +472,8 @@ function ProvidersSection() {
       <div className="settings-section">
         <h3>Default</h3>
         <p className="help">
-          Channels without a pinned profile fall back to this default at
-          dispatch time. Clear it to fall through to <code>HARNESS_PROVIDER</code>.
+          Channels without a pinned profile fall back to this default at dispatch time. Clear it to
+          fall through to <code>HARNESS_PROVIDER</code>.
         </p>
         <button onClick={() => makeDefault(null)} disabled={!defaultId}>
           Clear default
