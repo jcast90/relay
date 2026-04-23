@@ -24,6 +24,8 @@
 
 ---
 
+> ⚠️ **Beta — pre-v1.** Relay is actively developed and hasn't cut a 1.0 yet. APIs, CLI flags, file layouts under `~/.relay/`, and GUI surfaces can change between releases. Expect bugs. If you hit one, please [open an issue](https://github.com/jcast90/relay/issues/new) with a reproduction — or send a PR. Work-in-progress features + things up for grabs live on the [GitHub Projects board](https://github.com/users/jcast90/projects/3) — pick something up and collaborate.
+
 ## What Relay is
 
 Relay turns a sentence, a GitHub issue URL, or a Linear ticket into a **running plan of AI-coded work** — with tickets, verification loops, live PR tracking, and optional human approval gates. Sessions run inside your normal Claude or Codex CLI; Relay wraps them with an MCP server that records everything into Slack-style **channels** you can query later.
@@ -47,6 +49,7 @@ CLI: **`rly`**.
 - [CLI reference](#cli-reference)
 - [MCP tools](#mcp-tools)
 - [Integrations](#integrations)
+- [Multi-provider](#multi-provider)
 - [Unattended mode](#unattended-mode)
 - [Storage & execution backends](#storage--execution-backends)
 - [Configuration](#configuration)
@@ -377,6 +380,32 @@ With `GITHUB_TOKEN` set, any orchestrator run starts a background poller that us
 
 `src/channels/ao-notifier.ts` exports `HarnessChannelNotifier implements Notifier` — so you can drop Relay in as a notifier plugin for Composio's `ao` orchestrator without a rewrite.
 
+## Multi-provider
+
+Relay's two CLI adapters (`claude`, `codex`) accept any endpoint that speaks their wire protocol, so **any provider exposing an OpenAI-compatible or Anthropic-compatible HTTP API works today with zero code changes** — just set the adapter's base-URL + key env vars. Known-good targets: MiniMax, OpenRouter, DeepSeek, Groq, Together, LiteLLM, vLLM.
+
+```bash
+# Route Codex through MiniMax.
+export HARNESS_PROVIDER=codex
+export OPENAI_BASE_URL=https://api.minimax.io/v1
+export OPENAI_API_KEY=$MINIMAX_API_KEY
+export HARNESS_AGENT_ATLAS_MODEL=MiniMax-M2
+rly run "Add a health endpoint"
+```
+
+For smoke-testing + per-agent overrides + named profiles, see [`docs/providers.md`](./docs/providers.md).
+
+```bash
+rly providers profiles list              # named profiles
+rly providers profiles add <id> ...      # save a profile for reuse
+rly providers default <id|clear>         # pick a default profile
+rly channel set-provider <ch> <pid>      # pin a channel to a profile
+```
+
+Profiles never store secrets — they reference env-var names (e.g. `apiKeyEnvRef: "MINIMAX_API_KEY"`), and `rly providers profiles add` rejects any `--env KEY=VAL` whose value looks like a raw key. The GUI has a Provider dropdown per channel (Settings drawer → About tab) and a Providers tab in the global Settings page for full CRUD.
+
+**Not yet shipped:** native adapters for coding CLIs that aren't Claude- or Codex-compatible (Cursor, Gemini, Aider). See the Roadmap for status.
+
 ## Unattended mode
 
 For multi-hour runs where you don't want to click "allow" on every tool call:
@@ -519,7 +548,7 @@ Per-area quick loops:
 
 ## Contributing
 
-Issues and PRs welcome. If you're considering a larger change, open an issue first so we can align on shape before you burn time.
+Relay is pre-v1 and issues/PRs are genuinely welcome — including from folks who've never contributed before. If you hit a bug, file it with a reproduction. If you want to help: the [GitHub Projects board](https://github.com/users/jcast90/projects/3) is the canonical list of work-in-progress features and things up for grabs. Pick a card, comment "I'll take this," and open a PR. For larger changes, open an issue first so we can align on shape before you burn time.
 
 See [`AGENTS.md`](./AGENTS.md) for the coding-agent conventions.
 

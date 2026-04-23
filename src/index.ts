@@ -51,6 +51,13 @@ import { submitApproval } from "./orchestrator/approval-gate.js";
 import { getWorkspaceDir } from "./cli/workspace-registry.js";
 import { ApprovalsQueue, type ApprovalRecord } from "./approvals/queue.js";
 import { getRelayDir } from "./cli/paths.js";
+import {
+  type ProviderProfile,
+  type ProviderProfileAdapter,
+  ProviderProfileAdapterSchema,
+  validateEnvOverrides,
+} from "./domain/provider-profile.js";
+import { ProviderProfileStore } from "./storage/provider-profile-store.js";
 
 export async function main(): Promise<void> {
   const cwd = process.cwd();
@@ -124,6 +131,11 @@ export async function main(): Promise<void> {
 
   if (command === "config") {
     await handleConfigCommand(args);
+    return;
+  }
+
+  if (command === "providers") {
+    process.exitCode = await handleProvidersCommand(args);
     return;
   }
 
@@ -731,6 +743,50 @@ async function handleChannelCommand(args: string[]): Promise<void> {
     return;
   }
 
+  if (sub === "set-provider") {
+    const channelId = args[1];
+    const profileArg = args[2];
+    if (!channelId || !profileArg) {
+      console.error(
+        "Usage: rly channel set-provider <channelId> <profileId|clear> [--source <s>] [--actor <name>] [--json]"
+      );
+      process.exitCode = 1;
+      return;
+    }
+
+    // `clear` is the explicit "fall back to default resolution" token.
+    // Accepting a literal id is the common case; anything else is user
+    // error we surface rather than silently coercing.
+    const nextProfileId: string | null = profileArg === "clear" ? null : profileArg;
+
+    const sourceArg = parseNamedArg(args, "--source");
+    const actorName = parseNamedArg(args, "--actor");
+    const actor = {
+      source: sourceArg ?? "cli",
+      name: actorName ?? "CLI",
+      id: actorName ?? "cli",
+    };
+
+    const updated = await store.setProviderProfileId(channelId, nextProfileId, actor);
+
+    if (args.includes("--json")) {
+      jsonOut(updated);
+    } else if (updated) {
+      let label = "(none — inherit default)";
+      if (updated.providerProfileId) {
+        const profile = await new ProviderProfileStore().getProfile(updated.providerProfileId);
+        label = profile
+          ? `${profile.displayName} (${profile.id})`
+          : `${updated.providerProfileId} (profile not found)`;
+      }
+      console.log(`Channel provider set to ${label}`);
+    } else {
+      console.error(`Channel not found: ${channelId}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   if (sub === "update") {
     const channelId = args[1];
     if (!channelId) {
@@ -880,7 +936,7 @@ async function handleChannelCommand(args: string[]): Promise<void> {
 
   if (!sub) {
     console.error(
-      "Usage: rly channel <channelId|create|archive|unarchive|set-full-access|update|feed|post|assign>"
+      "Usage: rly channel <channelId|create|archive|unarchive|set-full-access|set-provider|update|feed|post|assign>"
     );
     process.exitCode = 1;
     return;
@@ -2824,7 +2880,7 @@ async function printTopLevelHelp(): Promise<void> {
     "",
     "Channels & sessions:",
     "  channels                 List channels (most-recently-active first)",
-    "  channel <subcommand>     Manage channels (create/update/archive/set-full-access/feed/post/assign/...)",
+    "  channel <subcommand>     Manage channels (create/update/archive/set-full-access/set-provider/feed/post/assign/...)",
     "  section <subcommand>     Manage sidebar sections (list/create/rename/decommission/restore/delete)",
     "  session <subcommand>     Manage session transcripts",
     "  board <channelId>        Kanban view of tickets",
@@ -2860,6 +2916,7 @@ async function printTopLevelHelp(): Promise<void> {
     "  workspaces               List registered workspaces",
     "  welcome                  Interactive first-run walkthrough",
     "  config <subcommand>      Manage global config (add/remove project dirs)",
+    "  providers <subcommand>   Manage named provider profiles (see docs/providers.md)",
     "  rebuild                  Rebuild native artifacts (tui/gui)",
     "",
     "Misc:",
@@ -3086,6 +3143,281 @@ function parseAgentOverrides(): Record<string, { provider?: "claude" | "codex"; 
   }
 
   return overrides;
+}
+
+async function handleProvidersCommand(args: string[]): Promise<number> {
+  const sub = args[0];
+
+  if (!sub || sub === "--help" || sub === "-h" || sub === "help") {
+    console.log("Usage: rly providers <profiles|default> [options]");
+    console.log("");
+    console.log("  profiles <subcommand>      Manage named provider profiles (experimental)");
+    console.log("  default [<id> | clear]     Get / set the default provider profile");
+    console.log("");
+    console.log("See docs/providers.md for the conceptual overview.");
+    return 0;
+  }
+
+  if (sub === "profiles") {
+    return handleProviderProfilesCommand(args.slice(1));
+  }
+  if (sub === "default") {
+    return handleProviderDefaultCommand(args.slice(1));
+  }
+
+  console.error(`Unknown providers subcommand: ${sub}`);
+  console.error("Usage: rly providers <profiles|default>");
+  return 1;
+}
+
+async function handleProviderProfilesCommand(args: string[]): Promise<number> {
+  const sub = args[0];
+
+  if (!sub || sub === "--help" || sub === "-h" || sub === "help") {
+    printProviderProfilesHelp();
+    return sub ? 0 : 1;
+  }
+
+  const store = new ProviderProfileStore();
+
+  if (sub === "list") return runProfilesList(store, args.slice(1));
+  if (sub === "add") return runProfilesAdd(store, args.slice(1));
+  if (sub === "remove") return runProfilesRemove(store, args.slice(1));
+  if (sub === "show") return runProfilesShow(store, args.slice(1));
+
+  console.error(`Unknown providers profiles subcommand: ${sub}`);
+  printProviderProfilesHelp();
+  return 1;
+}
+
+function printProviderProfilesHelp(): void {
+  console.log("Usage: rly providers profiles <subcommand>");
+  console.log("");
+  console.log("  list [--json]                   List named profiles");
+  console.log("  add <id> --adapter <claude|codex>  Create or update a profile");
+  console.log(
+    "      [--display-name <s>] [--env KEY=VAL ...] [--api-key-ref <ENV_NAME>] [--model <m>]"
+  );
+  console.log("  remove <id>                     Remove a profile (no-op if absent)");
+  console.log("  show <id> [--json]              Show a single profile");
+  console.log("");
+  console.log("Profiles never store secrets — reference env vars via --api-key-ref.");
+}
+
+async function runProfilesList(store: ProviderProfileStore, args: string[]): Promise<number> {
+  const profiles = await store.listProfiles();
+  const defaultId = await store.getDefaultProfileId();
+
+  if (args.includes("--json")) {
+    console.log(JSON.stringify({ defaultProfileId: defaultId, profiles }, null, 2));
+    return 0;
+  }
+
+  if (profiles.length === 0) {
+    console.log("(no provider profiles — add one with `rly providers profiles add <id>`)");
+    return 0;
+  }
+
+  for (const p of profiles) {
+    const marker = p.id === defaultId ? " *" : "";
+    const envKeys = Object.keys(p.envOverrides).sort().join(",") || "-";
+    const model = p.defaultModel ?? "-";
+    console.log(
+      `  ${p.id}${marker}  [${p.adapter}]  model=${model}  env=${envKeys}  — ${p.displayName}`
+    );
+  }
+  if (defaultId) {
+    console.log("");
+    console.log(`* default profile: ${defaultId}`);
+  }
+  return 0;
+}
+
+async function runProfilesAdd(store: ProviderProfileStore, args: string[]): Promise<number> {
+  const id = args[0];
+  if (!id || id.startsWith("--")) {
+    console.error("Usage: rly providers profiles add <id> --adapter <claude|codex> [...]");
+    return 1;
+  }
+  const rest = args.slice(1);
+
+  const adapterRaw = parseNamedArg(rest, "--adapter");
+  const adapterParse = ProviderProfileAdapterSchema.safeParse(adapterRaw);
+  if (!adapterParse.success) {
+    console.error(`--adapter must be one of "claude" | "codex" (got: ${adapterRaw ?? "missing"})`);
+    return 1;
+  }
+  const adapter: ProviderProfileAdapter = adapterParse.data;
+
+  const displayName = parseNamedArg(rest, "--display-name") ?? id;
+  const apiKeyEnvRef = parseNamedArg(rest, "--api-key-ref");
+  const defaultModel = parseNamedArg(rest, "--model");
+  const envOverrides = parseRepeatedEnvArgs(rest);
+
+  if ("error" in envOverrides) {
+    console.error(envOverrides.error);
+    return 1;
+  }
+
+  const envCheck = validateEnvOverrides(envOverrides.values);
+  if (!envCheck.ok) {
+    console.error(`Rejected --env ${envCheck.key}: ${envCheck.reason}`);
+    return 1;
+  }
+
+  try {
+    const profile = await store.upsertProfile({
+      id,
+      displayName,
+      adapter,
+      envOverrides: envOverrides.values,
+      apiKeyEnvRef,
+      defaultModel,
+    });
+    if (rest.includes("--json")) {
+      console.log(JSON.stringify(profile, null, 2));
+      return 0;
+    }
+    console.log(`Saved profile '${profile.id}':`);
+    console.log(`  displayName: ${profile.displayName}`);
+    console.log(`  adapter:     ${profile.adapter}`);
+    if (profile.defaultModel) console.log(`  model:       ${profile.defaultModel}`);
+    if (profile.apiKeyEnvRef) console.log(`  apiKeyEnvRef: ${profile.apiKeyEnvRef}`);
+    const envKeys = Object.keys(profile.envOverrides).sort();
+    if (envKeys.length > 0) {
+      console.log(`  envOverrides:`);
+      for (const k of envKeys) console.log(`    ${k}=${profile.envOverrides[k]}`);
+    }
+    return 0;
+  } catch (err) {
+    console.error(`Failed to save profile: ${err instanceof Error ? err.message : String(err)}`);
+    return 1;
+  }
+}
+
+async function runProfilesRemove(store: ProviderProfileStore, args: string[]): Promise<number> {
+  const id = args[0];
+  if (!id || id.startsWith("--")) {
+    console.error("Usage: rly providers profiles remove <id> [--json]");
+    return 1;
+  }
+  const removed = await store.removeProfile(id);
+  if (args.includes("--json")) {
+    console.log(JSON.stringify({ id, removed }));
+  } else {
+    console.log(removed ? `Removed profile '${id}'.` : `No profile '${id}' — nothing to do.`);
+  }
+  return 0;
+}
+
+async function runProfilesShow(store: ProviderProfileStore, args: string[]): Promise<number> {
+  const id = args[0];
+  if (!id || id.startsWith("--")) {
+    console.error("Usage: rly providers profiles show <id> [--json]");
+    return 1;
+  }
+  const profile = await store.getProfile(id);
+  if (!profile) {
+    console.error(`No profile '${id}'.`);
+    return 1;
+  }
+  if (args.includes("--json")) {
+    console.log(JSON.stringify(profile, null, 2));
+    return 0;
+  }
+  printProfileHuman(profile);
+  return 0;
+}
+
+function printProfileHuman(profile: ProviderProfile): void {
+  console.log(`id:           ${profile.id}`);
+  console.log(`displayName:  ${profile.displayName}`);
+  console.log(`adapter:      ${profile.adapter}`);
+  if (profile.defaultModel) console.log(`model:        ${profile.defaultModel}`);
+  if (profile.apiKeyEnvRef) console.log(`apiKeyEnvRef: ${profile.apiKeyEnvRef}`);
+  const keys = Object.keys(profile.envOverrides).sort();
+  if (keys.length > 0) {
+    console.log("envOverrides:");
+    for (const k of keys) console.log(`  ${k}=${profile.envOverrides[k]}`);
+  } else {
+    console.log("envOverrides: (none)");
+  }
+  console.log(`createdAt:    ${profile.createdAt}`);
+  console.log(`updatedAt:    ${profile.updatedAt}`);
+}
+
+async function handleProviderDefaultCommand(args: string[]): Promise<number> {
+  const store = new ProviderProfileStore();
+  const jsonMode = args.includes("--json");
+  const positionals = args.filter((a) => a !== "--json");
+  const arg = positionals[0];
+
+  if (!arg) {
+    const current = await store.getDefaultProfileId();
+    if (jsonMode) {
+      console.log(JSON.stringify({ defaultProfileId: current }));
+    } else {
+      console.log(current ?? "(no default profile set)");
+    }
+    return 0;
+  }
+
+  if (arg === "--help" || arg === "-h" || arg === "help") {
+    console.log("Usage: rly providers default [<id> | clear] [--json]");
+    return 0;
+  }
+
+  if (arg === "clear") {
+    await store.setDefaultProfileId(null);
+    if (jsonMode) {
+      console.log(JSON.stringify({ defaultProfileId: null }));
+    } else {
+      console.log("Cleared default profile.");
+    }
+    return 0;
+  }
+
+  try {
+    await store.setDefaultProfileId(arg);
+    if (jsonMode) {
+      console.log(JSON.stringify({ defaultProfileId: arg }));
+    } else {
+      console.log(`Default profile set to '${arg}'.`);
+    }
+    return 0;
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    return 1;
+  }
+}
+
+/**
+ * Parse zero or more `--env KEY=VAL` pairs. Duplicate keys take the last
+ * value, matching typical `env`-style semantics.
+ */
+function parseRepeatedEnvArgs(
+  args: string[]
+): { values: Record<string, string> } | { error: string } {
+  const values: Record<string, string> = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] !== "--env") continue;
+    const pair = args[i + 1];
+    if (pair === undefined || pair.startsWith("--")) {
+      return { error: "--env requires a KEY=VAL argument" };
+    }
+    const eq = pair.indexOf("=");
+    if (eq <= 0) {
+      return { error: `--env value must be KEY=VAL (got: ${pair})` };
+    }
+    const key = pair.slice(0, eq);
+    const value = pair.slice(eq + 1);
+    if (!/^[A-Z][A-Z0-9_]*$/.test(key)) {
+      return { error: `--env key must be UPPER_SNAKE (got: ${key})` };
+    }
+    values[key] = value;
+    i += 1;
+  }
+  return { values };
 }
 
 function capitalize(value: string): string {

@@ -69,9 +69,31 @@ export type Channel = {
   // Sidebar grouping. `undefined` means the channel lives in the
   // "Uncategorized" bucket at the bottom of the sidebar.
   sectionId?: string;
+  // Per-channel provider-profile override. When unset, dispatch falls back
+  // to the global default profile (or `HARNESS_PROVIDER`). Wired up by
+  // PR 2 of the provider-profiles series; this GUI tolerates the field
+  // being absent on older channel files.
+  providerProfileId?: string;
   // ISO 8601; optional for back-compat with older channel files.
   createdAt?: string;
   updatedAt?: string;
+};
+
+// A named bundle of adapter + env overrides that resolves at dispatch
+// time into the environment handed to the agent subprocess. Mirrors the
+// PR 1 `src/domain/provider-profile.ts` shape — kept local to the GUI
+// so PR 3 doesn't depend on PR 1 being merged first. Secrets are never
+// stored; `apiKeyEnvRef` is the *name* of the env var Relay reads at
+// dispatch time.
+export type ProviderProfile = {
+  id: string;
+  displayName: string;
+  adapter: "claude" | "codex";
+  envOverrides: Record<string, string>;
+  apiKeyEnvRef?: string;
+  defaultModel?: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type Section = {

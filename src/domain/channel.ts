@@ -123,6 +123,15 @@ export interface Channel {
    * on the next load.
    */
   sectionId?: string;
+  /**
+   * Provider profile ID that overrides the process-wide `HARNESS_PROVIDER`
+   * env for agents dispatched on behalf of this channel. The profile itself
+   * (adapter, default model, env overlay, `apiKeyEnvRef`) lives in the
+   * provider-profile store (PR 1); the channel only stores the reference.
+   * Absent = inherit whatever the dispatcher's default resolution chooses
+   * (explicit default profile → `HARNESS_PROVIDER`). Optional for back-compat.
+   */
+  providerProfileId?: string;
   createdAt: string;
   updatedAt: string;
 }

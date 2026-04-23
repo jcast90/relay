@@ -1,9 +1,13 @@
 import { AgentRegistry } from "../agents/registry.js";
 import { createLiveAgents, registerAgentNames } from "../agents/factory.js";
 import { NodeCommandInvoker } from "../agents/command-invoker.js";
+import type { ProviderProfile, ProviderProfileLookup } from "../agents/provider-profile-lookup.js";
+import { ProviderProfileStore } from "../storage/provider-profile-store.js";
 import { LocalArtifactStore } from "../execution/artifact-store.js";
 import { VerificationRunner } from "../execution/verification-runner.js";
 import { ChannelStore } from "../channels/channel-store.js";
+import type { Channel } from "../domain/channel.js";
+import type { AgentProvider } from "../domain/agent.js";
 import { buildWorkspaceId, getWorkspaceDir } from "../cli/workspace-registry.js";
 import { OrchestratorV2, buildRunId } from "./orchestrator-v2.js";
 import { createPrWatcherFactory } from "../cli/pr-watcher-factory.js";
@@ -13,6 +17,41 @@ export interface DispatchInput {
   featureRequest: string;
   repoPath: string;
   channelId?: string;
+  /**
+   * Provider-profile lookup override. Defaults to a `ProviderProfileStore`
+   * reading `~/.relay/provider-profiles.json`. Tests pass an
+   * `InMemoryProviderProfileLookup` so resolution is deterministic.
+   */
+  providerProfileLookup?: ProviderProfileLookup;
+}
+
+/**
+ * Resolve which provider profile (if any) should shape this run.
+ *
+ *   1. `channel.providerProfileId` → fetch that profile.
+ *   2. Otherwise the lookup's default profile id → fetch it.
+ *   3. Otherwise `null` — `createLiveAgents` falls back to the legacy
+ *      `HARNESS_PROVIDER` env path.
+ *
+ * An explicit id that doesn't resolve returns `null` too: strand the
+ * channel on a deleted profile and you'd otherwise get a cryptic spawn
+ * failure downstream; letting the run inherit `HARNESS_PROVIDER` is
+ * strictly better than silently breaking a chat.
+ */
+export async function resolveChannelProviderProfile(
+  channel: Channel | null,
+  lookup: ProviderProfileLookup
+): Promise<ProviderProfile | null> {
+  if (channel?.providerProfileId) {
+    const direct = await lookup.getProfile(channel.providerProfileId);
+    if (direct) return direct;
+  }
+  const defaultId = await lookup.getDefaultProfileId();
+  if (defaultId) {
+    const fallback = await lookup.getProfile(defaultId);
+    if (fallback) return fallback;
+  }
+  return null;
 }
 
 export interface DispatchResult {
@@ -34,27 +73,35 @@ export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
   const artifactsDir = `${getWorkspaceDir(workspaceId)}/artifacts`;
   const artifactStore = new LocalArtifactStore(artifactsDir, getHarnessStore());
   const channelStore = new ChannelStore(undefined, getHarnessStore());
+  const profileLookup: ProviderProfileLookup =
+    input.providerProfileLookup ?? new ProviderProfileStore();
 
-  // Ensure agents are registered
-  const defaultProvider = (process.env.HARNESS_PROVIDER ?? "claude") as "claude" | "codex";
-  await registerAgentNames({ defaultProvider });
-
-  // Resolve or create a channel first — we need its `fullAccess` flag to
-  // decide whether agents should be constructed in unattended mode (AL-0).
+  // Resolve or create a channel first — we need its `fullAccess` flag +
+  // provider-profile binding to decide how to construct agents.
   let channelId = input.channelId;
-  let channelFullAccess = false;
+  let channel: Channel | null;
   if (!channelId) {
-    const channel = await channelStore.createChannel({
+    channel = await channelStore.createChannel({
       name: featureRequest.slice(0, 60),
       description: featureRequest,
       workspaceIds: [workspaceId],
     });
     channelId = channel.channelId;
-    channelFullAccess = channel.fullAccess === true;
   } else {
-    const existing = await channelStore.getChannel(channelId);
-    channelFullAccess = existing?.fullAccess === true;
+    channel = await channelStore.getChannel(channelId);
   }
+  const channelFullAccess = channel?.fullAccess === true;
+
+  // Resolve the effective provider profile (channel → default → none).
+  // When non-null, it overrides the env-driven default provider + supplies
+  // an env overlay the CLI subprocess inherits. Null keeps the legacy
+  // `HARNESS_PROVIDER` path intact for callers that never configured
+  // profiles.
+  const profile = await resolveChannelProviderProfile(channel, profileLookup);
+  const defaultProvider: AgentProvider =
+    profile?.adapter ?? ((process.env.HARNESS_PROVIDER ?? "claude") as AgentProvider);
+
+  await registerAgentNames({ defaultProvider });
 
   // Build agent registry with the per-channel full-access flag threaded
   // through so Claude gets `--dangerously-skip-permissions` / Codex gets
@@ -64,6 +111,9 @@ export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
   const agents = createLiveAgents({
     cwd: repoPath,
     defaultProvider,
+    defaultModel: profile?.defaultModel,
+    envOverlay: profile?.envOverrides,
+    extraPassEnv: profile?.apiKeyEnvRef ? [profile.apiKeyEnvRef] : undefined,
     fullAccess: channelFullAccess,
   });
   for (const agent of agents) {
