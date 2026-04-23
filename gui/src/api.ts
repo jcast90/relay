@@ -55,7 +55,7 @@ export const api = {
     repos: { alias: string; workspaceId: string; repoPath: string }[],
     primaryWorkspaceId?: string
   ) =>
-    invoke<{ channelId: string }>("create_channel", {
+    invoke<{ channelId: string; droppedRepos?: string[] }>("create_channel", {
       name,
       description,
       repos,
@@ -84,7 +84,11 @@ export const api = {
   updateChannelRepos: (
     channelId: string,
     repos: { alias: string; workspaceId: string; repoPath: string }[]
-  ) => invoke<unknown>("update_channel_repos", { channelId, repos }),
+  ) =>
+    invoke<{ droppedRepos?: string[] } & Record<string, unknown>>("update_channel_repos", {
+      channelId,
+      repos,
+    }),
   setChannelStarred: (channelId: string, starred: boolean) =>
     invoke<void>("set_channel_starred", { channelId, starred }),
   setChannelTier: (channelId: string, tier: string | null) =>

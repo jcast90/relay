@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import { deriveAlias } from "../lib/alias";
+import { basename, deriveAlias } from "../lib/alias";
 import type { WorkspaceEntry } from "../types";
 
 type Props = {
@@ -141,6 +141,11 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
       );
 
       const warnings: string[] = [];
+      if (result.droppedRepos && result.droppedRepos.length > 0) {
+        warnings.push(
+          `${result.droppedRepos.length} repo(s) skipped (unrepresentable): ${result.droppedRepos.join(", ")}`
+        );
+      }
 
       const toSpawn = sel.filter((r) => r.spawn && r.workspaceId !== primaryWorkspaceId);
       if (toSpawn.length > 0) {
@@ -445,10 +450,6 @@ function slugify(s: string): string {
     .replace(/[^a-z0-9-]/g, "")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
-}
-
-function basename(p: string): string {
-  return p.split("/").filter(Boolean).pop() ?? p;
 }
 
 // Kept as a thin indirection so the rest of this file reads uniformly; the

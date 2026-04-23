@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { deriveAlias } from "../lib/alias";
+import { basename, deriveAlias } from "../lib/alias";
 import type { Channel, WorkspaceEntry } from "../types";
 
 type Props = {
@@ -204,10 +204,6 @@ function slugify(s: string): string {
     .replace(/[^a-z0-9-]/g, "")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
-}
-
-function basename(p: string): string {
-  return p.split("/").filter(Boolean).pop() ?? p;
 }
 
 function defaultAlias(repoPath: string): string {

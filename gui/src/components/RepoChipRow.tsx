@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import { deriveAlias } from "../lib/alias";
+import { basename, deriveAlias } from "../lib/alias";
 import { notifyError } from "../lib/dialogs";
 import type { Channel, WorkspaceEntry } from "../types";
 
@@ -51,7 +51,7 @@ export function RepoChipRow({ channel, onChanged }: Props) {
   const detach = async (workspaceId: string) => {
     const remaining = channel.repoAssignments.filter((r) => r.workspaceId !== workspaceId);
     try {
-      await api.updateChannelRepos(
+      const result = await api.updateChannelRepos(
         channel.channelId,
         remaining.map((r) => ({
           alias: r.alias,
@@ -59,6 +59,14 @@ export function RepoChipRow({ channel, onChanged }: Props) {
           repoPath: r.repoPath,
         }))
       );
+      if (result.droppedRepos && result.droppedRepos.length > 0) {
+        // Not fatal — the detach succeeded. Surface the skipped rows so
+        // the user knows which legacy entries got cleaned up in the round-trip.
+        await notifyError(
+          `${result.droppedRepos.length} unrepresentable repo(s) cleaned up: ${result.droppedRepos.join(", ")}`,
+          { title: "Cleanup" }
+        );
+      }
       onChanged();
       setOpenChipId(null);
     } catch (err) {
@@ -207,7 +215,13 @@ function AddRepoPopover({
       ...additions,
     ];
     try {
-      await api.updateChannelRepos(channel.channelId, next);
+      const result = await api.updateChannelRepos(channel.channelId, next);
+      if (result.droppedRepos && result.droppedRepos.length > 0) {
+        await notifyError(
+          `${result.droppedRepos.length} unrepresentable repo(s) skipped: ${result.droppedRepos.join(", ")}`,
+          { title: "Attach" }
+        );
+      }
       onAttached();
     } catch (err) {
       await notifyError(`Attach failed: ${err}`);
@@ -267,6 +281,3 @@ function AddRepoPopover({
   );
 }
 
-function basename(p: string): string {
-  return p.split("/").filter(Boolean).pop() ?? p;
-}

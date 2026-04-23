@@ -35,6 +35,6 @@ export function dedupeAliases<T extends { repoPath: string; seedAlias?: string }
   });
 }
 
-function basename(p: string): string {
+export function basename(p: string): string {
   return p.split("/").filter(Boolean).pop() ?? p;
 }
