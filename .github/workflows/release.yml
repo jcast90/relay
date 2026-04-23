@@ -77,6 +77,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Sync package.json version to tag
+        # Derives the npm version from the pushed git tag so the tag is the
+        # single source of truth. Prevents the "cannot publish over the
+        # previously published versions" failure class where package.json
+        # was forgotten during a release cut. GH_REF is runner-provided and
+        # git enforces tag-name character rules, so the substring-strip is
+        # safe (same pattern used by the release-github notes extraction).
+        # jq is preinstalled on ubuntu-latest runners.
+        if: vars.NPM_PUBLISH_ENABLED == 'true'
+        env:
+          GH_REF: ${{ github.ref }}
+        run: |
+          TAG="${GH_REF#refs/tags/v}"
+          CURRENT=$(jq -r .version package.json)
+          if [ "$CURRENT" = "$TAG" ]; then
+            echo "package.json already at $TAG"
+          else
+            echo "Syncing package.json version $CURRENT -> $TAG"
+            jq --arg v "$TAG" '.version = $v' package.json > package.json.tmp
+            mv package.json.tmp package.json
+          fi
+
       - name: Publish gate notice
         if: vars.NPM_PUBLISH_ENABLED != 'true'
         run: |
