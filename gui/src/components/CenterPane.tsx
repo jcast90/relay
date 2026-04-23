@@ -225,7 +225,7 @@ export function CenterPane({
           {!isDm && onSpinoutToChannel && (
             <SpinoutSuggestion
               channel={channel}
-              feed={feed}
+              sessionMessages={sessionMessages}
               onSpinout={(kickoff) => onSpinoutToChannel(kickoff, channel.sectionId ?? null)}
             />
           )}
