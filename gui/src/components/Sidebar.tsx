@@ -10,7 +10,7 @@ type Props = {
   sessionCounts: Record<string, number>;
   runningStreams: number;
   onSelect: (id: string) => void;
-  onNewChannel: () => void;
+  onNewChannel: (sectionId?: string | null) => void;
   onNewDm: () => void;
   onToggleIncludeArchived: (next: boolean) => void;
   onOpenSettings: () => void;
@@ -246,7 +246,7 @@ export function Sidebar({
               count={members.length}
               collapsed={!isSectionOpen(s.sectionId)}
               onToggle={() => toggleSectionOpen(s.sectionId)}
-              onAdd={onNewChannel}
+              onAdd={() => onNewChannel(s.sectionId)}
               addTitle={`New channel in ${s.name}`}
               menu={{
                 onRename: () => renameSection(s),
@@ -277,7 +277,7 @@ export function Sidebar({
           count={uncategorized.length}
           collapsed={!uncategorizedOpen}
           onToggle={() => setUncategorizedOpen((v) => !v)}
-          onAdd={onNewChannel}
+          onAdd={() => onNewChannel(null)}
           addTitle="New channel"
           onHeaderPlus={sections.length === 0 ? newSection : undefined}
           headerPlusTitle="New section"

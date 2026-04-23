@@ -17,6 +17,7 @@ export function App() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
   const [modalOpen, setModalOpen] = useState(false);
+  const [newChannelSection, setNewChannelSection] = useState<string | null>(null);
   const [dmModalOpen, setDmModalOpen] = useState(false);
   const [includeArchived, setIncludeArchived] = useState(false);
   const [settings, setSettings] = useState<GuiSettings | null>(null);
@@ -115,7 +116,10 @@ export function App() {
             sessionCounts={sessionCounts}
             runningStreams={runningStreams}
             onSelect={setSelectedId}
-            onNewChannel={() => setModalOpen(true)}
+            onNewChannel={(sectionId) => {
+              setNewChannelSection(sectionId ?? null);
+              setModalOpen(true);
+            }}
             onNewDm={() => setDmModalOpen(true)}
             onToggleIncludeArchived={setIncludeArchived}
             onOpenSettings={() => setSettingsOpen(true)}
@@ -151,6 +155,7 @@ export function App() {
       )}
       <NewChannelModal
         open={modalOpen}
+        defaultSectionId={newChannelSection}
         onClose={() => setModalOpen(false)}
         onCreated={(id) => {
           setSelectedId(id);

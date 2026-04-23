@@ -1,12 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { deriveAlias } from "../lib/alias";
-import type { WorkspaceEntry } from "../types";
+import type { Section, WorkspaceEntry } from "../types";
 
 type Props = {
   open: boolean;
   onClose: () => void;
   onCreated: (channelId: string) => void;
+  /**
+   * Section id to preselect on the first step. Usually the section the
+   * user had visible in the sidebar when they clicked +; null = None /
+   * Uncategorized.
+   */
+  defaultSectionId?: string | null;
 };
 
 type RepoRow = {
@@ -18,10 +24,12 @@ type RepoRow = {
 
 type Step = 1 | 2 | 3;
 
-export function NewChannelModal({ open, onClose, onCreated }: Props) {
+export function NewChannelModal({ open, onClose, onCreated, defaultSectionId }: Props) {
   const [step, setStep] = useState<Step>(1);
   const [name, setName] = useState("");
   const [topic, setTopic] = useState("");
+  const [sectionId, setSectionId] = useState<string | null>(defaultSectionId ?? null);
+  const [sections, setSections] = useState<Section[]>([]);
   const [repos, setRepos] = useState<RepoRow[]>([]);
   const [primaryWorkspaceId, setPrimaryWorkspaceId] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
@@ -40,6 +48,7 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
     setError(null);
     setSpawnWarning(null);
     setPrimaryWorkspaceId(null);
+    setSectionId(defaultSectionId ?? null);
     api.listWorkspaces().then((ws) => {
       setRepos(
         ws.map((w) => ({
@@ -50,7 +59,11 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
         }))
       );
     });
-  }, [open]);
+    api
+      .listSections()
+      .then(setSections)
+      .catch(() => setSections([]));
+  }, [open, defaultSectionId]);
 
   const visible = useMemo(() => {
     const tokens = filter.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -139,6 +152,18 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
         sel.map(({ alias, workspaceId, repoPath }) => ({ alias, workspaceId, repoPath })),
         primaryWorkspaceId ?? undefined
       );
+
+      // Assign into a section after creation. `create_channel` shells
+      // out to the CLI which doesn't understand sections, so the
+      // assignment is a follow-up call — non-fatal: we warn but still
+      // honor the channel create.
+      if (sectionId) {
+        try {
+          await api.assignChannelSection(result.channelId, sectionId);
+        } catch (err) {
+          console.warn("[new-channel] section assign failed:", err);
+        }
+      }
 
       const warnings: string[] = [];
 
@@ -261,6 +286,25 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
                   onChange={(e) => setTopic(e.target.value)}
                   placeholder="What is this channel for?"
                 />
+              </label>
+              <label>
+                Section
+                <select
+                  value={sectionId ?? ""}
+                  onChange={(e) => setSectionId(e.target.value || null)}
+                >
+                  <option value="">None — Uncategorized</option>
+                  {sections.map((s) => (
+                    <option key={s.sectionId} value={s.sectionId}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+                <small style={{ color: "var(--color-text-dim)" }}>
+                  {sections.length === 0
+                    ? "Create a section from the sidebar to group channels."
+                    : "Change any time from the sidebar kebab menu."}
+                </small>
               </label>
             </div>
           )}
