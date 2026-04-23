@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, subscribeChatEvents, type ChatEvent } from "../api";
 import type {
+  AutonomousSessionSummary,
   Channel,
   ChannelEntry,
   ChatSession,
@@ -9,6 +10,7 @@ import type {
   PersistedChatMessage,
   TicketLedgerEntry,
 } from "../types";
+import { AutonomousSessionHeader } from "./AutonomousSessionHeader";
 import { BoardView } from "./BoardView";
 import { ChannelHeader, type ChannelTab } from "./ChannelHeader";
 import { ChannelSettingsDrawer } from "./ChannelSettingsDrawer";
@@ -58,6 +60,38 @@ export function CenterPane({
   }, [stream, onStreamingChanged]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [promoteOpen, setPromoteOpen] = useState(false);
+  // AL-10: resolve "is there an autonomous session for this channel?" by
+  // listing every session and filtering on channelId. One small list call
+  // per refreshTick; the backend returns only the summary fields needed
+  // for the match, not the full session state.
+  const [autonomousSessions, setAutonomousSessions] = useState<AutonomousSessionSummary[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listAutonomousSessions()
+      .then((sessions) => {
+        if (!cancelled) setAutonomousSessions(sessions);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.warn("[center] listAutonomousSessions failed", err);
+          setAutonomousSessions([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshTick]);
+
+  // Pick the most recently started non-terminal session for this channel.
+  // `listAutonomousSessions` already sorts most-recent-first, so the first
+  // non-terminal match is the right one. Terminal (`done` / `killed`)
+  // sessions are filtered out — the header only tracks live sessions.
+  const activeAutonomousSession = channel
+    ? (autonomousSessions.find(
+        (s) => s.channelId === channel.channelId && s.state !== "done" && s.state !== "killed"
+      ) ?? null)
+    : null;
 
   useEffect(() => {
     if (!channel) return;
@@ -153,16 +187,30 @@ export function CenterPane({
           onPromote={() => setPromoteOpen(true)}
         />
       ) : (
-        <ChannelHeader
-          channel={channel}
-          tab={tab}
-          onTabChange={setTab}
-          rightRailOpen={rightRailOpen}
-          onToggleRail={onToggleRail}
-          onOpenSettings={() => setSettingsOpen(true)}
-          onRefresh={onRefresh}
-          tabCounts={{ board: tickets.length, decisions: decisions.length }}
-        />
+        <>
+          <ChannelHeader
+            channel={channel}
+            tab={tab}
+            onTabChange={setTab}
+            rightRailOpen={rightRailOpen}
+            onToggleRail={onToggleRail}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onRefresh={onRefresh}
+            tabCounts={{ board: tickets.length, decisions: decisions.length }}
+          />
+          {activeAutonomousSession && (
+            // AL-10: autonomous-session strip renders below the header
+            // and above the tabs' content so the budget / lifecycle state
+            // is visible across every view (chat, board, decisions).
+            // DMs don't get this — autonomous sessions don't make sense
+            // for kickoff surfaces.
+            <AutonomousSessionHeader
+              sessionId={activeAutonomousSession.sessionId}
+              refreshTick={refreshTick}
+              onStopped={onRefresh}
+            />
+          )}
+        </>
       )}
       {(isDm || tab === "chat") && (
         <>
@@ -215,4 +263,3 @@ export function CenterPane({
     </div>
   );
 }
-

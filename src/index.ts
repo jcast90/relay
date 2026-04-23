@@ -49,6 +49,8 @@ import { buildSystemPrompt, resolveChannelRefs, findMcpConfig } from "./cli/chat
 import { rewindApply, rewindSnapshot } from "./cli/chat-rewind.js";
 import { submitApproval } from "./orchestrator/approval-gate.js";
 import { getWorkspaceDir } from "./cli/workspace-registry.js";
+import { ApprovalsQueue, type ApprovalRecord } from "./approvals/queue.js";
+import { getRelayDir } from "./cli/paths.js";
 
 export async function main(): Promise<void> {
   const cwd = process.cwd();
@@ -205,13 +207,48 @@ export async function main(): Promise<void> {
     return;
   }
 
+  if (command === "sweep-worktrees") {
+    await handleSweepWorktreesCommand(args);
+    return;
+  }
+
   if (command === "approve" || command === "reject") {
+    // Route to the AL-7/AL-8 approvals queue when:
+    //   - positional is `next` / `all` (approve only); OR
+    //   - positional id starts with the queue prefix (`apv-`); OR
+    //   - no positional is provided AND `--session` is set (list/decide
+    //     within a specific queued session).
+    //
+    // I6: we used to also route on ANY `--session` regardless of the
+    // positional, which was greedy — `rly approve <runId> --session foo`
+    // should still go to the plan-approval flow. Constrain `--session`-
+    // triggers to the "no positional" case.
+    //
+    // Everything else falls through to the legacy plan-approval
+    // semantics so `rly approve <runId>` / `rly reject <runId>` keep
+    // working exactly as before.
+    const firstPositional = args.find((a) => !a.startsWith("--"));
+    const sessionFlag = parseNamedArg(args, "--session");
+    const isQueueKeyword =
+      command === "approve" && (firstPositional === "next" || firstPositional === "all");
+    const looksLikeApprovalId =
+      typeof firstPositional === "string" && firstPositional.startsWith("apv-");
+    const noPositionalWithSession = firstPositional === undefined && !!sessionFlag;
+    if (isQueueKeyword || looksLikeApprovalId || noPositionalWithSession) {
+      await handleApprovalQueueCommand(command, args);
+      return;
+    }
     await handlePlanDecisionCommand(command, args, cwd);
     return;
   }
 
   if (command === "pending-plans") {
     await handlePendingPlansCommand(args, cwd);
+    return;
+  }
+
+  if (command === "pending-approvals") {
+    await handlePendingApprovalsCommand(args);
     return;
   }
 
@@ -909,7 +946,10 @@ async function handleSectionCommand(args: string[]): Promise<void> {
   }
 
   if (sub === "create") {
-    const name = args.slice(1).filter((a) => !a.startsWith("--")).join(" ");
+    const name = args
+      .slice(1)
+      .filter((a) => !a.startsWith("--"))
+      .join(" ");
     if (!name) {
       console.error("Usage: rly section create <name> [--json]");
       process.exitCode = 1;
@@ -928,7 +968,10 @@ async function handleSectionCommand(args: string[]): Promise<void> {
 
   if (sub === "rename") {
     const sectionId = args[1];
-    const name = args.slice(2).filter((a) => !a.startsWith("--")).join(" ");
+    const name = args
+      .slice(2)
+      .filter((a) => !a.startsWith("--"))
+      .join(" ");
     if (!sectionId || !name) {
       console.error("Usage: rly section rename <sectionId> <name> [--json]");
       process.exitCode = 1;
@@ -1292,6 +1335,131 @@ async function handlePrStatusCommand(args: string[] = []): Promise<void> {
 }
 
 /**
+ * `rly sweep-worktrees [--session <id>] [--older-than <hours>] [--json]` —
+ * AL-14 follow-up crash-recovery CLI. Walks the channel ticket board(s),
+ * finds `verifying` tickets whose PRs have merged, and destroys the
+ * orphaned worktrees + transitions the tickets to `completed`.
+ *
+ * Defaults match the AL-14 contract: all sessions, 24h grace window,
+ * destructive mode. Pass `--json` for a dry-run that prints the candidate
+ * list without destroying anything.
+ *
+ * Flag semantics:
+ *  - `--session <id>` narrows the sweep to the channel a given session
+ *    was scoped to. When omitted, the sweep covers every channel
+ *    visible in `~/.relay/channels/`.
+ *  - `--older-than <hours>` overrides the default 24h grace window.
+ *    `0` sweeps everything eligible (useful for "clean up right now"
+ *    post-mortem workflows).
+ *  - `--json` flips the command into dry-run mode AND switches output
+ *    to a machine-readable JSON dump of the candidate list. Operators
+ *    running from cron can diff the output to decide whether to re-run
+ *    without `--json`.
+ */
+async function handleSweepWorktreesCommand(args: string[] = []): Promise<void> {
+  const { sweepAbandonedWorktrees, DEFAULT_SWEEP_OLDER_THAN_HOURS } =
+    await import("./orchestrator/worktree-sweep.js");
+  const { WorkerSpawner } = await import("./orchestrator/worker-spawner.js");
+
+  const dryRun = args.includes("--json");
+  const sessionId = parseNamedArg(args, "--session");
+  const olderThanRaw = parseNamedArg(args, "--older-than");
+  const olderThanHours =
+    olderThanRaw !== undefined ? Number(olderThanRaw) : DEFAULT_SWEEP_OLDER_THAN_HOURS;
+  if (!Number.isFinite(olderThanHours) || olderThanHours < 0) {
+    console.error(`Invalid --older-than value: ${olderThanRaw} (expected non-negative hours).`);
+    process.exitCode = 1;
+    return;
+  }
+
+  // `--session <id>` filters by session, but sweep operates on channels.
+  // Resolve the session's channel-id by reading the session's lifecycle
+  // metadata; fall back to treating the value as a raw channel id for
+  // operators who pass one through without thinking. Missing session
+  // files resolve to "no channel" → the sweep covers nothing.
+  let channelId: string | null = null;
+  if (sessionId) {
+    channelId = await resolveChannelIdForSession(sessionId);
+    if (!channelId) {
+      console.error(
+        `Could not resolve a channel for session ${sessionId}. If you meant to pass a channel id directly, omit --session.`
+      );
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  const channelStore = new ChannelStore(undefined, getHarnessStore());
+  const spawner = new WorkerSpawner();
+
+  try {
+    const result = await sweepAbandonedWorktrees({
+      channelStore,
+      spawner,
+      channelId,
+      olderThanHours,
+      dryRun,
+    });
+
+    if (args.includes("--json")) {
+      jsonOut({
+        dryRun: true,
+        olderThanHours,
+        channelId,
+        ...result,
+      });
+      return;
+    }
+
+    if (result.considered === 0) {
+      console.log("No verifying tickets found. Nothing to sweep.");
+      return;
+    }
+
+    console.log(
+      `Worktree sweep: considered=${result.considered} destroyed=${result.destroyed} preserved=${result.preserved} skipped=${result.skipped} errored=${result.errored}`
+    );
+    for (const c of result.candidates) {
+      const url = c.prUrl ?? "(no PR URL)";
+      const path = c.worktreePath ?? "(no worktree)";
+      const state = c.prState ?? "unknown";
+      console.log(
+        `  [${c.action.padEnd(9)}] ${c.ticketId} pr=${state} ${url} wt=${path} — ${c.reason}`
+      );
+    }
+  } catch (err) {
+    console.error(`sweep-worktrees failed: ${err instanceof Error ? err.message : String(err)}`);
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * Map a sessionId back to its channel id. Sessions write a small
+ * session.json stub at `~/.relay/sessions/<id>/session.json` including
+ * the `channelId` they were started against. Returns `null` when the
+ * session is unknown.
+ */
+async function resolveChannelIdForSession(sessionId: string): Promise<string | null> {
+  const { readFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const { getRelayDir } = await import("./cli/paths.js");
+  const candidates = [
+    join(getRelayDir(), "sessions", sessionId, "session.json"),
+    join(getRelayDir(), "sessions", sessionId, "lifecycle.json"),
+  ];
+  for (const candidate of candidates) {
+    try {
+      const raw = await readFile(candidate, "utf8");
+      const parsed = JSON.parse(raw) as { channelId?: string };
+      if (parsed?.channelId) return parsed.channelId;
+    } catch {
+      // try next candidate
+    }
+  }
+  return null;
+}
+
+/**
  * `rly approve <runId>` / `rly reject <runId> [--feedback "text"]` — CLI
  * parity for the `harness_approve_plan` / `harness_reject_plan` MCP tools.
  * The TUI and GUI shell out here so there's exactly one place where an
@@ -1397,6 +1565,281 @@ async function handlePendingPlansCommand(args: string[], _cwd: string): Promise<
   }
   console.log("\nApprove with: rly approve <runId>");
   console.log('Reject with:  rly reject <runId> [--feedback "…"]');
+}
+
+/**
+ * AL-8 CLI adapter onto AL-7's {@link ApprovalsQueue}. AL-7 exposes
+ * `list(sessionId, {status})` / `approve` / `reject` — the CLI surface
+ * wants `listPending(sessionId)` and "list across every session" so these
+ * helpers bridge the gap without forcing changes back into AL-7.
+ *
+ * Session enumeration uses `getRelayDir()` (matches AL-7's convention) so
+ * the root-dir override path is consistent end-to-end.
+ */
+async function listAllSessionDirs(): Promise<string[]> {
+  const { readdir } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const approvalsRoot = join(getRelayDir(), "approvals");
+  try {
+    const entries = await readdir(approvalsRoot);
+    return entries.filter((s) => s && !s.startsWith("."));
+  } catch {
+    return [];
+  }
+}
+
+async function listPendingForSession(
+  queue: ApprovalsQueue,
+  sessionId: string
+): Promise<ApprovalRecord[]> {
+  return queue.list(sessionId, { status: "pending" });
+}
+
+async function listAllPending(queue: ApprovalsQueue): Promise<ApprovalRecord[]> {
+  const sessions = await listAllSessionDirs();
+  const all: ApprovalRecord[] = [];
+  for (const s of sessions) {
+    try {
+      const pending = await queue.list(s, { status: "pending" });
+      all.push(...pending);
+    } catch {
+      // skip unreadable session dirs
+    }
+  }
+  return all;
+}
+
+/**
+ * Route the CLI's "approve" / "reject" to AL-7's `approve(sessionId, id)` /
+ * `reject(sessionId, id, feedback?)`. Returns null when the record isn't
+ * found OR is already decided — the CLI formatter then emits the nice
+ * "no record decided" message instead of bubbling AL-7's throw.
+ */
+async function decideViaQueue(
+  queue: ApprovalsQueue,
+  sessionId: string,
+  id: string,
+  decision: "approved" | "rejected",
+  feedback?: string
+): Promise<ApprovalRecord | null> {
+  try {
+    if (decision === "approved") {
+      return await queue.approve(sessionId, id);
+    }
+    return await queue.reject(sessionId, id, feedback);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // AL-7 throws on "no record with id" and "already decided" — the CLI
+    // treats both as "nothing new to do" and returns null so the caller
+    // emits the benign idempotent message.
+    if (msg.includes("no record with id") || msg.includes("is already")) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+/**
+ * `rly pending-approvals [--json] [--session <id>]` — list every pending
+ * record in the AL-7/AL-8 approvals queue. The TUI and GUI drain the same
+ * files directly; this CLI view exists so users scripting around the
+ * harness have a single source of truth.
+ */
+async function handlePendingApprovalsCommand(args: string[]): Promise<void> {
+  const sessionId = parseNamedArg(args, "--session");
+  const jsonMode = args.includes("--json");
+  const queue = new ApprovalsQueue();
+  const pending = sessionId
+    ? await listPendingForSession(queue, sessionId)
+    : await listAllPending(queue);
+
+  if (jsonMode) {
+    jsonOut(pending);
+    return;
+  }
+  if (pending.length === 0) {
+    console.log("No pending approvals.");
+    return;
+  }
+  console.log(`Pending approvals (${pending.length}):`);
+  for (const r of pending) {
+    console.log(`  ${r.id}  session=${r.sessionId}  kind=${r.kind}  ${r.createdAt}`);
+  }
+  console.log("\nApprove next:  rly approve next");
+  console.log("Approve all:   rly approve all");
+  console.log('Reject single: rly reject <id> [--feedback "…"]');
+}
+
+/**
+ * `rly approve next|all|<id>` / `rly reject <id> [--feedback "text"]` —
+ * CLI surface onto the AL-7/AL-8 approvals queue. Distinct from
+ * `handlePlanDecisionCommand`, which writes `runArtifacts/<runId>__approval`
+ * records for the plan-approval flow. The queue stores per-session records
+ * under `~/.relay/approvals/<sessionId>/queue.jsonl`; TUI and GUI drain the
+ * same files so state stays consistent across surfaces.
+ *
+ * Routing rules (see `main()` for the dispatch):
+ *   - `rly approve next|all`          → queue (next-pending or bulk-approve)
+ *   - `rly approve --session <s>`     → queue (per-session listing / decide)
+ *   - `rly approve apv-...`           → queue (id-prefix auto-route)
+ *   - anything else falls through to `handlePlanDecisionCommand`.
+ *
+ * `--session` is optional for `approve <id>` / `reject <id>` — when absent,
+ * every session is scanned and the id is matched across queues. Keeping it
+ * optional lets the TUI/GUI paste a bare id without knowing which session
+ * owns it.
+ */
+async function handleApprovalQueueCommand(
+  command: "approve" | "reject",
+  args: string[]
+): Promise<void> {
+  const positionals = args.filter((a) => !a.startsWith("--"));
+  const sessionId = parseNamedArg(args, "--session");
+  const feedback = parseNamedArg(args, "--feedback") ?? undefined;
+  const jsonMode = args.includes("--json");
+  const queue = new ApprovalsQueue();
+
+  // `approve next|all` drain multiple records at once. Guard against the
+  // obvious typo (`rly reject next`) — `next`/`all` only make sense for
+  // approve; for reject we require an explicit id so we don't accidentally
+  // reject everything in flight.
+  if (command === "approve" && positionals[0] === "next") {
+    const pending = sessionId
+      ? await listPendingForSession(queue, sessionId)
+      : await listAllPending(queue);
+    const target = pending[0];
+    if (!target) {
+      if (jsonMode) jsonOut({ ok: true, decided: null });
+      else console.log("No pending approvals.");
+      return;
+    }
+    const decided = await decideViaQueue(queue, target.sessionId, target.id, "approved");
+    emitDecided(decided, jsonMode);
+    return;
+  }
+
+  if (command === "approve" && positionals[0] === "all") {
+    // I8: "approve all" without `--session` used to approve across ALL
+    // sessions, which is a footgun. The safe default is to approve the
+    // most-recent session's queue; use `--all-sessions` to opt in to
+    // the cross-session bulk drain.
+    const allSessionsFlag = args.includes("--all-sessions");
+    const sessions = new Set<string>();
+    if (sessionId) {
+      sessions.add(sessionId);
+    } else if (allSessionsFlag) {
+      for (const r of await listAllPending(queue)) sessions.add(r.sessionId);
+    } else {
+      // Default: most-recent session with pending approvals. Tie-break
+      // on createdAt so the "newest queue" wins — matches operator
+      // intent of "I just kicked off a session, drain its queue".
+      const allPending = await listAllPending(queue);
+      if (allPending.length === 0) {
+        if (jsonMode) jsonOut({ ok: true, decided: [] });
+        else
+          console.log(
+            "No pending approvals. Pass --all-sessions to force a cross-session bulk approve."
+          );
+        return;
+      }
+      // Sort newest first; Map preserves insertion order so we pick up
+      // the first session we see.
+      const sorted = allPending.slice().sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+      sessions.add(sorted[0].sessionId);
+    }
+    const decided: ApprovalRecord[] = [];
+    for (const s of sessions) {
+      const pendingForS = await listPendingForSession(queue, s);
+      for (const r of pendingForS) {
+        const d = await decideViaQueue(queue, s, r.id, "approved");
+        if (d) decided.push(d);
+      }
+    }
+    if (jsonMode) {
+      jsonOut({ ok: true, decided });
+    } else if (decided.length === 0) {
+      console.log("No pending approvals.");
+    } else {
+      console.log(`Approved ${decided.length} record(s):`);
+      for (const r of decided) console.log(`  ${r.id}  session=${r.sessionId}  kind=${r.kind}`);
+    }
+    return;
+  }
+
+  // `approve <id>` / `reject <id>` — single-record decide.
+  const id = positionals[0];
+  if (!id) {
+    console.error(
+      command === "approve"
+        ? 'Usage: rly approve next | all | <id> [--session <s>] [--feedback "text"]'
+        : 'Usage: rly reject <id> [--session <s>] [--feedback "text"]'
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const targetSessionId = sessionId ?? (await findSessionForApprovalId(queue, id));
+  if (!targetSessionId) {
+    console.error(`No approval record with id "${id}" found in any session queue.`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const decision: "approved" | "rejected" = command === "approve" ? "approved" : "rejected";
+  try {
+    const decided = await decideViaQueue(queue, targetSessionId, id, decision, feedback);
+    if (!decided) {
+      console.error(`No approval record with id "${id}" in session ${targetSessionId}.`);
+      process.exitCode = 1;
+      return;
+    }
+    emitDecided(decided, jsonMode);
+  } catch (err) {
+    console.error(
+      `Failed to ${command} ${id}: ${err instanceof Error ? err.message : String(err)}`
+    );
+    process.exitCode = 1;
+  }
+}
+
+function emitDecided(record: ApprovalRecord | null, jsonMode: boolean): void {
+  if (!record) {
+    if (jsonMode) jsonOut({ ok: true, decided: null });
+    else console.log("No approval record decided.");
+    return;
+  }
+  if (jsonMode) {
+    jsonOut({ ok: true, decided: record });
+    return;
+  }
+  const tail =
+    record.status === "rejected" && record.feedback ? `  feedback="${record.feedback}"` : "";
+  console.log(
+    `${record.status} ${record.id}  session=${record.sessionId}  kind=${record.kind}${tail}`
+  );
+}
+
+/**
+ * Scan every session's queue for a record with `id`. Returns its sessionId
+ * or null. Uses {@link getRelayDir} to locate the approvals root so the CLI
+ * honors the same env override (`RELAY_HOME`) AL-7's queue uses internally.
+ */
+async function findSessionForApprovalId(queue: ApprovalsQueue, id: string): Promise<string | null> {
+  const pending = await listAllPending(queue);
+  const hit = pending.find((r) => r.id === id);
+  if (hit) return hit.sessionId;
+  // Also walk decided records so `rly approve <id>` on an already-approved
+  // id returns the nice idempotent message rather than "not found".
+  const sessionDirs = await listAllSessionDirs();
+  for (const s of sessionDirs) {
+    try {
+      const records = await queue.list(s);
+      if (records.some((r) => r.id === id)) return s;
+    } catch {
+      // skip
+    }
+  }
+  return null;
 }
 
 async function resolveWorkspaceIdForRun(runId: string): Promise<string | null> {
@@ -1934,8 +2377,36 @@ async function handleSessionCommand(args: string[]): Promise<void> {
     return;
   }
 
+  if (sub === "stop") {
+    // AL-9: drop a STOP file into `~/.relay/sessions/<sessionId>/` so
+    // the autonomous-loop's next tick flips the lifecycle to
+    // `winding_down`. Positional-only — sessionId is the target of
+    // the stop. Works even if the session dir doesn't exist yet
+    // (writeStopFile creates it), so an operator can race the loop
+    // and still land the signal.
+    const sessionId = extractPositionals(args)[1];
+    if (!sessionId) {
+      console.error("Usage: rly session stop <sessionId>");
+      process.exitCode = 1;
+      return;
+    }
+    const { writeStopFile } = await import("./orchestrator/stop-file-watcher.js");
+    try {
+      const path = await writeStopFile(sessionId, { source: "cli" });
+      jsonOut({ ok: true, sessionId, stopFile: path });
+    } catch (err) {
+      console.error(
+        `Failed to write STOP file for session ${sessionId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   console.error(
-    "Usage: rly session <create|list|get|delete|update-claude-sid|append|update-last|messages>"
+    "Usage: rly session <create|list|get|delete|update-claude-sid|append|update-last|messages|stop>"
   );
   process.exitCode = 1;
 }
@@ -2364,8 +2835,11 @@ async function printTopLevelHelp(): Promise<void> {
     "  run <request>            Classify + plan + execute a feature request",
     "  run --autonomous <ch>    Start an autonomous session against a channel's ticket board (AL-3)",
     "  approve <runId>          Approve a pending plan",
+    "  approve next|all         Drain the AL-8 approvals queue (next pending or bulk)",
     "  reject <runId> [--feedback <text>]  Reject a pending plan",
+    "  reject <apvId> [--feedback <text>]  Reject an approvals-queue record",
     "  pending-plans [--json]   List runs awaiting plan-approval decisions",
+    "  pending-approvals [--json] [--session <id>]  List queue approvals awaiting decisions",
     "  status                   Workspace paths + recent runs",
     "  list-runs                Recent persisted runs across workspaces",
     "  running                  Active tasks across every workspace",
@@ -2378,6 +2852,7 @@ async function printTopLevelHelp(): Promise<void> {
     "PR tracking:",
     "  pr-watch <pr>            Manually track a GitHub PR",
     "  pr-status                List tracked PRs with CI + review state",
+    "  sweep-worktrees          Clean up orphaned worktrees whose PRs have merged",
     "",
     "Workspace:",
     "  up                       Register the current repo as a workspace",

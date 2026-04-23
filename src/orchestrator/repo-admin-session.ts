@@ -114,6 +114,14 @@ export interface RepoAdminSpawnArgs {
    * (AL-0). Passed through to `--dangerously-skip-permissions`.
    */
   fullAccess: boolean;
+  /**
+   * Parent autonomous-session id (the one that owns the coordinator +
+   * budget + lifecycle). AL-16 IPC follow-up: the child MCP server uses
+   * this as `RELAY_SESSION_ID` to resolve `~/.relay/sessions/<id>/coordination/`
+   * paths when the in-process Coordinator isn't available. Optional for
+   * back-compat with tests constructed before the IPC bridge landed.
+   */
+  autonomousSessionId?: string;
 }
 
 /**
@@ -247,6 +255,14 @@ export interface RepoAdminSessionOptions {
    * behaviour — coordination is an autonomous-loop concern.
    */
   coordinator?: Coordinator | null;
+  /**
+   * AL-16 IPC: parent autonomous-session id. Threaded into the spawned
+   * child process as `RELAY_SESSION_ID` so the child's MCP server can
+   * resolve `~/.relay/sessions/<id>/coordination/` paths when the in-
+   * process Coordinator isn't reachable. Optional for back-compat with
+   * tests that construct a standalone session.
+   */
+  autonomousSessionId?: string;
 }
 
 /**
@@ -301,7 +317,17 @@ export class ClaudeRepoAdminSpawner implements RepoAdminProcessSpawner {
       // AL-11: activates the MCP per-role allowlist inside the spawned
       // session. RELAY_* flows through the default sanitizer whitelist,
       // so no `passEnv` gymnastics needed.
-      env: { RELAY_AGENT_ROLE: REPO_ADMIN_ROLE },
+      // AL-16 IPC: RELAY_SESSION_ID + RELAY_AGENT_ALIAS let the child
+      // MCP server resolve file-based coordination paths when the
+      // in-process Coordinator isn't reachable (the common production
+      // case). Both are optional — absence just disables the IPC
+      // fallback and coordination_send/receive return a structured
+      // "coordinator-not-configured" error.
+      env: {
+        RELAY_AGENT_ROLE: REPO_ADMIN_ROLE,
+        ...(args.autonomousSessionId ? { RELAY_SESSION_ID: args.autonomousSessionId } : {}),
+        RELAY_AGENT_ALIAS: args.alias,
+      },
       // Claude CLI still needs its auth creds; mirror the pass-list used
       // by the short-lived adapter in `src/agents/cli-agents.ts`.
       passEnv: [
@@ -384,6 +410,12 @@ export class RepoAdminSession {
   private readonly unsubscribeTokenTracker: () => void;
   private readonly cycleConfig: SessionCycleConfig | null;
   private readonly cycleClock: () => string;
+  /**
+   * AL-16 IPC: parent autonomous-session id passed through to the
+   * spawner for the RELAY_SESSION_ID env var. Undefined in tests that
+   * construct a standalone session.
+   */
+  private readonly autonomousSessionId: string | undefined;
 
   constructor(options: RepoAdminSessionOptions) {
     this.alias = options.assignment.alias;
@@ -396,6 +428,7 @@ export class RepoAdminSession {
     this.cycleConfig = options.cycle ?? null;
     this.cycleClock = options.cycleClock ?? (() => new Date().toISOString());
     this._coordinator = options.coordinator ?? null;
+    this.autonomousSessionId = options.autonomousSessionId;
 
     // AL-15: the session's own token tracker. A caller that supplies one
     // (tests, or a future aggregator) owns its lifetime; otherwise we
@@ -586,6 +619,7 @@ export class RepoAdminSession {
       alias: this.alias,
       sessionId: nextId,
       fullAccess: this.fullAccess,
+      autonomousSessionId: this.autonomousSessionId,
     });
     this.child = child;
 

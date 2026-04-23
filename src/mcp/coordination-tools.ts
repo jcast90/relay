@@ -19,14 +19,33 @@
  * lightweight state interface the MCP server threads through.
  */
 
+import { mkdir, readFile } from "node:fs/promises";
+import { dirname } from "node:path";
+
 import type { Coordinator, SendResult } from "../crosslink/coordinator.js";
 import { COORDINATION_MESSAGE_KINDS } from "../crosslink/messages.js";
+import {
+  writeOutboxRecord,
+  readInboxCursor,
+  writeInboxCursor,
+  parseIpcRecord,
+  type IpcRecord,
+} from "../crosslink/ipc-bridge.js";
+import { getInboxPath } from "../crosslink/ipc-paths.js";
 
 /**
  * MCP tool name. Exported so the role allowlist and tests can pattern-
  * match without re-declaring the string.
  */
 export const COORDINATION_SEND_TOOL = "coordination_send";
+
+/**
+ * MCP tool name for the child-side inbox drain. Repo-admin sessions
+ * running as a spawned MCP child reach the Coordinator via files, not
+ * in-memory; they call this tool at the start of each work cycle to
+ * pull pending messages addressed to their alias.
+ */
+export const COORDINATION_RECEIVE_TOOL = "coordination_receive";
 
 /**
  * State the MCP server owns and threads into each tool dispatch. A
@@ -39,14 +58,36 @@ export interface CoordinationToolState {
    * running inside a repo-admin context (RELAY_AGENT_ROLE=repo-admin).
    * Absent otherwise. */
   alias: string | null;
-  /** Per-run coordinator instance. Wired by the autonomous-loop driver
-   * (AL-16 follow-up). When null, the tool surfaces a clear error. */
+  /** Per-run coordinator instance. Populated when the MCP server runs
+   * in-process (tests, some dev flows). Child-process MCP servers leave
+   * this null and the tool falls through to the file-based IPC bridge
+   * (`writeOutboxRecord` + the parent's {@link IpcBridge} tail). */
   coordinator: Coordinator | null;
+  /** Session id that scopes the IPC files under
+   * `~/.relay/sessions/<sessionId>/coordination/`. Read from
+   * `RELAY_SESSION_ID` in the real spawner path. Required for the IPC
+   * fallback; tools return a clear error when absent. */
+  sessionId: string | null;
+  /** Root dir override for IPC paths. Defaults to `~/.relay` via
+   * {@link getCoordinationDir}. Tests inject a tmpdir. */
+  rootDir?: string;
+  /** Injected clock for deterministic tests. Defaults to `Date.now`. */
+  clock?: () => number;
+  /** Injected id factory for deterministic tests. Defaults to a
+   * crypto-free counter since the id's only job is to round-trip the
+   * message through the bridge for logging. */
+  idFactory?: () => string;
 }
 
 /** True iff the tool name belongs to the AL-16 surface. */
 export function isCoordinationTool(name: string): boolean {
-  return name === COORDINATION_SEND_TOOL;
+  return name === COORDINATION_SEND_TOOL || name === COORDINATION_RECEIVE_TOOL;
+}
+
+let ipcRecordCounter = 0;
+function defaultIpcId(): string {
+  ipcRecordCounter += 1;
+  return `ipc-${process.pid}-${Date.now().toString(36)}-${ipcRecordCounter.toString(36)}`;
 }
 
 /**
@@ -65,7 +106,10 @@ export function getCoordinationToolDefinitions(): object[] {
         "merged and downstream repos may be waiting on it; 'merge-order-proposal' " +
         "to record an ordering rationale across multiple open PRs. DO NOT free-text " +
         "these coordination handoffs in the channel feed — use this tool so the " +
-        "scheduler and other admins can parse them programmatically.",
+        "scheduler and other admins can parse them programmatically. Works whether " +
+        "the MCP server is in-process (tests) or spawned as a child process " +
+        "(production) — the tool auto-falls-back to a file-based IPC bridge in the " +
+        "latter case.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -91,6 +135,26 @@ export function getCoordinationToolDefinitions(): object[] {
         },
       },
     },
+    {
+      name: COORDINATION_RECEIVE_TOOL,
+      description:
+        "Pull unread cross-repo coordination messages addressed to this repo-admin. " +
+        "Call at the start of each work cycle. Returns an array of messages that " +
+        "arrived since the last call. Cursor is persisted so messages are delivered " +
+        "exactly once per session.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          limit: {
+            type: "integer",
+            minimum: 1,
+            maximum: 100,
+            description: "Maximum number of messages to return in a single call. Default 25.",
+          },
+        },
+      },
+    },
   ];
 }
 
@@ -104,14 +168,23 @@ export async function callCoordinationTool(
   args: Record<string, unknown>,
   state: CoordinationToolState
 ): Promise<unknown> {
-  if (name !== COORDINATION_SEND_TOOL) {
-    return {
-      ok: false,
-      error: "unknown-tool",
-      detail: `coordination_send dispatcher received unexpected tool name: ${name}`,
-    };
+  if (name === COORDINATION_SEND_TOOL) {
+    return await handleSend(args, state);
   }
+  if (name === COORDINATION_RECEIVE_TOOL) {
+    return await handleReceive(args, state);
+  }
+  return {
+    ok: false,
+    error: "unknown-tool",
+    detail: `coordination dispatcher received unexpected tool name: ${name}`,
+  };
+}
 
+async function handleSend(
+  args: Record<string, unknown>,
+  state: CoordinationToolState
+): Promise<unknown> {
   if (!state.alias) {
     return {
       ok: false,
@@ -119,17 +192,6 @@ export async function callCoordinationTool(
       detail:
         "coordination_send is only callable from a repo-admin session. Set " +
         "RELAY_AGENT_ROLE=repo-admin and bind the session to a repo alias.",
-    };
-  }
-
-  if (!state.coordinator) {
-    return {
-      ok: false,
-      error: "coordinator-not-configured",
-      detail:
-        "No coordinator is wired into this MCP server instance. Coordination " +
-        "messaging requires running inside an autonomous-loop session where " +
-        "the Coordinator is constructed alongside the RepoAdminPool.",
     };
   }
 
@@ -150,10 +212,133 @@ export async function callCoordinationTool(
     };
   }
 
-  const result: SendResult = await state.coordinator.send(
-    state.alias,
+  // In-process path: the parent wired a live Coordinator into state.
+  // Fastest, simplest, used by tests + any future in-process admin.
+  if (state.coordinator) {
+    const result: SendResult = await state.coordinator.send(
+      state.alias,
+      to,
+      payload as Record<string, unknown>
+    );
+    return result;
+  }
+
+  // Cross-process path: the MCP server is running as a child of Claude
+  // CLI and doesn't share a heap with the parent's Coordinator. Append
+  // to the outbox file; the parent's IpcBridge will tail + route it.
+  if (!state.sessionId) {
+    return {
+      ok: false,
+      error: "coordinator-not-configured",
+      detail:
+        "No coordinator is wired into this MCP server instance AND RELAY_SESSION_ID " +
+        "is unset, so the file-based IPC fallback can't locate its outbox. This " +
+        "normally indicates the session was not spawned by the autonomous-loop " +
+        "driver.",
+    };
+  }
+
+  const clock = state.clock ?? Date.now;
+  const id = (state.idFactory ?? defaultIpcId)();
+  const record: IpcRecord = {
+    id,
+    from: state.alias,
     to,
-    payload as Record<string, unknown>
-  );
-  return result;
+    payload: payload as Record<string, unknown>,
+    writtenAt: new Date(clock()).toISOString(),
+  };
+  try {
+    await writeOutboxRecord(state.sessionId, state.alias, record, state.rootDir);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return {
+      ok: false,
+      error: "ipc-write-failed",
+      detail: `outbox append failed: ${detail}`,
+    };
+  }
+  return {
+    ok: true,
+    routedVia: "ipc-file",
+    messageId: id,
+    kind: (payload as { kind?: unknown }).kind,
+    from: state.alias,
+    to,
+    detail:
+      "Message queued for the parent process's IpcBridge. It will appear in the " +
+      "target admin's inbox after the parent routes it through the live Coordinator.",
+  };
+}
+
+async function handleReceive(
+  args: Record<string, unknown>,
+  state: CoordinationToolState
+): Promise<unknown> {
+  if (!state.alias) {
+    return {
+      ok: false,
+      error: "session-not-repo-admin",
+      detail: "coordination_receive is only callable from a repo-admin session.",
+    };
+  }
+  if (!state.sessionId) {
+    return {
+      ok: false,
+      error: "coordinator-not-configured",
+      detail:
+        "RELAY_SESSION_ID is unset; the inbox path cannot be resolved. This " +
+        "normally indicates the session was not spawned by the autonomous-loop " +
+        "driver.",
+    };
+  }
+  const limitArg = args.limit;
+  const limit =
+    typeof limitArg === "number" && Number.isFinite(limitArg) && limitArg >= 1
+      ? Math.min(100, Math.floor(limitArg))
+      : 25;
+
+  const inboxPath = getInboxPath(state.sessionId, state.alias, state.rootDir);
+  let raw: string;
+  try {
+    raw = await readFile(inboxPath, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return { ok: true, messages: [], cursor: 0 };
+    }
+    const detail = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: "ipc-read-failed", detail };
+  }
+
+  const cursor = await readInboxCursor(state.sessionId, state.alias, state.rootDir);
+  if (raw.length <= cursor.offset) {
+    return { ok: true, messages: [], cursor: cursor.offset };
+  }
+  const chunk = raw.slice(cursor.offset);
+  // Only whole lines — a torn trailing line stays in the buffer until
+  // the parent's next append closes it with a newline.
+  const lines = chunk.split("\n");
+  const complete = raw.endsWith("\n") ? lines.filter((l) => l.length > 0) : lines.slice(0, -1);
+
+  const messages: IpcRecord[] = [];
+  for (const line of complete) {
+    if (messages.length >= limit) break;
+    const rec = parseIpcRecord(line);
+    if (rec) messages.push(rec);
+  }
+
+  // Advance cursor only past the lines we actually returned so the next
+  // call picks up where we left off if we hit the limit.
+  let advanced = 0;
+  for (let i = 0; i < messages.length; i += 1) {
+    advanced += complete[i].length + 1; // +1 for newline
+  }
+  const nextOffset = cursor.offset + advanced;
+  try {
+    await writeInboxCursor(state.sessionId, state.alias, { offset: nextOffset }, state.rootDir);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: "ipc-cursor-write-failed", detail };
+  }
+  void mkdir(dirname(inboxPath), { recursive: true }); // idempotent ensure
+  return { ok: true, messages, cursor: nextOffset };
 }

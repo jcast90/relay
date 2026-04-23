@@ -252,8 +252,7 @@ export function Sidebar({
                 onRename: () => renameSection(s),
                 onDecommission: () => decommissionSection(s),
                 onDelete: members.length === 0 ? () => deleteSection(s) : undefined,
-                deleteDisabledHint:
-                  members.length > 0 ? "Move channels out first" : undefined,
+                deleteDisabledHint: members.length > 0 ? "Move channels out first" : undefined,
               }}
             >
               {members.length === 0 && (
@@ -444,12 +443,8 @@ function SidebarSection({
             </button>
             {menuOpen && (
               <div className="section-menu">
-                {menu.onRename && (
-                  <button onClick={menu.onRename}>Rename</button>
-                )}
-                {menu.onDecommission && (
-                  <button onClick={menu.onDecommission}>Decommission</button>
-                )}
+                {menu.onRename && <button onClick={menu.onRename}>Rename</button>}
+                {menu.onDecommission && <button onClick={menu.onDecommission}>Decommission</button>}
                 <button
                   onClick={menu.onDelete}
                   disabled={!menu.onDelete}
@@ -567,9 +562,7 @@ function DmRow({
   // as the row subtitle to mirror the design's amber "⚙ activity" hint.
   const agent = channel.members[0];
   const working = agent?.status === "working";
-  const initials =
-    (agent?.displayName ?? channel.name).slice(0, 2).toUpperCase() ||
-    channel.name.slice(0, 2).toUpperCase();
+  const initials = deriveInitials(agent?.displayName ?? channel.name);
   return (
     <div className={`sidebar-item dm ${active ? "active" : ""}`} onClick={onSelect}>
       <span className="dm-avatar">{initials}</span>
@@ -580,4 +573,17 @@ function DmRow({
       {working && <span className="dm-dot" />}
     </div>
   );
+}
+
+// "Claude Code" → "CC", "jcast" → "JC", "@bot" → "BO". Split on
+// whitespace for multi-word names so two-letter initials read as real
+// initials instead of a slice-first-two substring.
+function deriveInitials(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "??";
+  const parts = trimmed.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return trimmed.slice(0, 2).toUpperCase();
 }

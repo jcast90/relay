@@ -104,8 +104,8 @@ function ReposTab({ channel, onRefresh }: { channel: Channel; onRefresh: () => v
       <div className="drawer-section">
         <h4>Attached repos · {channel.repoAssignments.length}</h4>
         <p className="drawer-section-hint">
-          Each attached repo becomes a pingable <code>@alias</code>. The primary repo hosts the
-          main channel agent.
+          Each attached repo becomes a pingable <code>@alias</code>. The primary repo hosts the main
+          channel agent.
         </p>
         <div className="drawer-repo-list">
           {channel.repoAssignments.map((r) => {

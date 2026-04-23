@@ -133,8 +133,16 @@ export async function buildMcpMessageHandler(
   // rather than throwing. Null-coercion below keeps the type contract
   // explicit — `undefined` and omitted both collapse to null.
   const coordinationState: CoordinationToolState = {
-    alias: options.alias ?? null,
+    alias: options.alias ?? process.env.RELAY_AGENT_ALIAS ?? null,
     coordinator: options.coordinator ?? null,
+    // AL-16 IPC follow-up: when this server is spawned as a child
+    // process (no in-process Coordinator ref), `coordination_send`
+    // falls back to appending the outbox file at
+    // `~/.relay/sessions/<sessionId>/coordination/`. Read the parent
+    // autonomous-session id from RELAY_SESSION_ID; absent → the tool
+    // returns a clear "coordinator-not-configured" error instead of
+    // writing to a bogus path.
+    sessionId: process.env.RELAY_SESSION_ID ?? null,
   };
 
   // Auto-register this session

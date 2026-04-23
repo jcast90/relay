@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import { deriveAlias } from "../lib/alias";
+import { basename, deriveAlias } from "../lib/alias";
 import type { Section, WorkspaceEntry } from "../types";
 
 type Props = {
@@ -166,6 +166,11 @@ export function NewChannelModal({ open, onClose, onCreated, defaultSectionId }: 
       }
 
       const warnings: string[] = [];
+      if (result.droppedRepos && result.droppedRepos.length > 0) {
+        warnings.push(
+          `${result.droppedRepos.length} repo(s) skipped (unrepresentable): ${result.droppedRepos.join(", ")}`
+        );
+      }
 
       const toSpawn = sel.filter((r) => r.spawn && r.workspaceId !== primaryWorkspaceId);
       if (toSpawn.length > 0) {
@@ -227,7 +232,9 @@ export function NewChannelModal({ open, onClose, onCreated, defaultSectionId }: 
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal modal-wizard" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header modal-header-wizard">
-          <span className="modal-hash" aria-hidden>#</span>
+          <span className="modal-hash" aria-hidden>
+            #
+          </span>
           <div className="modal-header-text">
             <div className="modal-title">New channel</div>
             <div className="modal-subtitle">
@@ -249,7 +256,8 @@ export function NewChannelModal({ open, onClose, onCreated, defaultSectionId }: 
                 type="button"
                 className={`wizard-step-chip ${step === s.n ? "active" : ""} ${step > s.n ? "done" : ""}`}
                 onClick={() => {
-                  if (s.n < step || (s.n === 2 && canNextFromStep1) || s.n === step) setStep(s.n as Step);
+                  if (s.n < step || (s.n === 2 && canNextFromStep1) || s.n === step)
+                    setStep(s.n as Step);
                 }}
               >
                 <span className="wizard-step-num">{step > s.n ? "✓" : s.n}</span>
@@ -393,7 +401,9 @@ export function NewChannelModal({ open, onClose, onCreated, defaultSectionId }: 
             <div className="wizard-step">
               <p className="help">
                 First message goes straight to the primary agent{" "}
-                <strong style={{ color: "var(--color-accent-coral)", fontFamily: "var(--font-mono)" }}>
+                <strong
+                  style={{ color: "var(--color-accent-coral)", fontFamily: "var(--font-mono)" }}
+                >
                   @{primaryAlias}
                 </strong>
                 . Paste an issue URL, describe a feature, or ask a question — Relay classifies and
@@ -455,8 +465,7 @@ export function NewChannelModal({ open, onClose, onCreated, defaultSectionId }: 
           <div className="wizard-footer-hint">
             Also:{" "}
             <code>
-              /new #{slug || "name"}{" "}
-              {selectedRows.map((r) => r.alias).join(",") || "repo1,repo2"}
+              /new #{slug || "name"} {selectedRows.map((r) => r.alias).join(",") || "repo1,repo2"}
             </code>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
@@ -489,10 +498,6 @@ function slugify(s: string): string {
     .replace(/[^a-z0-9-]/g, "")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
-}
-
-function basename(p: string): string {
-  return p.split("/").filter(Boolean).pop() ?? p;
 }
 
 // Kept as a thin indirection so the rest of this file reads uniformly; the

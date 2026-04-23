@@ -32,10 +32,7 @@ Have fun.`;
 
 export async function maybeSeedFirstRun(): Promise<boolean> {
   try {
-    const [sections, channels] = await Promise.all([
-      api.listSections(),
-      api.listChannels(true),
-    ]);
+    const [sections, channels] = await Promise.all([api.listSections(), api.listChannels(true)]);
     if (sections.length > 0 || channels.length > 0) return false;
 
     const section = await api.createSection("Workspace");

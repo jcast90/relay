@@ -123,6 +123,10 @@ export const REPO_ADMIN_ALLOWED_TOOLS: ReadonlySet<string> = new Set<string>([
   // barred so cross-repo handoffs stay at the foreman tier where the
   // ticket board + decisions audit live.
   "coordination_send",
+  // AL-16 IPC follow-up: drain the inbox file populated by the parent's
+  // IpcBridge. Repo-admins running as spawned MCP children call this at
+  // the start of each work cycle to pull pending cross-repo messages.
+  "coordination_receive",
 ]);
 
 /**

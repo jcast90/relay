@@ -225,3 +225,58 @@ export type PendingPlan = {
   state: string;
   updatedAt: string;
 };
+
+// AL-7/AL-8 approvals queue record. Mirrors `src/approvals/queue.ts`
+// `ApprovalRecord` and the Rust `ApprovalQueueRecord` in
+// `crates/harness-data/src/lib.rs`. `payload` is intentionally opaque so
+// the GUI can render new kinds without a schema bump.
+export type ApprovalQueueRecord = {
+  id: string;
+  sessionId: string;
+  kind: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+  status: "pending" | "approved" | "rejected";
+  decidedAt?: string | null;
+  feedback?: string | null;
+  // AL-7 god-mode marker. Present on records auto-approved by the trust
+  // gate without an operator in the loop. Only value today is "god-mode".
+  autoApprovedBy?: string | null;
+};
+
+// AL-10: summary row returned by `list_autonomous_sessions`. One per
+// session directory under `~/.relay/sessions/` whose metadata.json is
+// parseable. The CenterPane uses these to resolve `channel -> session`.
+export type AutonomousSessionSummary = {
+  sessionId: string;
+  channelId: string;
+  state: string;
+  startedAt: string;
+  trust: string;
+};
+
+// AL-10: deep session state returned by `get_session_state`. Renders the
+// AutonomousSessionHeader; all fields are already pre-computed on the Rust
+// side so the component stays dumb.
+export type AutonomousSessionState = {
+  sessionId: string;
+  channelId: string;
+  // Lifecycle state — matches the `LifecycleState` enum in
+  // `src/lifecycle/types.ts` (planning / dispatching / winding_down /
+  // audit / done / killed).
+  state: string;
+  trust: string;
+  budgetTokens: number;
+  budgetUsed: number;
+  budgetPct: number;
+  maxHours: number;
+  startedAt: string;
+  // ISO timestamp of the most recent lifecycle transition.
+  updatedAt: string;
+  hoursRemaining: number;
+  currentTicketId?: string | null;
+  allowedRepos: string[];
+};
+
+// AL-10 previously defined `SessionApproval` here. Dropped — AL-8 owns the
+// GUI approvals surface via `ApprovalQueueRecord` above.
