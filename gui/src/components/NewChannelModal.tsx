@@ -2,6 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { basename, deriveAlias } from "../lib/alias";
 import type { Section, WorkspaceEntry } from "../types";
+import { PromptModal } from "./PromptModal";
+
+/** Sentinel value used for the "Create new section…" option in the
+ * Section <select>. Picked so it can't collide with a real sectionId
+ * (which are UUIDs). */
+const CREATE_SECTION_SENTINEL = "__create__";
 
 type Props = {
   open: boolean;
@@ -50,6 +56,7 @@ export function NewChannelModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [spawnWarning, setSpawnWarning] = useState<string | null>(null);
+  const [sectionPromptOpen, setSectionPromptOpen] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -314,7 +321,14 @@ export function NewChannelModal({
                 Section
                 <select
                   value={sectionId ?? ""}
-                  onChange={(e) => setSectionId(e.target.value || null)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === CREATE_SECTION_SENTINEL) {
+                      setSectionPromptOpen(true);
+                      return;
+                    }
+                    setSectionId(v || null);
+                  }}
                 >
                   <option value="">None — Uncategorized</option>
                   {sections.map((s) => (
@@ -322,11 +336,10 @@ export function NewChannelModal({
                       {s.name}
                     </option>
                   ))}
+                  <option value={CREATE_SECTION_SENTINEL}>+ Create new section…</option>
                 </select>
                 <small style={{ color: "var(--color-text-dim)" }}>
-                  {sections.length === 0
-                    ? "Create a section from the sidebar to group channels."
-                    : "Change any time from the sidebar kebab menu."}
+                  Change any time from the sidebar kebab menu.
                 </small>
               </label>
             </div>
@@ -501,6 +514,23 @@ export function NewChannelModal({
           </div>
         </div>
       </div>
+
+      <PromptModal
+        open={sectionPromptOpen}
+        title="New section"
+        label="Section name"
+        placeholder="e.g. Billing, Infrastructure"
+        submitLabel="Create"
+        onSubmit={async (value) => {
+          const created = await api.createSection(value);
+          // Refresh the section list and auto-select the new one so the
+          // user doesn't have to re-find it.
+          const next = await api.listSections();
+          setSections(next);
+          setSectionId(created.sectionId);
+        }}
+        onClose={() => setSectionPromptOpen(false)}
+      />
     </div>
   );
 }
