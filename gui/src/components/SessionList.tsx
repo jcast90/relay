@@ -36,30 +36,54 @@ export function SessionList({ channelId, selectedSessionId, onSelect, refreshTic
   };
 
   return (
-    <div className="section">
-      <div className="section-head">
-        <h4>Sessions ({sessions.length})</h4>
-        <button onClick={newSession} disabled={busy} title="New session">
+    <div className="rail-session-list">
+      <div className="rail-session-head">
+        <span className="rail-section-title">Sessions · {sessions.length}</span>
+        <button
+          type="button"
+          className="rail-session-new"
+          onClick={newSession}
+          disabled={busy}
+          title="New session"
+        >
           +
         </button>
       </div>
       {sessions.length === 0 && (
-        <div className="row" style={{ color: "var(--text-muted)" }}>
-          No sessions yet
+        <div className="rail-empty">
+          No sessions yet — send a message to start one.
         </div>
       )}
-      {sessions.map((s) => (
-        <div
-          key={s.sessionId}
-          className={`session-row ${s.sessionId === selectedSessionId ? "active" : ""}`}
-          onClick={() => onSelect(s.sessionId)}
-        >
-          <div className="session-title">{s.title}</div>
-          <div className="session-meta">
-            {s.messageCount} msgs · {formatRelative(s.updatedAt)}
-          </div>
-        </div>
-      ))}
+      <div className="rail-session-body">
+        {selectedSessionId && (
+          <button
+            type="button"
+            className="rail-session-back"
+            onClick={() => onSelect(null)}
+            title="Exit the session and return to the full channel feed"
+          >
+            ← Back to channel feed
+          </button>
+        )}
+        {sessions.map((s) => {
+          const active = s.sessionId === selectedSessionId;
+          return (
+            <button
+              type="button"
+              key={s.sessionId}
+              className={`rail-session-card ${active ? "active" : ""}`}
+              onClick={() => onSelect(s.sessionId)}
+            >
+              <div className="rail-session-title">{s.title || "Untitled session"}</div>
+              <div className="rail-session-meta">
+                <span>{s.messageCount} msgs</span>
+                <span>·</span>
+                <span>{formatRelative(s.updatedAt)}</span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

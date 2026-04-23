@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { deriveAlias } from "../lib/alias";
 import type { WorkspaceEntry } from "../types";
 
 type Props = {
@@ -112,13 +113,26 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
     try {
       // Normalize aliases once; everything downstream (create, spawn, kickoff
       // routing) reads from `sel` so the persisted channel and the kickoff
-      // address agree on the alias string.
-      const sel = selectedRows.map((r) => ({
-        alias: r.alias.trim() || defaultAlias(r.workspace.repoPath),
-        workspaceId: r.workspace.workspaceId,
-        repoPath: r.workspace.repoPath,
-        spawn: r.spawn,
-      }));
+      // address agree on the alias string. Dedupe any collisions by suffixing
+      // `-2`, `-3` so two repos with the same basename (e.g. sibling branches
+      // of the same project) still end up with unique aliases — otherwise the
+      // Rust side's alias-uniqueness check rejects the whole create.
+      const seen = new Map<string, number>();
+      const sel = selectedRows.map((r) => {
+        const base = (r.alias.trim() || defaultAlias(r.workspace.repoPath)).replace(
+          /[^a-z0-9._-]/gi,
+          ""
+        );
+        const n = seen.get(base) ?? 0;
+        seen.set(base, n + 1);
+        const alias = n === 0 ? base : `${base}-${n + 1}`;
+        return {
+          alias,
+          workspaceId: r.workspace.workspaceId,
+          repoPath: r.workspace.repoPath,
+          spawn: r.spawn,
+        };
+      });
       const result = await api.createChannel(
         slug,
         topic.trim(),
@@ -437,9 +451,9 @@ function basename(p: string): string {
   return p.split("/").filter(Boolean).pop() ?? p;
 }
 
+// Kept as a thin indirection so the rest of this file reads uniformly; the
+// actual derivation lives in `lib/alias.ts` and is shared across every
+// attach-repo surface.
 function defaultAlias(repoPath: string): string {
-  return basename(repoPath)
-    .replace(/[^a-z0-9-]/gi, "")
-    .toLowerCase()
-    .slice(0, 12);
+  return deriveAlias(repoPath);
 }

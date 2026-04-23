@@ -96,9 +96,40 @@ export function Sidebar({
       </div>
 
       <div className="sidebar-quick">
-        <QuickAction icon="◔" label="Activity" count={activityCount} />
-        <QuickAction icon="☰" label="Threads" count={threadCount} />
-        <QuickAction icon="▶" label="Running" pulse={runningStreams > 0} />
+        <QuickAction
+          icon="◔"
+          label="Activity"
+          count={activityCount}
+          onClick={() => {
+            if (active.length > 0) onSelect(active[0].channelId);
+          }}
+          disabled={active.length === 0}
+        />
+        <QuickAction
+          icon="☰"
+          label="Threads"
+          count={threadCount}
+          onClick={() => {
+            // Jump to the most-recently-active channel so the rail's
+            // Threads tab has something to show.
+            const target = active[0] ?? starred[0];
+            if (target) onSelect(target.channelId);
+          }}
+          disabled={active.length === 0 && starred.length === 0}
+        />
+        <QuickAction
+          icon="▶"
+          label="Running"
+          pulse={runningStreams > 0}
+          onClick={() => {
+            // "Running" is a one-at-a-time presence signal today; if a
+            // stream is live we stay on the current channel (no other ID
+            // to jump to) — but still highlight the row so the click
+            // feels acknowledged. When wired to multi-stream, this jumps
+            // to the running channel.
+          }}
+          disabled={runningStreams === 0}
+        />
       </div>
 
       <div className="sidebar-divider" />
@@ -264,14 +295,24 @@ function QuickAction({
   label,
   count,
   pulse,
+  onClick,
+  disabled,
 }: {
   icon: string;
   label: string;
   count?: number;
   pulse?: boolean;
+  onClick?: () => void;
+  disabled?: boolean;
 }) {
   return (
-    <button type="button" className="quick-action">
+    <button
+      type="button"
+      className="quick-action"
+      onClick={onClick}
+      disabled={disabled}
+      title={disabled ? `No ${label.toLowerCase()}` : label}
+    >
       <span className="qa-icon">{icon}</span>
       <span className="qa-label">{label}</span>
       {pulse && <span className="qa-pulse" />}

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type ChatEvent } from "../api";
+import { deriveAlias } from "../lib/alias";
 import { notifyError } from "../lib/dialogs";
 import type { Channel, ChatSession, WorkspaceEntry } from "../types";
 
@@ -82,19 +83,10 @@ export function Composer({
     mention && mention.query
       ? workspaces.find((w) => {
           if (attachedWorkspaceIds.has(w.workspaceId)) return false;
-          const alias = basename(w.repoPath)
-            .replace(/[^a-z0-9-]/gi, "")
-            .toLowerCase()
-            .slice(0, 12);
-          return alias.startsWith(mention.query.toLowerCase());
+          return deriveAlias(w.repoPath).startsWith(mention.query.toLowerCase());
         })
       : undefined;
-  const attachAlias = attachCandidate
-    ? basename(attachCandidate.repoPath)
-        .replace(/[^a-z0-9-]/gi, "")
-        .toLowerCase()
-        .slice(0, 12)
-    : "";
+  const attachAlias = attachCandidate ? deriveAlias(attachCandidate.repoPath) : "";
 
   const attachNow = async () => {
     if (!attachCandidate) return;
@@ -508,10 +500,6 @@ function MentionPopover({
   );
 }
 
-function basename(p: string): string {
-  return p.split("/").filter(Boolean).pop() ?? p;
-}
-
 /**
  * Scan `text` for `@alias` mentions where `alias` matches a registered
  * workspace that's NOT currently attached to the channel. Returns the
@@ -532,10 +520,7 @@ function computeUnattachedMentions(
   >();
   for (const w of workspaces) {
     if (attachedWorkspaceIds.has(w.workspaceId)) continue;
-    const alias = basename(w.repoPath)
-      .replace(/[^a-z0-9-]/gi, "")
-      .toLowerCase()
-      .slice(0, 12);
+    const alias = deriveAlias(w.repoPath);
     if (!alias) continue;
     if (!candidatesByAlias.has(alias)) {
       candidatesByAlias.set(alias, { workspaceId: w.workspaceId, repoPath: w.repoPath, alias });

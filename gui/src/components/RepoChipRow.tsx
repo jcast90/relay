@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { deriveAlias } from "../lib/alias";
 import { notifyError } from "../lib/dialogs";
 import type { Channel, WorkspaceEntry } from "../types";
 
@@ -156,6 +157,8 @@ function AddRepoPopover({
 }) {
   const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>([]);
   const [busy, setBusy] = useState(false);
+  const [query, setQuery] = useState("");
+  const [picked, setPicked] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     api
@@ -166,21 +169,42 @@ function AddRepoPopover({
 
   const attachedIds = new Set(channel.repoAssignments.map((r) => r.workspaceId));
   const available = workspaces.filter((w) => !attachedIds.has(w.workspaceId));
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? available.filter((w) => basename(w.repoPath).toLowerCase().includes(q))
+    : available;
 
-  const attach = async (w: WorkspaceEntry) => {
-    if (busy) return;
+  const toggle = (id: string) => {
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const attach = async () => {
+    if (busy || picked.size === 0) return;
     setBusy(true);
-    const alias = basename(w.repoPath)
-      .replace(/[^a-z0-9-]/gi, "")
-      .toLowerCase()
-      .slice(0, 12);
+    const taken = new Set(channel.repoAssignments.map((r) => r.alias));
+    const toAdd = available.filter((w) => picked.has(w.workspaceId));
+    const additions = toAdd.map((w) => {
+      let alias = deriveAlias(w.repoPath);
+      if (taken.has(alias)) {
+        let n = 2;
+        while (taken.has(`${alias}-${n}`)) n++;
+        alias = `${alias}-${n}`;
+      }
+      taken.add(alias);
+      return { alias, workspaceId: w.workspaceId, repoPath: w.repoPath };
+    });
     const next = [
       ...channel.repoAssignments.map((r) => ({
         alias: r.alias,
         workspaceId: r.workspaceId,
         repoPath: r.repoPath,
       })),
-      { alias, workspaceId: w.workspaceId, repoPath: w.repoPath },
+      ...additions,
     ];
     try {
       await api.updateChannelRepos(channel.channelId, next);
@@ -193,20 +217,52 @@ function AddRepoPopover({
   };
 
   return (
-    <div className="popover" style={{ top: "calc(100% + 4px)", right: 0 }}>
-      <div className="popover-header">Attach repo</div>
-      {available.length === 0 ? (
-        <div className="popover-item disabled" onClick={onClose}>
-          No unattached workspaces
+    <div className="attach-popover" style={{ top: "calc(100% + 4px)", right: 0 }}>
+      <div className="attach-popover-head">
+        <div className="attach-popover-title">
+          Attach repos{picked.size > 0 && ` · ${picked.size} selected`}
         </div>
-      ) : (
-        available.map((w) => (
-          <div key={w.workspaceId} className="popover-item" onClick={() => attach(w)}>
-            <span>{basename(w.repoPath)}</span>
-            <span className="item-sub">{w.repoPath}</span>
+        <input
+          autoFocus
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search workspaces…"
+          className="attach-popover-search"
+        />
+      </div>
+      <div className="attach-popover-list">
+        {filtered.length === 0 ? (
+          <div className="attach-popover-empty">
+            {available.length === 0 ? "All workspaces already attached." : "No matches."}
           </div>
-        ))
-      )}
+        ) : (
+          filtered.map((w) => {
+            const isPicked = picked.has(w.workspaceId);
+            return (
+              <button
+                type="button"
+                key={w.workspaceId}
+                className={`attach-row ${isPicked ? "picked" : ""}`}
+                onClick={() => toggle(w.workspaceId)}
+                title={w.repoPath}
+              >
+                <span className={`attach-check ${isPicked ? "on" : ""}`} aria-hidden>
+                  {isPicked ? "✓" : ""}
+                </span>
+                <span className="attach-row-name">{basename(w.repoPath)}</span>
+              </button>
+            );
+          })
+        )}
+      </div>
+      <div className="attach-popover-foot">
+        <button type="button" onClick={onClose} disabled={busy}>
+          Cancel
+        </button>
+        <button type="button" className="primary" onClick={attach} disabled={busy || picked.size === 0}>
+          {busy ? "Attaching…" : picked.size > 1 ? `Attach ${picked.size} repos` : "Attach repo"}
+        </button>
+      </div>
     </div>
   );
 }
