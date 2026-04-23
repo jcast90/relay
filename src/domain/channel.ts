@@ -115,6 +115,35 @@ export interface Channel {
    * streaming path as a channel, but the sidebar segregates them.
    */
   kind?: "channel" | "dm";
+  /**
+   * Section (sidebar group) this channel belongs to. `undefined` means
+   * "Uncategorized" — rendered at the bottom of the sidebar in its own
+   * always-visible bucket. When the section this id references is
+   * decommissioned, the UI auto-moves the channel to Uncategorized
+   * on the next load.
+   */
+  sectionId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * A sidebar grouping for channels. Maps 1:1 to Slack's collapsible
+ * sections. Stored as a list in `~/.relay/sections.json` — see
+ * `crates/harness-data` for the Rust mirror.
+ *
+ * `status` implements soft delete: an `active` section shows in the
+ * sidebar; a `decommissioned` section is hidden but retained so an
+ * Undo flow can revive it without recreating the grouping from scratch.
+ * Hard delete removes the entry outright; the CLI only permits it when
+ * no active channel still references the id.
+ */
+export interface Section {
+  sectionId: string;
+  name: string;
+  /** Smaller = higher in the sidebar. Auto-assigned on create. */
+  order: number;
+  status: "active" | "decommissioned";
   createdAt: string;
   updatedAt: string;
 }
