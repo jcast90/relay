@@ -153,6 +153,7 @@ export function CenterPane({
         onOpenSettings={() => setSettingsOpen(true)}
         onRefresh={onRefresh}
         hideTabs={isDm}
+        tabCounts={{ board: tickets.length, decisions: decisions.length }}
       />
       {isDm && (
         <DmBanner

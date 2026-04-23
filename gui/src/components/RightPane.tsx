@@ -60,17 +60,43 @@ export function RightPane({ channel, sessionId, onSelectSession, refreshTick, on
     if (prs.some((r) => r.ci === "failing")) setTab("prs");
   }, [prs]);
 
+  const [sessionCount, setSessionCount] = useState<number>(0);
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listSessions(channel.channelId)
+      .then((s) => {
+        if (!cancelled) setSessionCount(s.length);
+      })
+      .catch(() => {
+        if (!cancelled) setSessionCount(0);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [channel.channelId, refreshTick]);
+
+  const counts: Record<Tab, number> = {
+    threads: sessionCount,
+    decisions: decisions.length,
+    prs: prs.length,
+  };
+
   return (
     <div className="right-rail">
       <div className="rail-tabs">
         {(["threads", "decisions", "prs"] as Tab[]).map((t) => (
-          <div
+          <button
+            type="button"
             key={t}
             className={`rail-tab ${tab === t ? "active" : ""}`}
             onClick={() => setTab(t)}
           >
-            {t === "threads" ? "Threads" : t === "decisions" ? "Decisions" : "PRs"}
-          </div>
+            <span className="rail-tab-label">
+              {t === "threads" ? "Threads" : t === "decisions" ? "Decisions" : "PRs"}
+            </span>
+            {counts[t] > 0 && <span className="tab-count">{counts[t]}</span>}
+          </button>
         ))}
       </div>
       <div className="rail-scroll">

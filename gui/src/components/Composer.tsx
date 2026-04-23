@@ -284,6 +284,11 @@ export function Composer({
     }
   };
 
+  const placeholder =
+    channel.kind === "dm"
+      ? `Message ${channel.name}…  paste an issue URL or /new to spin up a channel`
+      : `Message #${channel.name}  ·  type @ to ping a repo`;
+
   return (
     <div className="composer">
       {error && <div className="composer-error">{error}</div>}
@@ -313,14 +318,7 @@ export function Composer({
           ))}
         </div>
       )}
-      {primaryAlias && (
-        <div className="composer-routing">
-          <span>→</span>
-          <span className="route-chip">@{primaryAlias}</span>
-          <span>primary · override with @alias</span>
-        </div>
-      )}
-      <div className="composer-body">
+      <div className="composer-box">
         {showMentions && (
           <MentionPopover
             channel={channel}
@@ -341,24 +339,40 @@ export function Composer({
           onKeyDown={onKeyDown}
           onSelect={handleSelect}
           onBlur={() => setTimeout(() => setMention(null), 120)}
-          placeholder={`Message #${channel.name}…  Enter to send · Shift+Enter newline`}
+          placeholder={placeholder}
           rows={2}
           disabled={disabled}
+          className="composer-textarea"
         />
-      </div>
-      <div className="composer-controls">
-        <label className="auto-approve" title="Pass --dangerously-skip-permissions to claude">
-          <input
-            type="checkbox"
-            checked={autoApprove}
-            onChange={(e) => setAutoApprove(e.target.checked)}
-          />
-          Auto-approve
-        </label>
-        <span className="composer-hint">⌘⏎ to send</span>
-        <button className="primary" onClick={send} disabled={disabled || !text.trim()}>
-          {streaming ? "…" : "Send"}
-        </button>
+        <div className="composer-footer">
+          {primaryAlias && (
+            <span className="route-chip" title={`Messages route to @${primaryAlias} by default`}>
+              → @{primaryAlias}
+            </span>
+          )}
+          <button
+            type="button"
+            className={`auto-approve-pill ${autoApprove ? "on" : "off"}`}
+            onClick={() => setAutoApprove((v) => !v)}
+            title="Pass --dangerously-skip-permissions to the agent"
+            aria-pressed={autoApprove}
+          >
+            <span className="aa-icon">✦</span>
+            {autoApprove ? "Auto-approve" : "Auto-approve off"}
+          </button>
+          <span className="composer-hint">
+            Type <code>@</code> to ping a repo · paste an issue URL to classify
+          </span>
+          <span className="composer-kbd">⌘⏎</span>
+          <button
+            type="button"
+            className="composer-send"
+            onClick={send}
+            disabled={disabled || !text.trim()}
+          >
+            {streaming ? "…" : "Send"}
+          </button>
+        </div>
       </div>
     </div>
   );

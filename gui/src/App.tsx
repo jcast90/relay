@@ -8,7 +8,6 @@ import { NewDmModal } from "./components/NewDmModal";
 import { RightPane } from "./components/RightPane";
 import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar } from "./components/Sidebar";
-import { WorkspaceRail } from "./components/WorkspaceRail";
 
 const RAIL_OPEN_KEY = "relay.rightRailOpen";
 
@@ -99,9 +98,8 @@ export function App() {
 
   return (
     <div className={`app density-${appearance.density} ${rightRailOpen ? "" : "rail-collapsed"}`}>
-      <WorkspaceRail onOpenSettings={() => setSettingsOpen(true)} />
       {settingsOpen && settings ? (
-        <div style={{ gridColumn: "2 / -1", display: "flex", minHeight: 0 }}>
+        <div style={{ gridColumn: "1 / -1", display: "flex", minHeight: 0 }}>
           <SettingsPage
             settings={settings}
             onSaved={setSettings}
@@ -120,6 +118,7 @@ export function App() {
             onNewChannel={() => setModalOpen(true)}
             onNewDm={() => setDmModalOpen(true)}
             onToggleIncludeArchived={setIncludeArchived}
+            onOpenSettings={() => setSettingsOpen(true)}
             onRefresh={refresh}
           />
           <CenterPane
