@@ -772,11 +772,14 @@ async function handleChannelCommand(args: string[]): Promise<void> {
     if (args.includes("--json")) {
       jsonOut(updated);
     } else if (updated) {
-      // TODO(PR1): resolve the display name through the profile store
-      // once the import unblocks. Until then, print the id so the
-      // audit-visible output stays informative.
-      const label = updated.providerProfileId ?? "(none — inherit default)";
-      console.log(`Channel provider set to ${label} (${updated.providerProfileId ?? "cleared"})`);
+      let label = "(none — inherit default)";
+      if (updated.providerProfileId) {
+        const profile = await new ProviderProfileStore().getProfile(updated.providerProfileId);
+        label = profile
+          ? `${profile.displayName} (${profile.id})`
+          : `${updated.providerProfileId} (profile not found)`;
+      }
+      console.log(`Channel provider set to ${label}`);
     } else {
       console.error(`Channel not found: ${channelId}`);
       process.exitCode = 1;
@@ -3271,6 +3274,10 @@ async function runProfilesAdd(store: ProviderProfileStore, args: string[]): Prom
       apiKeyEnvRef,
       defaultModel,
     });
+    if (rest.includes("--json")) {
+      console.log(JSON.stringify(profile, null, 2));
+      return 0;
+    }
     console.log(`Saved profile '${profile.id}':`);
     console.log(`  displayName: ${profile.displayName}`);
     console.log(`  adapter:     ${profile.adapter}`);
@@ -3291,11 +3298,15 @@ async function runProfilesAdd(store: ProviderProfileStore, args: string[]): Prom
 async function runProfilesRemove(store: ProviderProfileStore, args: string[]): Promise<number> {
   const id = args[0];
   if (!id || id.startsWith("--")) {
-    console.error("Usage: rly providers profiles remove <id>");
+    console.error("Usage: rly providers profiles remove <id> [--json]");
     return 1;
   }
   const removed = await store.removeProfile(id);
-  console.log(removed ? `Removed profile '${id}'.` : `No profile '${id}' — nothing to do.`);
+  if (args.includes("--json")) {
+    console.log(JSON.stringify({ id, removed }));
+  } else {
+    console.log(removed ? `Removed profile '${id}'.` : `No profile '${id}' — nothing to do.`);
+  }
   return 0;
 }
 

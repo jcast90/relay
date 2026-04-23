@@ -2,14 +2,7 @@ import { AgentRegistry } from "../agents/registry.js";
 import { createLiveAgents, registerAgentNames } from "../agents/factory.js";
 import { NodeCommandInvoker } from "../agents/command-invoker.js";
 import type { ProviderProfile, ProviderProfileLookup } from "../agents/provider-profile-lookup.js";
-// TODO(PR1): once PR 1 lands, swap the `NullProviderProfileLookup` default
-// below for `new ProviderProfileStore()` — its public shape already
-// satisfies {@link ProviderProfileLookup}. The swap is ~5 lines:
-//   import { ProviderProfileStore } from "../storage/provider-profile-store.js";
-//   const profileLookup = input.providerProfileLookup ?? new ProviderProfileStore();
-// Until then dispatch resolves to `null` (legacy `HARNESS_PROVIDER` path)
-// whenever the caller doesn't inject a lookup.
-import { NullProviderProfileLookup } from "../agents/provider-profile-lookup.js";
+import { ProviderProfileStore } from "../storage/provider-profile-store.js";
 import { LocalArtifactStore } from "../execution/artifact-store.js";
 import { VerificationRunner } from "../execution/verification-runner.js";
 import { ChannelStore } from "../channels/channel-store.js";
@@ -80,11 +73,8 @@ export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
   const artifactsDir = `${getWorkspaceDir(workspaceId)}/artifacts`;
   const artifactStore = new LocalArtifactStore(artifactsDir, getHarnessStore());
   const channelStore = new ChannelStore(undefined, getHarnessStore());
-  // TODO(PR1): swap the NullProviderProfileLookup default for the real
-  // ProviderProfileStore once PR 1 merges. Dispatch then resolves real
-  // profiles without callers having to pass a lookup by hand.
   const profileLookup: ProviderProfileLookup =
-    input.providerProfileLookup ?? new NullProviderProfileLookup();
+    input.providerProfileLookup ?? new ProviderProfileStore();
 
   // Resolve or create a channel first — we need its `fullAccess` flag +
   // provider-profile binding to decide how to construct agents.

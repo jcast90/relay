@@ -784,18 +784,17 @@ fn upsert_provider_profile(profile: ProviderProfileInput) -> Result<serde_json::
         profile.adapter.clone(),
         "--display-name".into(),
         profile.display_name.clone(),
-        "--upsert".into(),
         "--json".into(),
     ];
     if let Some(ref model) = profile.default_model {
         if !model.is_empty() {
-            args.push("--default-model".into());
+            args.push("--model".into());
             args.push(model.clone());
         }
     }
     if let Some(ref key) = profile.api_key_env_ref {
         if !key.is_empty() {
-            args.push("--api-key-env-ref".into());
+            args.push("--api-key-ref".into());
             args.push(key.clone());
         }
     }
