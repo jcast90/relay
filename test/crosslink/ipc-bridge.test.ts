@@ -58,8 +58,10 @@ async function withFixture(
     name: "#ipc-bridge",
     description: "ipc bridge tests",
   });
+  // Cast the fake pool to the Coordinator's pool parameter: it consumes
+  // `getSession` + `listSessions` opaquely, so a minimal fake is safe.
   const coordinator = new Coordinator({
-    pool: makeFakePool(aliases),
+    pool: makeFakePool(aliases) as unknown as ConstructorParameters<typeof Coordinator>[0]["pool"],
     channelStore,
     channelId: channel.channelId,
   });
