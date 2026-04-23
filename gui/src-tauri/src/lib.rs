@@ -805,7 +805,15 @@ fn set_channel_tier(channel_id: String, tier: Option<String>) -> Result<(), Stri
 
 #[tauri::command]
 fn list_provider_profiles() -> Result<serde_json::Value, String> {
-    cli_json(&["providers", "profiles", "list", "--json"])
+    // CLI emits `{ "defaultProfileId": ..., "profiles": [...] }`. The
+    // renderer is typed as `Promise<ProviderProfile[]>`, so unwrap the
+    // `profiles` array here — otherwise React's `.map()` on the object
+    // crashes the drawer + the Providers settings tab.
+    let value = cli_json(&["providers", "profiles", "list", "--json"])?;
+    match value.get("profiles") {
+        Some(profiles) => Ok(profiles.clone()),
+        None => Ok(serde_json::json!([])),
+    }
 }
 
 /// Read the globally-selected default profile id. The CLI prints
