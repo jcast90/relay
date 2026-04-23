@@ -41,6 +41,74 @@ fn validate_id_segment<'a>(value: &'a str, field: &str) -> Result<&'a str, Strin
     Ok(value)
 }
 
+/// Filter a `repos` payload to only the assignments whose alias +
+/// workspaceId can round-trip through the `--repos a:b:c` CLI encoding.
+/// Returns the kept list plus a list of dropped aliases so the caller
+/// can surface a "N repos skipped" hint to the UI — previously we
+/// ate the drops with a bare `eprintln!`, which code review flagged
+/// as a silent narrowing of the request.
+fn sanitize_repos(
+    repos: Vec<RepoAssignmentInput>,
+) -> (Vec<RepoAssignmentInput>, Vec<String>) {
+    let mut kept = Vec::new();
+    let mut dropped = Vec::new();
+    for r in repos.into_iter() {
+        let alias_ok = !r.alias.is_empty()
+            && r.alias != "."
+            && r.alias != ".."
+            && r.alias
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-');
+        let ws_ok = !r.workspace_id.is_empty()
+            && r.workspace_id != "."
+            && r.workspace_id != ".."
+            && r.workspace_id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-');
+        if alias_ok && ws_ok {
+            kept.push(r);
+        } else {
+            eprintln!(
+                "[gui] dropping unrepresentable repo assignment alias='{}' workspaceId='{}' repoPath='{}'",
+                r.alias, r.workspace_id, r.repo_path
+            );
+            // Surface the most-identifying non-empty field so the UI
+            // can render something meaningful even when the alias is
+            // the empty/invalid side.
+            let label = if !r.alias.is_empty() {
+                r.alias
+            } else if !r.workspace_id.is_empty() {
+                r.workspace_id
+            } else {
+                r.repo_path
+            };
+            dropped.push(label);
+        }
+    }
+    (kept, dropped)
+}
+
+/// Attach a `droppedRepos` array to a JSON payload returned from the
+/// CLI so the frontend can surface a warning banner. No-op when
+/// nothing was dropped; preserves whatever shape the CLI returned.
+fn with_dropped_repos(mut value: serde_json::Value, dropped: Vec<String>) -> serde_json::Value {
+    if dropped.is_empty() {
+        return value;
+    }
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "droppedRepos".to_string(),
+            serde_json::Value::Array(
+                dropped
+                    .into_iter()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            ),
+        );
+    }
+    value
+}
+
 #[tauri::command]
 fn list_workspaces() -> Vec<data::WorkspaceEntry> {
     data::load_workspaces()
@@ -393,10 +461,7 @@ fn create_channel(
     repos: Vec<RepoAssignmentInput>,
     #[allow(non_snake_case)] primaryWorkspaceId: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    for repo in &repos {
-        validate_id_segment(&repo.alias, "repo.alias")?;
-        validate_id_segment(&repo.workspace_id, "repo.workspaceId")?;
-    }
+    let (repos, dropped) = sanitize_repos(repos);
     if let Some(ref id) = primaryWorkspaceId {
         validate_id_segment(id, "primaryWorkspaceId")?;
     }
@@ -436,7 +501,7 @@ fn create_channel(
             }
         }
     }
-    Ok(result)
+    Ok(with_dropped_repos(result, dropped))
 }
 
 /// Mint a DM channel directly from Rust (no CLI round-trip). A DM is a
@@ -493,9 +558,13 @@ fn promote_dm(
     #[allow(non_snake_case)] primaryWorkspaceId: Option<String>,
 ) -> Result<(), String> {
     validate_id_segment(&channel_id, "channelId")?;
-    for repo in &repos {
-        validate_id_segment(&repo.alias, "repo.alias")?;
-        validate_id_segment(&repo.workspace_id, "repo.workspaceId")?;
+    let (repos, dropped) = sanitize_repos(repos);
+    if !dropped.is_empty() {
+        eprintln!(
+            "[gui] promote_dm dropped {} unrepresentable repo assignment(s): {}",
+            dropped.len(),
+            dropped.join(", ")
+        );
     }
     let mut ch = data::load_channel(&channel_id)
         .ok_or_else(|| format!("channel {} not found", channel_id))?;
@@ -559,12 +628,10 @@ fn update_channel_repos(
     repos: Vec<RepoAssignmentInput>,
 ) -> Result<serde_json::Value, String> {
     validate_id_segment(&channel_id, "channelId")?;
-    for repo in &repos {
-        validate_id_segment(&repo.alias, "repo.alias")?;
-        validate_id_segment(&repo.workspace_id, "repo.workspaceId")?;
-    }
-    let repos = repos_arg(&repos);
-    cli_json(&["channel", "update", &channel_id, "--repos", &repos, "--json"])
+    let (repos, dropped) = sanitize_repos(repos);
+    let repos_str = repos_arg(&repos);
+    let result = cli_json(&["channel", "update", &channel_id, "--repos", &repos_str, "--json"])?;
+    Ok(with_dropped_repos(result, dropped))
 }
 
 #[tauri::command]
@@ -2557,6 +2624,7 @@ mod tests {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             list_workspaces,
             list_channels,

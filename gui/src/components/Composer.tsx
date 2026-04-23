@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type ChatEvent } from "../api";
+import { deriveAlias } from "../lib/alias";
+import { notifyError } from "../lib/dialogs";
 import type { Channel, ChatSession, WorkspaceEntry } from "../types";
 
 type ActivityEntry = { text: string; ts: number };
@@ -81,19 +83,10 @@ export function Composer({
     mention && mention.query
       ? workspaces.find((w) => {
           if (attachedWorkspaceIds.has(w.workspaceId)) return false;
-          const alias = basename(w.repoPath)
-            .replace(/[^a-z0-9-]/gi, "")
-            .toLowerCase()
-            .slice(0, 12);
-          return alias.startsWith(mention.query.toLowerCase());
+          return deriveAlias(w.repoPath).startsWith(mention.query.toLowerCase());
         })
       : undefined;
-  const attachAlias = attachCandidate
-    ? basename(attachCandidate.repoPath)
-        .replace(/[^a-z0-9-]/gi, "")
-        .toLowerCase()
-        .slice(0, 12)
-    : "";
+  const attachAlias = attachCandidate ? deriveAlias(attachCandidate.repoPath) : "";
 
   const attachNow = async () => {
     if (!attachCandidate) return;
@@ -114,7 +107,7 @@ export function Composer({
       await api.updateChannelRepos(channel.channelId, next);
       applyMention(attachAlias);
     } catch (err) {
-      alert(`Attach failed: ${err}`);
+      await notifyError(`Attach failed: ${err}`);
     } finally {
       setAttaching(null);
     }
@@ -217,29 +210,31 @@ export function Composer({
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (mention && filteredAliases.length > 0) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setMention({ ...mention, index: (mention.index + 1) % filteredAliases.length });
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setMention({
-          ...mention,
-          index: (mention.index - 1 + filteredAliases.length) % filteredAliases.length,
-        });
-        return;
-      }
-      if (e.key === "Enter" || e.key === "Tab") {
-        e.preventDefault();
-        applyMention(filteredAliases[mention.index]);
-        return;
-      }
+    if (mention) {
       if (e.key === "Escape") {
         e.preventDefault();
         setMention(null);
         return;
+      }
+      if (filteredAliases.length > 0) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setMention({ ...mention, index: (mention.index + 1) % filteredAliases.length });
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setMention({
+            ...mention,
+            index: (mention.index - 1 + filteredAliases.length) % filteredAliases.length,
+          });
+          return;
+        }
+        if (e.key === "Enter" || e.key === "Tab") {
+          e.preventDefault();
+          applyMention(filteredAliases[mention.index]);
+          return;
+        }
       }
     }
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -254,7 +249,10 @@ export function Composer({
   };
 
   const disabled = busy || streaming;
-  const showMentions = !!mention && (filteredAliases.length > 0 || !!attachCandidate);
+  // Show the popover whenever `@` has been typed, even if no repos are
+  // attached or the query matches nothing — the popover always includes the
+  // humans section (@jcast, @channel) so it's never truly empty.
+  const showMentions = !!mention;
 
   // Scan the drafted text for @alias mentions of registered-but-unattached
   // workspaces. The user can still send — we just surface a heads-up that
@@ -277,11 +275,16 @@ export function Composer({
       ];
       await api.updateChannelRepos(channel.channelId, next);
     } catch (err) {
-      alert(`Attach failed: ${err}`);
+      await notifyError(`Attach failed: ${err}`);
     } finally {
       setAttaching(null);
     }
   };
+
+  const placeholder =
+    channel.kind === "dm"
+      ? `Message ${channel.name}…  paste an issue URL or /new to spin up a channel`
+      : `Message #${channel.name}  ·  type @ to ping a repo`;
 
   return (
     <div className="composer">
@@ -312,14 +315,7 @@ export function Composer({
           ))}
         </div>
       )}
-      {primaryAlias && (
-        <div className="composer-routing">
-          <span>→</span>
-          <span className="route-chip">@{primaryAlias}</span>
-          <span>primary · override with @alias</span>
-        </div>
-      )}
-      <div className="composer-body">
+      <div className="composer-box">
         {showMentions && (
           <MentionPopover
             channel={channel}
@@ -340,24 +336,40 @@ export function Composer({
           onKeyDown={onKeyDown}
           onSelect={handleSelect}
           onBlur={() => setTimeout(() => setMention(null), 120)}
-          placeholder={`Message #${channel.name}…  Enter to send · Shift+Enter newline`}
+          placeholder={placeholder}
           rows={2}
           disabled={disabled}
+          className="composer-textarea"
         />
-      </div>
-      <div className="composer-controls">
-        <label className="auto-approve" title="Pass --dangerously-skip-permissions to claude">
-          <input
-            type="checkbox"
-            checked={autoApprove}
-            onChange={(e) => setAutoApprove(e.target.checked)}
-          />
-          Auto-approve
-        </label>
-        <span className="composer-hint">⌘⏎ to send</span>
-        <button className="primary" onClick={send} disabled={disabled || !text.trim()}>
-          {streaming ? "…" : "Send"}
-        </button>
+        <div className="composer-footer">
+          {primaryAlias && (
+            <span className="route-chip" title={`Messages route to @${primaryAlias} by default`}>
+              → @{primaryAlias}
+            </span>
+          )}
+          <button
+            type="button"
+            className={`auto-approve-pill ${autoApprove ? "on" : "off"}`}
+            onClick={() => setAutoApprove((v) => !v)}
+            title="Pass --dangerously-skip-permissions to the agent"
+            aria-pressed={autoApprove}
+          >
+            <span className="aa-icon">✦</span>
+            {autoApprove ? "Auto-approve" : "Auto-approve off"}
+          </button>
+          <span className="composer-hint">
+            Type <code>@</code> to ping a repo · paste an issue URL to classify
+          </span>
+          <span className="composer-kbd">⌘⏎</span>
+          <button
+            type="button"
+            className="composer-send"
+            onClick={send}
+            disabled={disabled || !text.trim()}
+          >
+            {streaming ? "…" : "Send"}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -380,10 +392,16 @@ function MentionPopover({
   attaching: boolean;
   onAttach: () => void;
 }) {
+  const primaryId = channel.primaryWorkspaceId ?? channel.repoAssignments[0]?.workspaceId;
   return (
     <div className="mention-popover" role="listbox">
+      <div className="mention-header">
+        <span>{aliases.length > 0 ? "Repos in channel" : "Attach"}</span>
+        <span className="mention-kbd">↑↓ Enter</span>
+      </div>
       {aliases.map((a, i) => {
         const repo = channel.repoAssignments.find((r) => r.alias === a);
+        const isPrimary = repo?.workspaceId === primaryId;
         return (
           <button
             key={a}
@@ -396,20 +414,35 @@ function MentionPopover({
               onPick(a);
             }}
           >
-            <span className="mention-alias">@{a}</span>
-            {repo?.repoPath && <span className="mention-path">{repo.repoPath}</span>}
+            <span className={`mention-tile ${isPrimary ? "primary" : "attached"}`} aria-hidden>
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+                <rect
+                  x="1.5"
+                  y="2"
+                  width="9"
+                  height="8"
+                  rx="1"
+                  stroke="currentColor"
+                  strokeWidth="1.2"
+                />
+                <path d="M4 5h4M4 7h2.5" stroke="currentColor" strokeWidth="1.2" />
+              </svg>
+            </span>
+            <span className="mention-body">
+              <span className="mention-row-main">
+                <span className="mention-alias">@{a}</span>
+                {isPrimary && <span className="mention-primary-tag">PRIMARY</span>}
+              </span>
+              {repo?.repoPath && <span className="mention-row-path">{repo.repoPath}</span>}
+            </span>
+            <span className="mention-role">agent in repo</span>
           </button>
         );
       })}
       {attachCandidate && (
         <button
           type="button"
-          className="mention-option"
-          style={{
-            borderTop: aliases.length > 0 ? "1px solid var(--color-paper-line)" : undefined,
-            marginTop: aliases.length > 0 ? 4 : 0,
-            paddingTop: aliases.length > 0 ? 8 : undefined,
-          }}
+          className={`mention-option mention-attach ${aliases.length > 0 ? "has-divider" : ""}`}
           disabled={attaching}
           onMouseDown={(e) => {
             e.preventDefault();
@@ -417,18 +450,59 @@ function MentionPopover({
           }}
           title="Attach this workspace to the channel"
         >
-          <span className="mention-alias">+ @{attachCandidate.alias}</span>
-          <span className="mention-path">
-            {attaching ? "attaching…" : `attach ${attachCandidate.path}`}
+          <span className="mention-tile attached" aria-hidden>
+            +
           </span>
+          <span className="mention-body">
+            <span className="mention-row-main">
+              <span className="mention-alias">@{attachCandidate.alias}</span>
+            </span>
+            <span className="mention-row-path">
+              {attaching ? "attaching…" : attachCandidate.path}
+            </span>
+          </span>
+          <span className="mention-role">attach to channel</span>
         </button>
       )}
+      <div className="mention-section-head">Members</div>
+      <button
+        type="button"
+        className="mention-option"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          onPick("jcast");
+        }}
+      >
+        <span className="mention-tile human" aria-hidden>
+          ◉
+        </span>
+        <span className="mention-body">
+          <span className="mention-row-main">
+            <span className="mention-alias">@jcast</span>
+          </span>
+          <span className="mention-row-path">You</span>
+        </span>
+      </button>
+      <button
+        type="button"
+        className="mention-option"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          onPick("channel");
+        }}
+      >
+        <span className="mention-tile human" aria-hidden>
+          #
+        </span>
+        <span className="mention-body">
+          <span className="mention-row-main">
+            <span className="mention-alias">@channel</span>
+          </span>
+          <span className="mention-row-path">Everyone here</span>
+        </span>
+      </button>
     </div>
   );
-}
-
-function basename(p: string): string {
-  return p.split("/").filter(Boolean).pop() ?? p;
 }
 
 /**
@@ -451,10 +525,7 @@ function computeUnattachedMentions(
   >();
   for (const w of workspaces) {
     if (attachedWorkspaceIds.has(w.workspaceId)) continue;
-    const alias = basename(w.repoPath)
-      .replace(/[^a-z0-9-]/gi, "")
-      .toLowerCase()
-      .slice(0, 12);
+    const alias = deriveAlias(w.repoPath);
     if (!alias) continue;
     if (!candidatesByAlias.has(alias)) {
       candidatesByAlias.set(alias, { workspaceId: w.workspaceId, repoPath: w.repoPath, alias });

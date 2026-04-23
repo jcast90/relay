@@ -15,6 +15,7 @@ type Props = {
   onOpenSettings: () => void;
   onRefresh: () => void;
   hideTabs?: boolean;
+  tabCounts?: { board: number; decisions: number };
 };
 
 const TIER_LABELS: Record<ChannelTier, string> = {
@@ -34,6 +35,7 @@ export function ChannelHeader({
   onOpenSettings,
   onRefresh,
   hideTabs,
+  tabCounts,
 }: Props) {
   const isDm = channel.kind === "dm";
   const [appearance] = useAppearance();
@@ -46,6 +48,12 @@ export function ChannelHeader({
     }
   };
 
+  const tabs: { id: ChannelTab; label: string; count?: number }[] = [
+    { id: "chat", label: "Chat" },
+    { id: "board", label: "Board", count: tabCounts?.board },
+    { id: "decisions", label: "Decisions", count: tabCounts?.decisions },
+  ];
+
   return (
     <div className="channel-header">
       <div className="channel-header-row1">
@@ -57,15 +65,20 @@ export function ChannelHeader({
               {TIER_LABELS[channel.tier]}
             </span>
           )}
+          <button
+            className={`channel-header-star ${channel.starred ? "starred" : ""}`}
+            onClick={toggleStar}
+            title={channel.starred ? "Unstar" : "Star"}
+          >
+            {channel.starred ? "★" : "☆"}
+          </button>
         </div>
-        <button
-          className={`channel-header-star ${channel.starred ? "starred" : ""}`}
-          onClick={toggleStar}
-          title={channel.starred ? "Unstar" : "Star"}
-        >
-          {channel.starred ? "★" : "☆"}
-        </button>
-        {channel.description && <div className="channel-header-topic">{channel.description}</div>}
+        {channel.description && (
+          <>
+            <span className="channel-header-divider" />
+            <div className="channel-header-topic">{channel.description}</div>
+          </>
+        )}
         <div className="agent-stack">
           {channel.members.slice(0, 4).map((m) => {
             const av = agentAvatar(m.agentId, m.displayName, appearance.avatarStyle);
@@ -80,22 +93,46 @@ export function ChannelHeader({
               </span>
             );
           })}
+          {channel.members.length > 4 && (
+            <span className="agent-avatar agent-overflow">+{channel.members.length - 4}</span>
+          )}
         </div>
-        <button className="rail-toggle" onClick={onToggleRail} title="Toggle right rail">
-          {rightRailOpen ? "⋮›" : "‹⋮"}
+        <button
+          className={`rail-toggle ${rightRailOpen ? "active" : ""}`}
+          onClick={onToggleRail}
+          title="Toggle right rail"
+          aria-label="Toggle right rail"
+          aria-pressed={rightRailOpen}
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+            <rect
+              x="2"
+              y="3"
+              width="10"
+              height="8"
+              rx="1"
+              stroke="currentColor"
+              strokeWidth="1.3"
+            />
+            <path d="M9 3v8" stroke="currentColor" strokeWidth="1.3" />
+          </svg>
         </button>
       </div>
       {!hideTabs && (
         <div className="channel-header-row2">
           <div className="channel-tabs">
-            {(["chat", "board", "decisions"] as ChannelTab[]).map((t) => (
-              <div
-                key={t}
-                className={`channel-tab ${tab === t ? "active" : ""}`}
-                onClick={() => onTabChange(t)}
+            {tabs.map((t) => (
+              <button
+                type="button"
+                key={t.id}
+                className={`channel-tab ${tab === t.id ? "active" : ""}`}
+                onClick={() => onTabChange(t.id)}
               >
-                {t === "chat" ? "Chat" : t === "board" ? "Board" : "Decisions"}
-              </div>
+                {t.label}
+                {typeof t.count === "number" && t.count > 0 && (
+                  <span className="tab-count">{t.count}</span>
+                )}
+              </button>
             ))}
           </div>
           <div className="row2-right">

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { confirmAction, notifyError } from "../lib/dialogs";
 import type { Channel, Spawn } from "../types";
 
 type Tab = "repos" | "members" | "about";
@@ -63,12 +64,12 @@ function ReposTab({ channel, onRefresh }: { channel: Channel; onRefresh: () => v
       await api.setPrimaryRepo(channel.channelId, workspaceId);
       onRefresh();
     } catch (err) {
-      alert(`Promote failed: ${err}`);
+      await notifyError(`Promote failed: ${err}`);
     }
   };
 
   const detach = async (workspaceId: string) => {
-    if (!confirm("Detach this repo from the channel?")) return;
+    if (!(await confirmAction("Detach this repo from the channel?"))) return;
     const remaining = channel.repoAssignments
       .filter((r) => r.workspaceId !== workspaceId)
       .map((r) => ({ alias: r.alias, workspaceId: r.workspaceId, repoPath: r.repoPath }));
@@ -76,7 +77,7 @@ function ReposTab({ channel, onRefresh }: { channel: Channel; onRefresh: () => v
       await api.updateChannelRepos(channel.channelId, remaining);
       onRefresh();
     } catch (err) {
-      alert(`Detach failed: ${err}`);
+      await notifyError(`Detach failed: ${err}`);
     }
   };
 
@@ -85,7 +86,7 @@ function ReposTab({ channel, onRefresh }: { channel: Channel; onRefresh: () => v
       const s = await api.spawnAgent(channel.channelId, alias, repoPath);
       setSpawns((prev) => [...prev, s]);
     } catch (err) {
-      alert(`Spawn failed: ${err}`);
+      await notifyError(`Spawn failed: ${err}`);
     }
   };
 
@@ -94,78 +95,60 @@ function ReposTab({ channel, onRefresh }: { channel: Channel; onRefresh: () => v
     try {
       await api.killSpawnedAgent(channel.channelId, alias);
     } catch (err) {
-      alert(`Kill failed: ${err}`);
+      await notifyError(`Kill failed: ${err}`);
     }
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+    <div className="drawer-repos">
       <div className="drawer-section">
-        <h4>Attached repos ({channel.repoAssignments.length})</h4>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <h4>Attached repos · {channel.repoAssignments.length}</h4>
+        <p className="drawer-section-hint">
+          Each attached repo becomes a pingable <code>@alias</code>. The primary repo hosts the main
+          channel agent.
+        </p>
+        <div className="drawer-repo-list">
           {channel.repoAssignments.map((r) => {
             const isPrimary = r.workspaceId === primaryId;
             const spawnRow = spawns.find((s) => s.alias === r.alias);
             return (
-              <div
-                key={r.workspaceId}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr auto auto auto",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: 8,
-                  background: "var(--color-paper-alt)",
-                  borderRadius: 4,
-                }}
-              >
-                <div>
-                  <div style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>
+              <div key={r.workspaceId} className={`drawer-repo-row ${isPrimary ? "primary" : ""}`}>
+                <span className={`drawer-repo-tile ${isPrimary ? "primary" : ""}`} aria-hidden>
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                    <rect
+                      x="2"
+                      y="2.5"
+                      width="10"
+                      height="9"
+                      rx="1"
+                      stroke="currentColor"
+                      strokeWidth="1.3"
+                    />
+                    <path d="M4.5 5.5h5M4.5 8h3" stroke="currentColor" strokeWidth="1.3" />
+                  </svg>
+                </span>
+                <div className="drawer-repo-body">
+                  <div className="drawer-repo-alias">
                     @{r.alias}
-                    {isPrimary && (
-                      <span
-                        className="primary-badge"
-                        style={{
-                          marginLeft: 6,
-                          padding: "1px 6px",
-                          fontSize: 10,
-                          background: "var(--color-accent-coral)",
-                          color: "#fff",
-                          borderRadius: 10,
-                          textTransform: "uppercase",
-                          letterSpacing: "0.04em",
-                        }}
-                      >
-                        primary
-                      </span>
-                    )}
+                    {isPrimary && <span className="drawer-repo-primary-badge">PRIMARY</span>}
                   </div>
-                  <div
-                    style={{
-                      fontSize: "var(--font-size-xs)",
-                      color: "var(--color-text-dim)",
-                    }}
-                  >
-                    {r.repoPath}
-                  </div>
+                  <div className="drawer-repo-path">{r.repoPath}</div>
                 </div>
-                {!isPrimary && <button onClick={() => setPrimary(r.workspaceId)}>Promote</button>}
-                {spawnRow ? (
-                  <button onClick={() => killSpawn(r.alias)}>Kill</button>
-                ) : (
-                  <button onClick={() => spawn(r.alias, r.repoPath)}>Spawn</button>
-                )}
-                {!isPrimary && (
-                  <button
-                    onClick={() => detach(r.workspaceId)}
-                    style={{
-                      color: "var(--color-accent-coral)",
-                      borderColor: "var(--color-accent-coral)",
-                    }}
-                  >
-                    Detach
-                  </button>
-                )}
+                <div className="drawer-repo-actions">
+                  {!isPrimary && (
+                    <button onClick={() => setPrimary(r.workspaceId)}>Make primary</button>
+                  )}
+                  {spawnRow ? (
+                    <button onClick={() => killSpawn(r.alias)}>Kill</button>
+                  ) : (
+                    <button onClick={() => spawn(r.alias, r.repoPath)}>Spawn</button>
+                  )}
+                  {!isPrimary && (
+                    <button className="danger" onClick={() => detach(r.workspaceId)}>
+                      Detach
+                    </button>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -237,13 +220,13 @@ function AboutTab({
     const prompt = next
       ? `Enable full access for #${channel.name}? All subprocesses spawned from this channel will run without permission prompts until this is turned off.`
       : `Disable full access for #${channel.name}? Permission prompts will return for new subprocesses.`;
-    if (!confirm(prompt)) return;
+    if (!(await confirmAction(prompt, { title: "Full access" }))) return;
     try {
       await api.setChannelFullAccess(channel.channelId, next);
       setFullAccess(next);
       onRefresh();
     } catch (err) {
-      alert(`Failed to toggle full access: ${err}`);
+      await notifyError(`Failed to toggle full access: ${err}`);
     }
   };
 
@@ -253,13 +236,14 @@ function AboutTab({
       await api.setChannelTier(channel.channelId, next || null);
       onRefresh();
     } catch (err) {
-      alert(`Tier update failed: ${err}`);
+      await notifyError(`Tier update failed: ${err}`);
     }
   };
 
   const handleArchive = async () => {
     const archived = channel.status === "archived";
-    if (!confirm(`${archived ? "Unarchive" : "Archive"} #${channel.name}?`)) return;
+    const prompt = `${archived ? "Unarchive" : "Archive"} #${channel.name}?`;
+    if (!(await confirmAction(prompt, { title: archived ? "Unarchive" : "Archive" }))) return;
     setBusy(true);
     try {
       if (archived) {
@@ -270,7 +254,7 @@ function AboutTab({
       }
       onRefresh();
     } catch (err) {
-      alert(`Failed: ${err}`);
+      await notifyError(`Failed: ${err}`);
     } finally {
       setBusy(false);
     }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { deriveAlias } from "../lib/alias";
 import type { WorkspaceEntry } from "../types";
 
 type Props = {
@@ -106,13 +107,6 @@ export function NewDmModal({ open, onClose, onCreated }: Props) {
   );
 }
 
-function basename(p: string): string {
-  return p.split("/").filter(Boolean).pop() ?? p;
-}
-
 function defaultAlias(repoPath: string): string {
-  return basename(repoPath)
-    .replace(/[^a-z0-9-]/gi, "")
-    .toLowerCase()
-    .slice(0, 12);
+  return deriveAlias(repoPath);
 }

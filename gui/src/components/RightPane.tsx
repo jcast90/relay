@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { openExternal } from "../lib/dialogs";
 import type {
   ApprovalQueueRecord,
   Channel,
@@ -19,6 +20,7 @@ type Props = {
   onSelectSession: (sessionId: string | null) => void;
   refreshTick: number;
   onRefresh: () => void;
+  onClose?: () => void;
 };
 
 /**
@@ -178,7 +180,14 @@ function ApprovalsSection({
   );
 }
 
-export function RightPane({ channel, sessionId, onSelectSession, refreshTick, onRefresh }: Props) {
+export function RightPane({
+  channel,
+  sessionId,
+  onSelectSession,
+  refreshTick,
+  onRefresh,
+  onClose,
+}: Props) {
   const [tab, setTab] = useState<Tab>("threads");
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [prs, setPrs] = useState<TrackedPrRow[]>([]);
@@ -223,18 +232,55 @@ export function RightPane({ channel, sessionId, onSelectSession, refreshTick, on
     if (prs.some((r) => r.ci === "failing")) setTab("prs");
   }, [prs]);
 
+  const [sessionCount, setSessionCount] = useState<number>(0);
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listSessions(channel.channelId)
+      .then((s) => {
+        if (!cancelled) setSessionCount(s.length);
+      })
+      .catch(() => {
+        if (!cancelled) setSessionCount(0);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [channel.channelId, refreshTick]);
+
+  const counts: Record<Tab, number> = {
+    threads: sessionCount,
+    decisions: decisions.length,
+    prs: prs.length,
+  };
+
   return (
     <div className="right-rail">
       <div className="rail-tabs">
         {(["threads", "decisions", "prs"] as Tab[]).map((t) => (
-          <div
+          <button
+            type="button"
             key={t}
             className={`rail-tab ${tab === t ? "active" : ""}`}
             onClick={() => setTab(t)}
           >
-            {t === "threads" ? "Threads" : t === "decisions" ? "Decisions" : "PRs"}
-          </div>
+            <span className="rail-tab-label">
+              {t === "threads" ? "Threads" : t === "decisions" ? "Decisions" : "PRs"}
+            </span>
+            {counts[t] > 0 && <span className="tab-count">{counts[t]}</span>}
+          </button>
         ))}
+        {onClose && (
+          <button
+            type="button"
+            className="rail-close"
+            onClick={onClose}
+            title="Close right rail"
+            aria-label="Close right rail"
+          >
+            ×
+          </button>
+        )}
       </div>
       {/* AL-10 previously rendered its own ApprovalsPanel here. Dropped —
           AL-8's `ApprovalsSection` below owns the GUI approvals surface
@@ -265,19 +311,71 @@ export function RightPane({ channel, sessionId, onSelectSession, refreshTick, on
 }
 
 function DecisionsTab({ decisions }: { decisions: Decision[] }) {
+  const [openId, setOpenId] = useState<string | null>(null);
   if (decisions.length === 0) return <div className="rail-empty">No decisions</div>;
-  return (
-    <>
-      {decisions.map((d) => (
-        <div key={d.decisionId} className="rail-list-item">
-          <div className="title">{d.title}</div>
-          <div className="meta">
-            {d.decidedByName} · {new Date(d.createdAt).toLocaleDateString()}
-          </div>
+  const open = openId ? decisions.find((d) => d.decisionId === openId) : null;
+  if (open) {
+    return (
+      <div className="rail-detail">
+        <button type="button" className="rail-back" onClick={() => setOpenId(null)}>
+          ← Back
+        </button>
+        <div className="rail-detail-tag">
+          <code>{open.decisionId.slice(0, 10)}</code>
+          <span>
+            by {open.decidedByName} · {formatDate(open.createdAt)}
+          </span>
         </div>
+        <h3 className="rail-detail-title">{open.title}</h3>
+        <p className="rail-detail-body">{open.description}</p>
+        {open.rationale && (
+          <div className="rail-detail-rationale">
+            <div className="rail-detail-rationale-tag">RATIONALE</div>
+            <div>{open.rationale}</div>
+          </div>
+        )}
+        {open.alternatives.length > 0 && (
+          <div className="rail-detail-alts">
+            <div className="rail-detail-rationale-tag">ALTERNATIVES</div>
+            <ul>
+              {open.alternatives.map((alt, i) => (
+                <li key={i}>{alt}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="rail-decisions-list">
+      {decisions.map((d) => (
+        <button
+          type="button"
+          key={d.decisionId}
+          className="rail-decision-card"
+          onClick={() => setOpenId(d.decisionId)}
+        >
+          <div className="rail-decision-id">
+            <code>{d.decisionId.slice(0, 10)}</code>
+            <span>
+              {d.decidedByName} · {formatDate(d.createdAt)}
+            </span>
+          </div>
+          <div className="rail-decision-title">{d.title}</div>
+          {d.description && <div className="rail-decision-preview">{d.description}</div>}
+        </button>
       ))}
-    </>
+    </div>
   );
+}
+
+function formatDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString();
+  } catch {
+    return iso;
+  }
 }
 
 function PrsTab({
@@ -298,59 +396,48 @@ function PrsTab({
       <PendingPlanCta channel={channel} refreshTick={refreshTick} onChanged={onRefresh} />
       {prs.length === 0 && runs.length === 0 && <div className="rail-empty">No PRs tracked</div>}
       {prs.length > 0 && (
-        <div style={{ marginBottom: 16 }}>
-          <h4
-            style={{
-              fontSize: "var(--font-size-xs)",
-              textTransform: "uppercase",
-              letterSpacing: "0.04em",
-              color: "var(--color-text-dim)",
-              margin: "0 0 8px",
-            }}
-          >
-            Tracked PRs ({prs.length})
-          </h4>
-          {prs.map((r) => (
-            <div key={`${r.ticketId}-${r.number}`} className="tracked-pr-row">
-              <span className="tracked-pr-ticket" title={r.ticketId}>
-                {r.ticketId.slice(0, 10)}
-              </span>
-              <a
-                href={r.url}
-                className="tracked-pr-link"
-                target="_blank"
-                rel="noreferrer noopener"
-                title={r.branch}
+        <div className="rail-pr-list">
+          <div className="rail-section-title" style={{ margin: "0 0 var(--space-4)" }}>
+            Tracked PRs · {prs.length}
+          </div>
+          {prs.map((r) => {
+            const ciLabel = r.ci ?? "pending";
+            const reviewLabel = r.review ?? "pending";
+            return (
+              <button
+                type="button"
+                key={`${r.ticketId}-${r.number}`}
+                className="rail-pr-card"
+                onClick={() => openExternal(r.url)}
+                title="Open in browser"
               >
-                #{r.number}
-              </a>
-              <span
-                style={{
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  fontSize: "var(--font-size-xs)",
-                  color: "var(--color-text-muted)",
-                }}
-              >
-                {r.branch}
-              </span>
-              <span className="tracked-pr-badges">
-                <span
-                  className={`pr-dot pr-state-${r.prState ?? "unknown"}`}
-                  title={`state: ${r.prState ?? "-"}`}
-                />
-                <span
-                  className={`pr-dot pr-ci-${r.ci ?? "unknown"}`}
-                  title={`ci: ${r.ci ?? "-"}`}
-                />
-                <span
-                  className={`pr-dot pr-review-${r.review ?? "unknown"}`}
-                  title={`review: ${r.review ?? "-"}`}
-                />
-              </span>
-            </div>
-          ))}
+                <div className="rail-pr-head">
+                  <span className="rail-pr-num">#{r.number}</span>
+                  <span className="rail-pr-branch">{r.branch}</span>
+                  <span className="rail-pr-arrow">↗</span>
+                </div>
+                {r.ticketId && (
+                  <div className="rail-pr-ticket">ticket {r.ticketId.slice(0, 10)}</div>
+                )}
+                <div className="rail-pr-footer">
+                  <span className={`rail-pr-chip pr-ci-${r.ci ?? "unknown"}`}>
+                    <span className="chip-dot" />
+                    CI {ciLabel}
+                  </span>
+                  <span className={`rail-pr-chip pr-review-${r.review ?? "unknown"}`}>
+                    <span className="chip-dot" />
+                    review {reviewLabel}
+                  </span>
+                  {r.prState && (
+                    <span className={`rail-pr-chip pr-state-${r.prState}`}>
+                      <span className="chip-dot" />
+                      {r.prState}
+                    </span>
+                  )}
+                </div>
+              </button>
+            );
+          })}
         </div>
       )}
       {runs.length > 0 && (

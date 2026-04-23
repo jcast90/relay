@@ -63,20 +63,68 @@ function FeedView({ entries, channel }: { entries: ChannelEntry[]; channel: Ment
   if (entries.length === 0) return <div className="chat-empty">No activity yet</div>;
   return (
     <>
-      {entries.map((e) => (
-        <div key={e.entryId} className={`message role-${e.type}`}>
-          <MsgAvatar seed={e.fromAgentId ?? e.fromDisplayName ?? e.type} />
-          <div>
-            <div className="msg-head">
-              <span className="msg-author">{e.fromDisplayName ?? e.type}</span>
-              <span className="msg-time">{formatTime(e.createdAt)}</span>
+      {entries.map((e, i) => {
+        const prev = entries[i - 1];
+        const key = (x: ChannelEntry) => (x.fromAgentId ?? x.fromDisplayName ?? x.type) || "";
+        const sameAuthor = prev && key(prev) === key(e) && prev.type === e.type;
+        const dt = prev ? Date.parse(e.createdAt) - Date.parse(prev.createdAt) : Infinity;
+        const compact = sameAuthor && dt < 5 * 60 * 1000;
+        if (e.type === "tool") {
+          return (
+            <div key={e.entryId} className="message-tool">
+              <span className="msg-tool-icon">⚙</span>
+              <span className="msg-tool-text">{e.content}</span>
+              <span className="msg-tool-time">{formatTime(e.createdAt)}</span>
             </div>
-            <div className="msg-body">{renderWithMentions(e.content, channel)}</div>
+          );
+        }
+        return (
+          <div key={e.entryId} className={`message role-${e.type} ${compact ? "compact" : ""}`}>
+            {compact ? (
+              <div className="msg-avatar-spacer" aria-hidden />
+            ) : (
+              <MsgAvatar seed={e.fromAgentId ?? e.fromDisplayName ?? e.type} />
+            )}
+            <div>
+              {!compact && (
+                <div className="msg-head">
+                  <span
+                    className="msg-author"
+                    style={{ color: authorColor(e.fromAgentId ?? e.fromDisplayName ?? e.type) }}
+                  >
+                    {e.fromDisplayName ?? e.type}
+                  </span>
+                  <span className="msg-time">{formatTime(e.createdAt)}</span>
+                </div>
+              )}
+              <div className="msg-body">{renderWithMentions(e.content, channel)}</div>
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </>
   );
+}
+
+// Per-author deterministic color — matches the design's `agentColor(id)`
+// hash. Picks from a curated palette that stays legible on paper-base
+// without colliding with the coral accent or mint presence dot.
+const AUTHOR_COLORS = [
+  "#3e5886",
+  "#9c5a7c",
+  "#2f7a6a",
+  "#b26a3a",
+  "#5b5fb0",
+  "#c8654a",
+  "#5a7a4a",
+  "#7a5290",
+  "#3a7590",
+];
+function authorColor(id: string): string {
+  if (!id) return "#1b1f2a";
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return AUTHOR_COLORS[Math.abs(h) % AUTHOR_COLORS.length];
 }
 
 function SessionMessages({
@@ -104,30 +152,45 @@ function SessionMessages({
       {messages.map((m, i) => {
         const rewindKey = m.metadata?.rewindKey;
         const canRewind = m.role === "user" && !!rewindKey && !streaming;
+        const prev = messages[i - 1];
+        const sameAuthor =
+          prev && prev.role === m.role && (prev.agentAlias ?? "") === (m.agentAlias ?? "");
+        const dt = prev ? Date.parse(m.timestamp) - Date.parse(prev.timestamp) : Infinity;
+        const compact = sameAuthor && dt < 5 * 60 * 1000;
+        const authorKey = m.agentAlias ?? m.role;
+        const authorLabel = m.agentAlias ? `@${m.agentAlias}` : m.role;
         return (
-          <div key={i} className={`message role-${m.role}`}>
-            <MsgAvatar seed={m.agentAlias ?? m.role} />
+          <div key={i} className={`message role-${m.role} ${compact ? "compact" : ""}`}>
+            {compact ? (
+              <div className="msg-avatar-spacer" aria-hidden />
+            ) : (
+              <MsgAvatar seed={authorKey} />
+            )}
             <div>
-              <div className="msg-head">
-                <span className="msg-author">{m.agentAlias ? `@${m.agentAlias}` : m.role}</span>
-                <span className="msg-time">{formatTime(m.timestamp)}</span>
-                <span className="msg-actions">
-                  {m.role === "user" && rewindKey && (
-                    <button
-                      className="msg-action-btn"
-                      disabled={!canRewind}
-                      title={
-                        streaming
-                          ? "Finish the current stream before rewinding"
-                          : "Rewind repos + chat to this turn"
-                      }
-                      onClick={() => setRewindTarget(m)}
-                    >
-                      ⟲ Rewind
-                    </button>
-                  )}
-                </span>
-              </div>
+              {!compact && (
+                <div className="msg-head">
+                  <span className="msg-author" style={{ color: authorColor(authorKey) }}>
+                    {authorLabel}
+                  </span>
+                  <span className="msg-time">{formatTime(m.timestamp)}</span>
+                  <span className="msg-actions">
+                    {m.role === "user" && rewindKey && (
+                      <button
+                        className="msg-action-btn"
+                        disabled={!canRewind}
+                        title={
+                          streaming
+                            ? "Finish the current stream before rewinding"
+                            : "Rewind repos + chat to this turn"
+                        }
+                        onClick={() => setRewindTarget(m)}
+                      >
+                        ⟲ Rewind
+                      </button>
+                    )}
+                  </span>
+                </div>
+              )}
               <div className="msg-body">{renderWithMentions(m.content, ui)}</div>
             </div>
           </div>

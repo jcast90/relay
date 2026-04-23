@@ -587,7 +587,42 @@ fn channel_json_path(channel_id: &str) -> PathBuf {
 }
 
 pub fn load_channel(channel_id: &str) -> Option<Channel> {
-    load_json::<Channel>(&channel_json_path(channel_id))
+    load_json::<Channel>(&channel_json_path(channel_id)).map(migrate_channel)
+}
+
+/// In-memory migration for legacy channel JSON. Historically the
+/// "discovered" workspace code path wrote repo assignments as
+/// `discovered:<alias>` — that ':' is now reserved as the `--repos` CLI
+/// delimiter, and the GUI validator correctly rejects it. Strip the
+/// prefix on load so round-trip mutations (detach, attach, set-primary)
+/// stop tripping on stale data. Also drops repo assignments whose
+/// resulting workspaceId would still be empty or invalid.
+///
+/// Dropped rows are logged via `eprintln!` so an operator running
+/// `RUST_LOG=debug rly gui --dev` can see what was lost. The next
+/// `save_channel` persists the cleaned shape, so a load+save round-trip
+/// permanently removes the bad data from disk.
+fn migrate_channel(mut ch: Channel) -> Channel {
+    let channel_id = ch.channel_id.clone();
+    ch.repo_assignments.retain_mut(|r| {
+        if let Some(rest) = r.workspace_id.strip_prefix("discovered:") {
+            r.workspace_id = rest.to_string();
+        }
+        let keep = !r.workspace_id.is_empty() && !r.workspace_id.contains(':');
+        if !keep {
+            eprintln!(
+                "[harness-data] migrate_channel({}) dropping unrepresentable assignment alias='{}' workspaceId='{}' repoPath='{}'",
+                channel_id, r.alias, r.workspace_id, r.repo_path
+            );
+        }
+        keep
+    });
+    if let Some(ref prim) = ch.primary_workspace_id {
+        if let Some(rest) = prim.strip_prefix("discovered:") {
+            ch.primary_workspace_id = Some(rest.to_string());
+        }
+    }
+    ch
 }
 
 /// Atomic write of a Channel record. Stamps `updated_at` to now before
@@ -619,7 +654,7 @@ pub fn load_channels_with_status(include_archived: bool) -> Vec<Channel> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "json") {
-                if let Some(ch) = load_json::<Channel>(&path) {
+                if let Some(ch) = load_json::<Channel>(&path).map(migrate_channel) {
                     if include_archived || ch.status == "active" {
                         channels.push(ch);
                     }
@@ -1811,6 +1846,81 @@ mod tests {
             classify_tier_heuristic("oauth-api-users", "ship the new endpoint"),
             ChannelTier::Feature
         );
+    }
+
+    fn ch_fixture() -> Channel {
+        Channel {
+            channel_id: "ch-test".into(),
+            name: "test".into(),
+            description: String::new(),
+            status: "active".into(),
+            members: vec![],
+            pinned_refs: vec![],
+            repo_assignments: vec![],
+            primary_workspace_id: None,
+            linear_project_id: None,
+            tier: None,
+            starred: false,
+            full_access: None,
+            kind: None,
+            created_at: None,
+            updated_at: None,
+        }
+    }
+
+    #[test]
+    fn migrate_channel_strips_discovered_prefix() {
+        let mut ch = ch_fixture();
+        ch.repo_assignments = vec![RepoAssignment {
+            alias: "maestro".into(),
+            workspace_id: "discovered:maestro".into(),
+            repo_path: "/tmp/maestro".into(),
+        }];
+        ch.primary_workspace_id = Some("discovered:maestro".into());
+        let out = migrate_channel(ch);
+        assert_eq!(out.repo_assignments.len(), 1);
+        assert_eq!(out.repo_assignments[0].workspace_id, "maestro");
+        assert_eq!(out.primary_workspace_id.as_deref(), Some("maestro"));
+    }
+
+    #[test]
+    fn migrate_channel_drops_irreparable_colon_workspace_id() {
+        let mut ch = ch_fixture();
+        ch.repo_assignments = vec![
+            RepoAssignment {
+                alias: "good".into(),
+                workspace_id: "venture-os-abc123".into(),
+                repo_path: "/tmp/venture-os".into(),
+            },
+            RepoAssignment {
+                alias: "bad".into(),
+                // Strip-prefix can't handle this one; the double-colon
+                // remains and the row must be dropped.
+                workspace_id: "discovered:foo:bar".into(),
+                repo_path: "/tmp/foo".into(),
+            },
+            RepoAssignment {
+                alias: "empty".into(),
+                workspace_id: String::new(),
+                repo_path: "/tmp/empty".into(),
+            },
+        ];
+        let out = migrate_channel(ch);
+        assert_eq!(out.repo_assignments.len(), 1);
+        assert_eq!(out.repo_assignments[0].alias, "good");
+    }
+
+    #[test]
+    fn migrate_channel_is_noop_on_clean_data() {
+        let mut ch = ch_fixture();
+        ch.repo_assignments = vec![RepoAssignment {
+            alias: "ui".into(),
+            workspace_id: "agent-harness-abc".into(),
+            repo_path: "/tmp/agent-harness".into(),
+        }];
+        let before = ch.repo_assignments[0].workspace_id.clone();
+        let out = migrate_channel(ch);
+        assert_eq!(out.repo_assignments[0].workspace_id, before);
     }
 
     // --- AL-7/AL-8 approvals queue round-trip --------------------------------
