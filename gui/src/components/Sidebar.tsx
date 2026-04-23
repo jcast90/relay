@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { confirmAction, notifyError } from "../lib/dialogs";
 import type { Channel, Section } from "../types";
+import { PromptModal } from "./PromptModal";
 
 type Props = {
   channels: Channel[];
@@ -50,6 +51,30 @@ export function Sidebar({
   const [sections, setSections] = useState<Section[]>([]);
   const [workspaceCount, setWorkspaceCount] = useState<number>(0);
 
+  // Unified "+" — one button, dropdown offers "New channel" / "New
+  // section". Replaces two confusing affordances (header-+ on
+  // Channels + a bottom "+ New section" row) that left users unable
+  // to find section creation.
+  const [plusMenuOpen, setPlusMenuOpen] = useState(false);
+  const plusMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!plusMenuOpen) return;
+    const close = (e: MouseEvent) => {
+      if (plusMenuRef.current && !plusMenuRef.current.contains(e.target as Node)) {
+        setPlusMenuOpen(false);
+      }
+    };
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [plusMenuOpen]);
+
+  // Section prompt state — replaces window.prompt (no-op'd by Tauri v2
+  // WKWebView on macOS, see gui/src/lib/dialogs.ts header).
+  type SectionPrompt =
+    | { kind: "create" }
+    | { kind: "rename"; section: Section };
+  const [sectionPrompt, setSectionPrompt] = useState<SectionPrompt | null>(null);
+
   useEffect(() => {
     api
       .listWorkspaces()
@@ -71,26 +96,25 @@ export function Sidebar({
   const toggleSectionOpen = (id: string) =>
     setSectionOpen((prev) => ({ ...prev, [id]: !isSectionOpen(id) }));
 
-  const newSection = async () => {
-    const name = window.prompt("Section name");
-    if (!name?.trim()) return;
-    try {
-      await api.createSection(name.trim());
-      await refreshSections();
-    } catch (err) {
-      await notifyError(`Failed to create section: ${err}`);
-    }
+  const openCreateSection = () => {
+    setPlusMenuOpen(false);
+    setSectionPrompt({ kind: "create" });
   };
 
-  const renameSection = async (section: Section) => {
-    const name = window.prompt("Rename section", section.name);
-    if (!name?.trim() || name.trim() === section.name) return;
-    try {
-      await api.renameSection(section.sectionId, name.trim());
+  const renameSection = (section: Section) => {
+    setSectionPrompt({ kind: "rename", section });
+  };
+
+  const submitSectionPrompt = async (value: string) => {
+    if (!sectionPrompt) return;
+    if (sectionPrompt.kind === "create") {
+      await api.createSection(value);
       await refreshSections();
-    } catch (err) {
-      await notifyError(`Rename failed: ${err}`);
+      return;
     }
+    if (value === sectionPrompt.section.name) return;
+    await api.renameSection(sectionPrompt.section.sectionId, value);
+    await refreshSections();
   };
 
   const decommissionSection = async (section: Section) => {
@@ -217,6 +241,40 @@ export function Sidebar({
 
       <div className="sidebar-divider" />
 
+      <div className="sidebar-new-menu-wrap" ref={plusMenuRef}>
+        <button
+          type="button"
+          className="sidebar-new-menu-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            setPlusMenuOpen((v) => !v);
+          }}
+          aria-haspopup="menu"
+          aria-expanded={plusMenuOpen}
+          aria-label="Create new"
+          title="Create new"
+        >
+          + New
+        </button>
+        {plusMenuOpen && (
+          <div className="sidebar-new-menu" role="menu">
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setPlusMenuOpen(false);
+                onNewChannel(null);
+              }}
+            >
+              New channel
+            </button>
+            <button type="button" role="menuitem" onClick={openCreateSection}>
+              New section
+            </button>
+          </div>
+        )}
+      </div>
+
       <div className="sidebar-scroll">
         {starred.length > 0 && (
           <SidebarSection
@@ -278,8 +336,6 @@ export function Sidebar({
           onToggle={() => setUncategorizedOpen((v) => !v)}
           onAdd={() => onNewChannel(null)}
           addTitle="New channel"
-          onHeaderPlus={sections.length === 0 ? newSection : undefined}
-          headerPlusTitle="New section"
         >
           {uncategorized.length === 0 && sections.length === 0 && (
             <div className="sidebar-empty">No active channels</div>
@@ -294,12 +350,6 @@ export function Sidebar({
             />
           ))}
         </SidebarSection>
-
-        {sections.length > 0 && (
-          <button type="button" className="sidebar-new-section" onClick={newSection}>
-            + New section
-          </button>
-        )}
 
         <SidebarSection
           title="Direct messages"
@@ -362,6 +412,25 @@ export function Sidebar({
           ⚙
         </button>
       </div>
+
+      <PromptModal
+        open={sectionPrompt !== null}
+        title={sectionPrompt?.kind === "rename" ? "Rename section" : "New section"}
+        label="Section name"
+        placeholder="e.g. Billing, Infrastructure"
+        initialValue={sectionPrompt?.kind === "rename" ? sectionPrompt.section.name : ""}
+        submitLabel={sectionPrompt?.kind === "rename" ? "Rename" : "Create"}
+        onSubmit={async (value) => {
+          try {
+            await submitSectionPrompt(value);
+          } catch (err) {
+            const verb = sectionPrompt?.kind === "rename" ? "Rename" : "Create";
+            await notifyError(`${verb} failed: ${err}`);
+            throw err;
+          }
+        }}
+        onClose={() => setSectionPrompt(null)}
+      />
     </div>
   );
 }
@@ -373,8 +442,6 @@ function SidebarSection({
   onToggle,
   onAdd,
   addTitle,
-  onHeaderPlus,
-  headerPlusTitle,
   menu,
   children,
 }: {
@@ -384,10 +451,6 @@ function SidebarSection({
   onToggle: () => void;
   onAdd?: () => void;
   addTitle?: string;
-  /** Extra `+` rendered alongside the section name — used for "New section"
-   * on the first uncategorized bucket when no real sections exist yet. */
-  onHeaderPlus?: () => void;
-  headerPlusTitle?: string;
   menu?: {
     onRename?: () => void;
     onDecommission?: () => void;
@@ -418,19 +481,6 @@ function SidebarSection({
           {title}
           <span className="section-count"> · {count}</span>
         </span>
-        {onHeaderPlus && (
-          <button
-            className="section-add"
-            onClick={(e) => {
-              e.stopPropagation();
-              onHeaderPlus();
-            }}
-            title={headerPlusTitle}
-            aria-label={headerPlusTitle}
-          >
-            +
-          </button>
-        )}
         {menu && (
           <div className="section-menu-wrap" onClick={(e) => e.stopPropagation()}>
             <button
