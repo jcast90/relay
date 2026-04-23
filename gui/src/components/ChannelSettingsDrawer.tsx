@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { confirmAction, notifyError } from "../lib/dialogs";
-import type { Channel, Spawn } from "../types";
+import type { Channel, ProviderProfile, Spawn } from "../types";
 
 type Tab = "repos" | "members" | "about";
 
@@ -214,6 +214,35 @@ function AboutTab({
   const [busy, setBusy] = useState(false);
   const [tier, setTier] = useState<string>(channel.tier ?? "");
   const [fullAccess, setFullAccess] = useState<boolean>(channel.fullAccess === true);
+  const [profiles, setProfiles] = useState<ProviderProfile[]>([]);
+  const [profileId, setProfileId] = useState<string>(channel.providerProfileId ?? "");
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listProviderProfiles()
+      .then((list) => {
+        if (!cancelled) setProfiles(list);
+      })
+      .catch(() => {
+        // PR 1 may not be merged yet — treat as "no profiles configured"
+        // rather than popping an error dialog every time the drawer opens.
+        if (!cancelled) setProfiles([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const saveProfile = async (next: string) => {
+    setProfileId(next);
+    try {
+      await api.setChannelProviderProfile(channel.channelId, next || null);
+      onRefresh();
+    } catch (err) {
+      await notifyError(`Provider update failed: ${err}`);
+    }
+  };
 
   const toggleFullAccess = async () => {
     const next = !fullAccess;
@@ -286,6 +315,38 @@ function AboutTab({
           <option value="bugfix">Bugfix</option>
           <option value="chore">Chore</option>
           <option value="question">Question</option>
+        </select>
+      </div>
+      <div className="drawer-section">
+        <h4>Provider</h4>
+        <p
+          style={{
+            margin: "0 0 8px",
+            fontSize: "var(--font-size-xs)",
+            color: "var(--color-text-muted)",
+          }}
+        >
+          Profile chosen here wins at dispatch. "Inherit default" falls back to the global default
+          profile, or <code>HARNESS_PROVIDER</code> if none is set.
+        </p>
+        <select
+          value={profileId}
+          onChange={(e) => saveProfile(e.target.value)}
+          style={{
+            padding: "6px 10px",
+            border: "1px solid var(--color-paper-line)",
+            borderRadius: 4,
+            background: "var(--color-paper-base)",
+            fontFamily: "var(--font-ui)",
+            fontSize: "var(--font-size-base)",
+          }}
+        >
+          <option value="">Inherit default</option>
+          {profiles.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.displayName} ({p.adapter})
+            </option>
+          ))}
         </select>
       </div>
       <div className="drawer-section">
