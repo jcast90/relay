@@ -1923,6 +1923,7 @@ mod tests {
             status: "approved".into(),
             decided_at: Some("2026-01-02T00:00:00Z".into()),
             feedback: None,
+            auto_approved_by: None,
         }];
         rewrite_approval_queue(session, &records).expect("write ok");
         let reloaded = load_approval_queue(session);
