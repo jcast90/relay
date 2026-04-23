@@ -4,15 +4,18 @@ const KEY = "relay.appearance";
 
 export type AvatarStyle = "glyph" | "initial";
 export type Density = "compact" | "medium" | "spacious";
+export type Theme = "light" | "dark" | "system";
 
 export type Appearance = {
   avatarStyle: AvatarStyle;
   density: Density;
+  theme: Theme;
 };
 
 const DEFAULT: Appearance = {
   avatarStyle: "glyph",
   density: "medium",
+  theme: "system",
 };
 
 function read(): Appearance {
@@ -24,10 +27,24 @@ function read(): Appearance {
       avatarStyle: parsed.avatarStyle === "initial" ? "initial" : "glyph",
       density:
         parsed.density === "compact" || parsed.density === "spacious" ? parsed.density : "medium",
+      theme: parsed.theme === "dark" || parsed.theme === "light" ? parsed.theme : "system",
     };
   } catch {
     return DEFAULT;
   }
+}
+
+function resolveTheme(theme: Theme): "light" | "dark" {
+  if (theme !== "system") return theme;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function applyTheme(theme: Theme) {
+  document.documentElement.setAttribute("data-theme", resolveTheme(theme));
+}
+
+export function resolveEffectiveTheme(theme: Theme): "light" | "dark" {
+  return resolveTheme(theme);
 }
 
 function write(a: Appearance) {
@@ -63,6 +80,15 @@ export function useAppearance(): [Appearance, (next: Appearance) => void] {
       window.removeEventListener("storage", onStorage);
     };
   }, []);
+
+  useEffect(() => {
+    applyTheme(state.theme);
+    if (state.theme !== "system") return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => applyTheme("system");
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, [state.theme]);
 
   const update = (next: Appearance) => {
     setState(next);
