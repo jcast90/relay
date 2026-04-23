@@ -19,6 +19,7 @@ export function App() {
   const [refreshTick, setRefreshTick] = useState(0);
   const [modalOpen, setModalOpen] = useState(false);
   const [newChannelSection, setNewChannelSection] = useState<string | null>(null);
+  const [newChannelKickoff, setNewChannelKickoff] = useState<string>("");
   const [dmModalOpen, setDmModalOpen] = useState(false);
   const [includeArchived, setIncludeArchived] = useState(false);
   const [settings, setSettings] = useState<GuiSettings | null>(null);
@@ -148,6 +149,11 @@ export function App() {
               if (selectedId === id) setSelectedId(null);
               refresh();
             }}
+            onSpinoutToChannel={(kickoff, sectionId) => {
+              setNewChannelKickoff(kickoff);
+              setNewChannelSection(sectionId ?? null);
+              setModalOpen(true);
+            }}
           />
           {rightRailOpen && selected && (
             <RightPane
@@ -165,9 +171,14 @@ export function App() {
       <NewChannelModal
         open={modalOpen}
         defaultSectionId={newChannelSection}
-        onClose={() => setModalOpen(false)}
+        defaultFirstMessage={newChannelKickoff}
+        onClose={() => {
+          setModalOpen(false);
+          setNewChannelKickoff("");
+        }}
         onCreated={(id) => {
           setSelectedId(id);
+          setNewChannelKickoff("");
           refresh();
         }}
       />

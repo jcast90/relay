@@ -13,6 +13,13 @@ type Props = {
    * Uncategorized.
    */
   defaultSectionId?: string | null;
+  /**
+   * Pre-fill the kickoff message on step 3. Used by the "spin out"
+   * flow — when a user clicks the inline suggestion in a general
+   * channel, the suggestion's content comes through here so they
+   * don't have to retype.
+   */
+  defaultFirstMessage?: string;
 };
 
 type RepoRow = {
@@ -24,7 +31,13 @@ type RepoRow = {
 
 type Step = 1 | 2 | 3;
 
-export function NewChannelModal({ open, onClose, onCreated, defaultSectionId }: Props) {
+export function NewChannelModal({
+  open,
+  onClose,
+  onCreated,
+  defaultSectionId,
+  defaultFirstMessage,
+}: Props) {
   const [step, setStep] = useState<Step>(1);
   const [name, setName] = useState("");
   const [topic, setTopic] = useState("");
@@ -44,7 +57,9 @@ export function NewChannelModal({ open, onClose, onCreated, defaultSectionId }: 
     setName("");
     setTopic("");
     setFilter("");
-    setFirstMessage("");
+    // Seed kickoff from the spin-out flow if the parent passed one;
+    // otherwise start blank. Normal `+` entry point leaves this empty.
+    setFirstMessage(defaultFirstMessage ?? "");
     setError(null);
     setSpawnWarning(null);
     setPrimaryWorkspaceId(null);
@@ -63,7 +78,7 @@ export function NewChannelModal({ open, onClose, onCreated, defaultSectionId }: 
       .listSections()
       .then(setSections)
       .catch(() => setSections([]));
-  }, [open, defaultSectionId]);
+  }, [open, defaultSectionId, defaultFirstMessage]);
 
   const visible = useMemo(() => {
     const tokens = filter.trim().toLowerCase().split(/\s+/).filter(Boolean);
