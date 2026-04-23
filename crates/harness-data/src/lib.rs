@@ -176,6 +176,14 @@ pub struct Channel {
     /// bottom of the sidebar. See `Section` for the grouping model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section_id: Option<String>,
+    /// Provider profile ID overriding `HARNESS_PROVIDER` for agents
+    /// dispatched on behalf of this channel. The profile itself (adapter,
+    /// model, env overlay) lives in the provider-profile store owned by
+    /// the TypeScript side; the Rust dashboards only need to round-trip
+    /// the reference so a future "show provider profile" pill can read it.
+    /// Optional + `#[serde(default)]` for back-compat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_profile_id: Option<String>,
 }
 
 /// A sidebar grouping ("section") for channels — maps to Slack's
@@ -1764,6 +1772,7 @@ mod tests {
             full_access: None,
             kind: None,
             section_id: None,
+            provider_profile_id: None,
             created_at: Some("2026-01-01T00:00:00Z".to_string()),
             updated_at: Some("2026-01-01T00:00:00Z".to_string()),
         }
@@ -1941,6 +1950,7 @@ mod tests {
             full_access: None,
             kind: None,
             section_id: None,
+            provider_profile_id: None,
             created_at: None,
             updated_at: None,
         }
