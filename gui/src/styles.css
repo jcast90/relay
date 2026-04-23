@@ -26,8 +26,14 @@ button {
   cursor: pointer;
   transition: var(--anim-hover-fast);
 }
-button:hover:not(:disabled) { background: var(--color-paper-hover); }
-button:active:not(:disabled) { background: var(--color-paper-pressed); }
+button:hover:not(:disabled) {
+  background: var(--color-paper-hover);
+  border-color: var(--color-text-muted);
+}
+button:active:not(:disabled) {
+  background: var(--color-paper-pressed);
+  border-color: var(--color-text-primary);
+}
 button.primary {
   background: var(--color-accent-coral);
   border-color: var(--color-accent-coral);
@@ -776,11 +782,13 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
    and the primary (coral) chip looked like "dark red on dark red"
    on hover. Explicit bg swaps here so text stays readable. */
 .repo-chip.primary:hover {
-  background: #f6c9c0;
+  /* Deep salmon that's clearly distinct from the resting coral-soft
+     and still gives >4.5:1 contrast against the coral text. */
+  background: #f0a79b;
   border-color: var(--color-accent-coral);
 }
 .repo-chip.attached:hover {
-  background: #c2d3ea;
+  background: #a6bfdf;
   border-color: var(--color-mention-attached-fg);
 }
 .repo-chip.add:hover {
