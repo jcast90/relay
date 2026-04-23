@@ -1763,6 +1763,7 @@ mod tests {
             starred: false,
             full_access: None,
             kind: None,
+            section_id: None,
             created_at: Some("2026-01-01T00:00:00Z".to_string()),
             updated_at: Some("2026-01-01T00:00:00Z".to_string()),
         }
@@ -1939,6 +1940,7 @@ mod tests {
             starred: false,
             full_access: None,
             kind: None,
+            section_id: None,
             created_at: None,
             updated_at: None,
         }
