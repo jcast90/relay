@@ -281,6 +281,91 @@ describe("createPrWatcherFactory", () => {
     handle!.stop();
     expect(getActiveWatcher()).toBeNull();
   });
+
+  it("AL-5: wires a PrReviewer when trustMode is provided and invokes it on autonomous track", async () => {
+    process.env.GITHUB_TOKEN = "fake-token";
+    const execGit: ExecGit = vi.fn(async () => ({
+      stdout: "git@github.com:acme/widgets.git\n",
+      stderr: "",
+    }));
+
+    const handleTrack = vi.fn();
+    const reviewerFactory = vi.fn(() => {
+      return {
+        handleTrack,
+      } as unknown as import("../../src/integrations/pr-reviewer.js").PrReviewer;
+    });
+
+    const factory = createPrWatcherFactory({
+      channelStore,
+      repoRoot: "/repo",
+      intervalMs: 60_000,
+      execGit,
+      trustMode: "supervised",
+      reviewerFactory,
+    });
+
+    const handle = factory({
+      run: minimalRun(),
+      scheduler: stubScheduler() as TicketScheduler,
+    });
+
+    handle!.start();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(reviewerFactory).toHaveBeenCalledTimes(1);
+
+    // Track an autonomous PR through the active watcher; the reviewer's
+    // handleTrack must fire via the poller onTrack hook.
+    const channel = await channelStore.createChannel({ name: "#al-5-wiring", description: "" });
+    const watcher = getActiveWatcher();
+    watcher!.track({
+      ticketId: "T-auto",
+      channelId: channel.channelId,
+      pr: { number: 7, url: "https://github.com/acme/widgets/pull/7", branch: "feat/7" },
+      repo: watcher!.repo,
+      openedByAutonomous: true,
+    });
+
+    expect(handleTrack).toHaveBeenCalledTimes(1);
+    expect(handleTrack.mock.calls[0][0].ticketId).toBe("T-auto");
+    expect(handleTrack.mock.calls[0][0].openedByAutonomous).toBe(true);
+
+    // Allow any fire-and-forget snapshot persist to complete before teardown
+    // so the test doesn't race the tmpdir `rm -rf`.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    handle!.stop();
+  });
+
+  it("AL-5: does NOT wire a reviewer when trustMode is absent (manual `rly run`)", async () => {
+    process.env.GITHUB_TOKEN = "fake-token";
+    const execGit: ExecGit = vi.fn(async () => ({
+      stdout: "git@github.com:acme/widgets.git\n",
+      stderr: "",
+    }));
+
+    const reviewerFactory = vi.fn();
+    const factory = createPrWatcherFactory({
+      channelStore,
+      repoRoot: "/repo",
+      intervalMs: 60_000,
+      execGit,
+      reviewerFactory,
+    });
+
+    const handle = factory({
+      run: minimalRun(),
+      scheduler: stubScheduler() as TicketScheduler,
+    });
+
+    handle!.start();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(reviewerFactory).not.toHaveBeenCalled();
+    handle!.stop();
+  });
 });
 
 // Live-network / real-GitHub scenarios are intentionally skipped — covering

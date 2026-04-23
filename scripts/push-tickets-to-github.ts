@@ -33,7 +33,22 @@ import { homedir } from "node:os";
 import { ChannelStore } from "../src/channels/channel-store.js";
 import type { TicketDefinition } from "../src/domain/ticket.js";
 
-type Effort = "S" | "M" | "L";
+// Effort band: XS/S/M/L/XL to match AL-6's audit-agent schema
+// (`AuditEffortEstimateSchema`) and the widened type in
+// `scripts/seed-autonomous-loop-tickets.ts`. The GH project's Effort
+// single-select field may only carry S/M/L options on older projects
+// — `discoverFields` below appends XS + XL lazily (BLUE / PURPLE) so
+// `setSingleSelectField` has an option id to reference regardless of
+// the field's seeded state. Existing tickets already tagged S/M/L
+// are untouched.
+type Effort = "XS" | "S" | "M" | "L" | "XL";
+const EFFORT_OPTION_COLORS: Record<Effort, string> = {
+  XS: "BLUE",
+  S: "GREEN",
+  M: "YELLOW",
+  L: "ORANGE",
+  XL: "PURPLE",
+};
 
 type Args = {
   channel: string;
@@ -77,7 +92,15 @@ type ProjectFields = {
   relayId: { id: string };
   effort: {
     id: string;
-    options: { S: string; M: string; L: string };
+    // Options map is partial: `discoverFields` creates missing
+    // XS/S/M/L/XL options lazily, but `setSingleSelectField` only looks
+    // up the effort the ticket actually carries. A missing lookup
+    // triggers an append via `addEffortOption` below.
+    options: Partial<Record<Effort, string>>;
+    // Full option list in GitHub's on-project shape, used as the base
+    // for `updateProjectV2Field` when appending a new option (same
+    // wholesale-replace contract as the Repo field).
+    optionDefs: Array<{ id: string; name: string; color: string; description: string }>;
   };
   dependsOn: { id: string };
   // Two-axis routing fields. Created by this script on first run if
@@ -127,7 +150,9 @@ function gh(args: string[], input?: string): string {
 }
 
 function parseEffort(title: string): Effort | null {
-  const m = title.match(/^\[([SML])\]/);
+  // Match XS/XL first (longer) before the single-letter variants so
+  // `[XS]` doesn't fall through to a speculative S match.
+  const m = title.match(/^\[(XS|XL|S|M|L)\]/);
   return (m?.[1] as Effort) ?? null;
 }
 
@@ -489,17 +514,31 @@ function discoverFields(
   if (!effortField) {
     throw new Error(`Project is missing required single-select field "${EFFORT_FIELD_NAME}"`);
   }
-  const effortOptionId = (label: "S" | "M" | "L"): string => {
-    const opt = effortField.options.find((o) => o.name === label);
-    if (!opt) {
-      throw new Error(
-        `"${EFFORT_FIELD_NAME}" field missing expected option "${label}" (have: ${effortField.options
-          .map((o) => o.name)
-          .join(", ")})`
-      );
+  // Effort options are discovered opportunistically: whatever the
+  // project currently has is the starting set. Missing XS/XL options
+  // are appended on-demand by `addEffortOption` when a ticket needs
+  // one — we don't force-create them at discovery time so projects
+  // that genuinely only want S/M/L stay lean.
+  const effortOptionsMap: Partial<Record<Effort, string>> = {};
+  for (const opt of effortField.options) {
+    if (
+      opt.name === "XS" ||
+      opt.name === "XL" ||
+      opt.name === "S" ||
+      opt.name === "M" ||
+      opt.name === "L"
+    ) {
+      effortOptionsMap[opt.name as Effort] = opt.id;
     }
-    return opt.id;
-  };
+  }
+  const effortOptionDefs: ProjectFields["effort"]["optionDefs"] = effortField.options.map(
+    (o, i) => ({
+      id: o.id,
+      name: o.name,
+      color: (o.color ?? "").toUpperCase() || pickOptionColor(i),
+      description: o.description ?? "",
+    })
+  );
 
   const dependsOnField = findText(DEPENDS_ON_FIELD_NAME);
   if (!dependsOnField) {
@@ -573,11 +612,8 @@ function discoverFields(
     relayId: { id: relayIdField.id },
     effort: {
       id: effortField.id,
-      options: {
-        S: effortOptionId("S"),
-        M: effortOptionId("M"),
-        L: effortOptionId("L"),
-      },
+      options: effortOptionsMap,
+      optionDefs: effortOptionDefs,
     },
     dependsOn: { id: dependsOnField.id },
     repoFieldId: repo.id,
@@ -658,6 +694,88 @@ function addRepoOption(projectId: string, fields: ProjectFields, alias: string):
   const created = fields.repoOptions.get(alias);
   if (!created) {
     throw new Error(`updateProjectV2Field returned no option id for ${alias}: ${out}`);
+  }
+  return created;
+}
+
+/**
+ * Add a new effort option (XS / XL) to the existing `Effort` single-
+ * select field. Same wholesale-replace contract as `addRepoOption`:
+ * every existing option is passed back with its `id` so GitHub
+ * preserves it, plus the new option (no id yet) gets appended with a
+ * deterministic palette slot (BLUE for XS, PURPLE for XL — matches the
+ * colour guidance in the AL-6 follow-up spec).
+ */
+function addEffortOption(projectId: string, fields: ProjectFields, effort: Effort): string {
+  const next = [
+    ...fields.effort.optionDefs.map((o) => ({
+      id: o.id,
+      name: o.name,
+      color: o.color || pickOptionColor(0),
+      description: o.description ?? "",
+    })),
+    {
+      name: effort,
+      color: EFFORT_OPTION_COLORS[effort],
+      description: `Effort size: ${effort}`,
+    },
+  ];
+  const query = `mutation AppendEffortOption($fieldId: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
+  updateProjectV2Field(input: {
+    fieldId: $fieldId
+    singleSelectOptions: $options
+  }) {
+    projectV2Field {
+      ... on ProjectV2SingleSelectField {
+        id
+        options { id name color description }
+      }
+    }
+  }
+}`;
+  const payload = JSON.stringify({
+    query,
+    variables: { fieldId: fields.effort.id, options: next },
+  });
+  const out = gh(["api", "graphql", "--input", "-"], payload);
+  const parsed = JSON.parse(out) as {
+    data?: {
+      updateProjectV2Field?: {
+        projectV2Field?: { options?: Array<{ id: string; name: string; color?: string }> };
+      };
+    };
+    errors?: Array<{ message: string }>;
+  };
+  if (parsed.errors?.length) {
+    throw new Error(
+      `updateProjectV2Field failed — likely can't append Effort options via API on this project: ` +
+        parsed.errors.map((e) => e.message).join("; ") +
+        `. Add the '${effort}' option manually via the project UI and re-run.`
+    );
+  }
+  const options = parsed.data?.updateProjectV2Field?.projectV2Field?.options ?? [];
+  // Refresh the local cache so the loop doesn't re-append the same
+  // option for a subsequent ticket of the same size.
+  fields.effort.optionDefs.length = 0;
+  const isEffort = (name: string): name is Effort =>
+    name === "XS" || name === "S" || name === "M" || name === "L" || name === "XL";
+  for (const key of Object.keys(fields.effort.options) as Effort[]) {
+    delete fields.effort.options[key];
+  }
+  for (const [i, opt] of options.entries()) {
+    if (isEffort(opt.name)) {
+      fields.effort.options[opt.name] = opt.id;
+    }
+    fields.effort.optionDefs.push({
+      id: opt.id,
+      name: opt.name,
+      color: (opt.color ?? "").toUpperCase() || pickOptionColor(i),
+      description: "",
+    });
+  }
+  const created = fields.effort.options[effort];
+  if (!created) {
+    throw new Error(`updateProjectV2Field returned no option id for effort ${effort}: ${out}`);
   }
   return created;
 }
@@ -887,12 +1005,16 @@ async function main(): Promise<void> {
         setTextField(args.projectId, itemId, fields.relayId.id, t.id);
       }
       if (effort && current.effortOptionName !== effort) {
-        setSingleSelectField(
-          args.projectId,
-          itemId,
-          fields.effort.id,
-          fields.effort.options[effort]
-        );
+        // If the project's Effort field hasn't been seeded with this
+        // size yet (e.g. XS / XL on an older project that only had
+        // S/M/L), lazily append it before setting. `addEffortOption`
+        // refreshes `fields.effort.options` so follow-up tickets with
+        // the same size hit the cache.
+        let effortOptionId = fields.effort.options[effort];
+        if (!effortOptionId) {
+          effortOptionId = addEffortOption(args.projectId, fields, effort);
+        }
+        setSingleSelectField(args.projectId, itemId, fields.effort.id, effortOptionId);
       }
       const depsText = t.dependsOn.length > 0 ? t.dependsOn.join(", ") : "";
       if (depsText && current.dependsOnText !== depsText) {

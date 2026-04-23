@@ -270,6 +270,66 @@ fn reject_plan(
     cli_json(&args)
 }
 
+/// List pending approvals-queue records for a single session (no args = all
+/// sessions). Reads `~/.relay/approvals/<sessionId>/queue.jsonl` directly
+/// via `harness-data`; no CLI round-trip so the right-pane 5-second tick
+/// stays cheap.
+#[tauri::command]
+fn list_pending_approvals(
+    session_id: Option<String>,
+) -> Result<Vec<data::ApprovalQueueRecord>, String> {
+    if let Some(ref s) = session_id {
+        validate_id_segment(s, "sessionId")?;
+        let mut out = data::load_approval_queue(s);
+        // I9: filter through the typed enum so stringly-typed status
+        // comparisons can't drift out of sync with the TS source of truth.
+        out.retain(|r| r.status_enum() == Some(data::ApprovalStatus::Pending));
+        out.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        return Ok(out);
+    }
+    Ok(data::load_all_pending_approvals())
+}
+
+/// Approve a single AL-8 queue record by id. Shells out to
+/// `rly approve <id> --json` so the canonical queue mutation path lives in
+/// one place (the TS writer). Returns the CLI's JSON envelope verbatim.
+#[tauri::command]
+fn approve_queue_entry(id: String) -> Result<serde_json::Value, String> {
+    validate_id_segment(&id, "id")?;
+    cli_json(&["approve", &id, "--json"])
+}
+
+/// Reject a single AL-8 queue record with optional `--feedback`. Same
+/// shell-out contract as `approve_queue_entry`.
+#[tauri::command]
+fn reject_queue_entry(
+    id: String,
+    feedback: Option<String>,
+) -> Result<serde_json::Value, String> {
+    validate_id_segment(&id, "id")?;
+    let mut args: Vec<&str> = vec!["reject", &id, "--json"];
+    if let Some(ref fb) = feedback {
+        args.push("--feedback");
+        args.push(fb);
+    }
+    cli_json(&args)
+}
+
+/// Approve all pending queue records (optionally scoped to one session).
+/// Convenience for the "Approve all" button in the RightPane; still
+/// dispatches through the CLI so the queue file mutation is authoritative.
+#[tauri::command]
+fn approve_queue_all(session_id: Option<String>) -> Result<serde_json::Value, String> {
+    let mut args: Vec<String> = vec!["approve".into(), "all".into(), "--json".into()];
+    if let Some(ref s) = session_id {
+        validate_id_segment(s, "sessionId")?;
+        args.push("--session".into());
+        args.push(s.clone());
+    }
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    cli_json(&refs)
+}
+
 #[derive(Serialize)]
 struct CliResult {
     success: bool,
@@ -663,6 +723,22 @@ fn delete_session(
     cli_json(&[
         "session", "delete", "--channel", &channel_id, "--session", &session_id,
     ])
+}
+
+/// AL-9 — kill-switch wiring.
+///
+/// Shells out to `rly session stop <sessionId>`, which atomically drops
+/// a `STOP` file into `~/.relay/sessions/<sessionId>/`. The autonomous
+/// loop polls that path on each tick (≤20s default) and transitions
+/// the lifecycle to `winding_down` with reason `"user-stop-signal"`.
+///
+/// No force-kill: graceful wind-down respects in-flight workers. AL-10
+/// wires the actual "Kill session" button in the session-status header
+/// to this command; AL-9 ships just the Tauri surface + CLI plumbing.
+#[tauri::command]
+fn stop_session(session_id: String) -> Result<serde_json::Value, String> {
+    validate_id_segment(&session_id, "sessionId")?;
+    cli_json(&["session", "stop", &session_id])
 }
 
 #[tauri::command]
@@ -1747,6 +1823,293 @@ fn load_live_crosslink_repos() -> std::collections::HashSet<String> {
 }
 
 // -----------------------------------------------------------------------------
+// AL-10: Autonomous session readers + kill switch
+// -----------------------------------------------------------------------------
+//
+// The autonomous driver (AL-3/AL-4) writes three files per session under
+// `~/.relay/sessions/<sessionId>/`:
+//
+//   - `metadata.json`   — one-shot record of the flags + channelId the session
+//                         was spawned with. Written once at startup.
+//   - `lifecycle.json`  — state-machine snapshot, rewritten atomically on
+//                         every transition (planning → dispatching → ...).
+//   - `budget.jsonl`    — append-only JSONL of per-API-call token increments.
+//                         Each line includes a cumulative total.
+//   - `approvals.jsonl` — append-only approval queue (AL-8). Stubbed here;
+//                         we read it opportunistically — missing file == empty.
+//   - `STOP`            — sentinel file. AL-9's `stop_session` drops it; the
+//                         driver watches for it and shuts down cleanly.
+//
+// These readers tolerate partial / missing / corrupted files — a GUI that
+// polls every 5s cannot afford to throw on a torn write mid-rename.
+// Everything is best-effort and returns `None` / empty defaults when the
+// on-disk state isn't parseable.
+
+/// Lightweight header row for the session list — just enough to let the
+/// CenterPane find the active session for the selected channel without
+/// loading lifecycle/budget for every candidate.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AutonomousSessionSummary {
+    session_id: String,
+    channel_id: String,
+    state: String,
+    started_at: String,
+    trust: String,
+}
+
+/// Full session snapshot returned by `get_session_state`. Field names mirror
+/// the metadata/lifecycle/budget on-disk shapes one-to-one so the frontend
+/// can surface them without an adapter layer.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AutonomousSessionState {
+    session_id: String,
+    channel_id: String,
+    state: String,
+    trust: String,
+    budget_tokens: u64,
+    budget_used: u64,
+    budget_pct: f64,
+    max_hours: f64,
+    started_at: String,
+    /// ISO timestamp of the most recent lifecycle transition. Useful for the
+    /// header's "state changed Xm ago" line if we ever want to surface it.
+    updated_at: String,
+    /// Hours of wall-clock budget remaining. Clamped to 0 when the session
+    /// has exceeded `max_hours` (the lifecycle watchdog will have killed it
+    /// by then anyway; the UI just needs a non-negative number).
+    hours_remaining: f64,
+    /// Best-effort current-ticket id. Derived from the most recent ticket
+    /// the repo-admin coordinator is working on. When AL-16's coordinator
+    /// state hasn't surfaced a ticket yet, this is `None`.
+    current_ticket_id: Option<String>,
+    allowed_repos: Vec<String>,
+}
+
+#[derive(Deserialize)]
+// `sessionId` / `startedAt` / `maxDurationMs` are carried so serde validates
+// the file shape (reject a lifecycle.json that's a totally different
+// struct), but only `state` + `transitions` are read at the moment. The
+// allow silences dead_code warnings that would otherwise fire on the
+// defensive fields.
+#[allow(dead_code)]
+struct LifecycleFileRaw {
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    state: String,
+    #[serde(rename = "startedAt")]
+    started_at: String,
+    #[serde(rename = "maxDurationMs", default)]
+    max_duration_ms: u64,
+    #[serde(default)]
+    transitions: Vec<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct MetadataFileRaw {
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    #[serde(rename = "channelId")]
+    channel_id: String,
+    #[serde(rename = "budgetTokens")]
+    budget_tokens: u64,
+    #[serde(rename = "maxHours")]
+    max_hours: f64,
+    #[serde(default)]
+    trust: String,
+    #[serde(rename = "allowedRepos", default)]
+    allowed_repos: Vec<String>,
+    #[serde(rename = "startedAt")]
+    started_at: String,
+}
+
+/// Directory that holds all autonomous session subdirs. We accept the
+/// `RELAY_HARNESS_ROOT` override that `harness-data` already honors so the
+/// tauri backend lines up with the CLI's world view in tests and remote
+/// workspace setups.
+fn autonomous_sessions_root() -> PathBuf {
+    data::harness_root().join("sessions")
+}
+
+/// Best-effort read of `metadata.json`. Returns `None` when the file is
+/// missing, unreadable, or fails to parse — autonomous sessions spawned by
+/// old builds or torn writes mid-rename land here and we skip them silently.
+fn read_session_metadata(session_id: &str) -> Option<MetadataFileRaw> {
+    let path = autonomous_sessions_root().join(session_id).join("metadata.json");
+    let raw = fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn read_session_lifecycle(session_id: &str) -> Option<LifecycleFileRaw> {
+    let path = autonomous_sessions_root().join(session_id).join("lifecycle.json");
+    let raw = fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// Sum the cumulative token usage from `budget.jsonl`. The last line's
+/// `cumulativeUsed` is authoritative — the tracker maintains it invariant
+/// under concurrent records. Fall back to summing increments so a
+/// hand-edited file still produces a sane total.
+fn read_session_budget_used(session_id: &str) -> u64 {
+    // I4: budget.jsonl is written by the TokenTracker (AL-1), which ALWAYS
+    // stamps `cumulativeUsed` on every line. The previous implementation
+    // had a "sum input+output if cumulativeUsed is missing" fallback that
+    // double-counted when the two shapes interleaved — an older partial
+    // file combined with newer canonical lines gave a value higher than
+    // the true cumulative. Dropping the fallback: if a line lacks
+    // `cumulativeUsed` it's either legacy noise or a malformed record,
+    // neither of which should bump the total. The last well-formed
+    // cumulative wins; an entirely empty file returns 0.
+    let path = autonomous_sessions_root().join(session_id).join("budget.jsonl");
+    let Ok(file) = fs::File::open(&path) else {
+        return 0;
+    };
+    let mut last_cumulative: u64 = 0;
+    for line in BufReader::new(file).lines().flatten() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if let Some(c) = value.get("cumulativeUsed").and_then(|v| v.as_u64()) {
+            last_cumulative = c;
+        }
+    }
+    last_cumulative
+}
+
+/// Walks `~/.relay/sessions/` and returns a summary for every session whose
+/// metadata.json is readable. Intended for the CenterPane's channel →
+/// session lookup — one call, O(sessions) disk reads.
+#[tauri::command]
+fn list_autonomous_sessions() -> Vec<AutonomousSessionSummary> {
+    let root = autonomous_sessions_root();
+    let Ok(entries) = fs::read_dir(&root) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        // Skip hidden + malformed directory names. The harness-data guard is
+        // path-based so a rogue `..` directory can't materialize, but we
+        // still defend against it for clarity.
+        if validate_id_segment(name, "sessionId").is_err() {
+            continue;
+        }
+        let Some(meta) = read_session_metadata(name) else {
+            continue;
+        };
+        let state = read_session_lifecycle(name)
+            .map(|lc| lc.state)
+            .unwrap_or_else(|| "planning".to_string());
+        out.push(AutonomousSessionSummary {
+            session_id: meta.session_id,
+            channel_id: meta.channel_id,
+            state,
+            started_at: meta.started_at,
+            trust: meta.trust,
+        });
+    }
+    // Most-recent first. The startedAt string is ISO-8601 so lexicographic
+    // ordering matches chronological ordering.
+    out.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+    out
+}
+
+/// Deep state for one session — metadata + lifecycle + budget summary fused
+/// into the shape the AutonomousSessionHeader renders directly.
+#[tauri::command]
+fn get_session_state(session_id: String) -> Result<Option<AutonomousSessionState>, String> {
+    validate_id_segment(&session_id, "sessionId")?;
+    let Some(meta) = read_session_metadata(&session_id) else {
+        return Ok(None);
+    };
+    let lifecycle = read_session_lifecycle(&session_id);
+    let state = lifecycle.as_ref().map(|lc| lc.state.clone()).unwrap_or_else(|| "planning".into());
+    let updated_at = lifecycle
+        .as_ref()
+        .and_then(|lc| {
+            lc.transitions
+                .last()
+                .and_then(|t| t.get("at").and_then(|v| v.as_str()).map(String::from))
+        })
+        .unwrap_or_else(|| meta.started_at.clone());
+
+    let budget_used = read_session_budget_used(&session_id);
+    let budget_pct = if meta.budget_tokens == 0 {
+        0.0
+    } else {
+        (budget_used as f64 / meta.budget_tokens as f64) * 100.0
+    };
+
+    let hours_remaining = {
+        let started_ms = chrono::DateTime::parse_from_rfc3339(&meta.started_at)
+            .map(|d| d.timestamp_millis())
+            .unwrap_or(0);
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let elapsed_ms = (now_ms - started_ms).max(0) as f64;
+        let total_ms = meta.max_hours * 3600.0 * 1000.0;
+        let remaining_ms = (total_ms - elapsed_ms).max(0.0);
+        remaining_ms / (3600.0 * 1000.0)
+    };
+
+    // Current ticket is best-effort — the coordinator hasn't converged on a
+    // single canonical place to write it as of AL-16. When AL-17 lands a
+    // dedicated `current.json` we'll read it here; until then we return None
+    // and the header gracefully omits the row.
+    let current_ticket_id = read_current_ticket_id(&session_id);
+
+    Ok(Some(AutonomousSessionState {
+        session_id: meta.session_id,
+        channel_id: meta.channel_id,
+        state,
+        trust: meta.trust,
+        budget_tokens: meta.budget_tokens,
+        budget_used,
+        budget_pct,
+        max_hours: meta.max_hours,
+        started_at: meta.started_at,
+        updated_at,
+        hours_remaining,
+        current_ticket_id,
+        allowed_repos: meta.allowed_repos,
+    }))
+}
+
+/// Optional `current.json` reader. The autonomous loop may write a pointer
+/// to the ticket a worker is currently processing; the shape is
+/// `{"ticketId": "<id>"}`. Returns `None` when the file is missing or
+/// malformed — the header just hides the row in that case.
+fn read_current_ticket_id(session_id: &str) -> Option<String> {
+    let path = autonomous_sessions_root().join(session_id).join("current.json");
+    let raw = fs::read_to_string(&path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    value
+        .get("ticketId")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+}
+
+/// Drops the `STOP` sentinel file into the session directory. Stub for
+/// AL-9 — when AL-9 merges, its implementation will supersede this one (or
+// AL-10 B1: `stop_session` is owned by AL-9 (see the definition earlier in
+// this file — search for `fn stop_session`). The AL-10 duplicate was
+// dropped during the AL-9/AL-10 inter-PR merge so there is only one
+// canonical STOP-file writer.
+//
+// AL-10 B2/B3: `list_session_approvals` / `resolve_session_approval` +
+// the `SessionApproval` struct were also dropped here. AL-8 now owns the
+// GUI approvals surface via `list_pending_approvals` / `approve_queue_entry`
+// / `reject_queue_entry` / `approve_queue_all` — delegating to AL-7's
+// canonical `ApprovalsQueue` writer. AL-10 keeps only the session-status
+// header (`list_autonomous_sessions`, `get_session_state`).
+
+// -----------------------------------------------------------------------------
 // Unit tests
 // -----------------------------------------------------------------------------
 //
@@ -2108,6 +2471,153 @@ mod tests {
         let got = detect_terminal(WINDOWS_TERMINAL_CHAIN, |n| present.contains(&n));
         assert_eq!(got.as_deref(), Some("cmd.exe"));
     }
+
+    // --- AL-10 autonomous session readers ---
+    //
+    // Build a fake `~/.relay/sessions/<sessionId>/` tree under a tmpdir,
+    // point `RELAY_HARNESS_ROOT` at it, and assert the readers produce the
+    // same shape the header renders against. Using the env-var override
+    // instead of a fn-level injection keeps the command surface unchanged
+    // (the commands call `harness_data::harness_root()` directly).
+    //
+    // We deliberately keep these tests single-threaded via a module-local
+    // Mutex — `RELAY_HARNESS_ROOT` is process-global and parallel tests
+    // would step on each other's fixtures.
+
+    use std::sync::Mutex as TestMutex;
+    static RELAY_ROOT_LOCK: TestMutex<()> = TestMutex::new(());
+
+    fn with_fake_relay_root<F: FnOnce(&std::path::Path)>(f: F) {
+        let _guard = RELAY_ROOT_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var("RELAY_HARNESS_ROOT").ok();
+        std::env::set_var("RELAY_HARNESS_ROOT", tmp.path());
+        f(tmp.path());
+        match prev {
+            Some(v) => std::env::set_var("RELAY_HARNESS_ROOT", v),
+            None => std::env::remove_var("RELAY_HARNESS_ROOT"),
+        }
+    }
+
+    fn write_session_fixture(
+        root: &std::path::Path,
+        session_id: &str,
+        channel_id: &str,
+        budget_tokens: u64,
+        used: u64,
+        state: &str,
+        max_hours: f64,
+    ) {
+        let dir = root.join("sessions").join(session_id);
+        fs::create_dir_all(&dir).unwrap();
+        let started_at = chrono::Utc::now().to_rfc3339();
+        let metadata = serde_json::json!({
+            "sessionId": session_id,
+            "channelId": channel_id,
+            "budgetTokens": budget_tokens,
+            "maxHours": max_hours,
+            "maxHoursRequested": max_hours,
+            "trust": "supervised",
+            "allowedRepos": ["repo-a"],
+            "startedAt": started_at,
+            "command": "rly run --autonomous",
+            "invokedBy": { "user": "test", "host": "test" },
+        });
+        fs::write(dir.join("metadata.json"), metadata.to_string()).unwrap();
+        let lifecycle = serde_json::json!({
+            "sessionId": session_id,
+            "state": state,
+            "startedAt": started_at,
+            "transitions": [],
+            "maxDurationMs": (max_hours * 3600.0 * 1000.0) as u64,
+        });
+        fs::write(dir.join("lifecycle.json"), lifecycle.to_string()).unwrap();
+        if used > 0 {
+            let line = serde_json::json!({
+                "ts": started_at,
+                "inputTokens": used,
+                "outputTokens": 0,
+                "cumulativeUsed": used,
+            });
+            fs::write(dir.join("budget.jsonl"), format!("{}\n", line)).unwrap();
+        }
+    }
+
+    #[test]
+    fn list_autonomous_sessions_empty_on_no_root() {
+        with_fake_relay_root(|_| {
+            assert!(list_autonomous_sessions().is_empty());
+        });
+    }
+
+    #[test]
+    fn list_autonomous_sessions_surfaces_well_formed_sessions() {
+        with_fake_relay_root(|root| {
+            write_session_fixture(root, "auto-a", "channel-1", 10_000, 2_500, "dispatching", 8.0);
+            write_session_fixture(root, "auto-b", "channel-2", 10_000, 0, "planning", 8.0);
+            let sessions = list_autonomous_sessions();
+            assert_eq!(sessions.len(), 2);
+            let by_id: std::collections::HashMap<_, _> =
+                sessions.iter().map(|s| (s.session_id.as_str(), s)).collect();
+            assert_eq!(by_id["auto-a"].channel_id, "channel-1");
+            assert_eq!(by_id["auto-a"].state, "dispatching");
+            assert_eq!(by_id["auto-b"].state, "planning");
+        });
+    }
+
+    #[test]
+    fn list_autonomous_sessions_skips_corrupt_metadata() {
+        with_fake_relay_root(|root| {
+            // A directory with no metadata.json at all.
+            fs::create_dir_all(root.join("sessions").join("auto-orphan")).unwrap();
+            // A directory whose metadata.json isn't JSON.
+            let bad = root.join("sessions").join("auto-bad");
+            fs::create_dir_all(&bad).unwrap();
+            fs::write(bad.join("metadata.json"), "{ not json").unwrap();
+            // A valid session alongside.
+            write_session_fixture(root, "auto-ok", "channel-1", 10_000, 0, "planning", 8.0);
+
+            let sessions = list_autonomous_sessions();
+            assert_eq!(sessions.len(), 1);
+            assert_eq!(sessions[0].session_id, "auto-ok");
+        });
+    }
+
+    #[test]
+    fn get_session_state_computes_budget_pct_and_hours_remaining() {
+        with_fake_relay_root(|root| {
+            write_session_fixture(root, "auto-a", "channel-1", 10_000, 2_500, "dispatching", 8.0);
+            let state = get_session_state("auto-a".into()).unwrap().unwrap();
+            assert_eq!(state.budget_used, 2_500);
+            assert!((state.budget_pct - 25.0).abs() < 0.01);
+            assert!(state.hours_remaining > 0.0 && state.hours_remaining <= 8.0);
+            assert_eq!(state.state, "dispatching");
+        });
+    }
+
+    #[test]
+    fn get_session_state_handles_zero_budget_without_dividing_by_zero() {
+        with_fake_relay_root(|root| {
+            write_session_fixture(root, "auto-a", "channel-1", 0, 0, "planning", 1.0);
+            let state = get_session_state("auto-a".into()).unwrap().unwrap();
+            assert_eq!(state.budget_pct, 0.0);
+        });
+    }
+
+    #[test]
+    fn get_session_state_returns_none_for_unknown_session() {
+        with_fake_relay_root(|_| {
+            let state = get_session_state("auto-nope".into()).unwrap();
+            assert!(state.is_none());
+        });
+    }
+
+    // AL-10 B1/B2/B3: stop_session / list_session_approvals /
+    // resolve_session_approval tests were removed. AL-9's stop_session
+    // is covered by its own tests (search earlier in the tests module);
+    // AL-8's queue surfaces carry their own test coverage via
+    // `test/approvals/queue.test.ts` and the harness-data crate's
+    // `ApprovalQueueRecord` parser tests.
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -2145,6 +2655,7 @@ pub fn run() {
             post_to_channel,
             create_session,
             delete_session,
+            stop_session,
             append_session_message,
             rewind_snapshot,
             rewind_apply,
@@ -2157,6 +2668,15 @@ pub fn run() {
             list_pending_plans,
             approve_plan,
             reject_plan,
+            // AL-8 approvals surface.
+            list_pending_approvals,
+            approve_queue_entry,
+            reject_queue_entry,
+            approve_queue_all,
+            // AL-10 session-status header. `stop_session` is registered
+            // earlier (AL-9 owner); AL-10's duplicate was dropped.
+            list_autonomous_sessions,
+            get_session_state,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

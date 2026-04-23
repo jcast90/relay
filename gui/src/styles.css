@@ -2538,3 +2538,204 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   background: rgba(232, 154, 43, 0.10);
   border-radius: var(--radius-md);
 }
+
+/* ------------------------------------------------------------------ */
+/* AL-10: autonomous-session status strip                             */
+/* ------------------------------------------------------------------ */
+/* Every color pulls from tokens.css so this reads as part of the      */
+/* existing palette (no Catppuccin drift). The strip sits between the  */
+/* ChannelHeader and the tab row; height is tight so it doesn't push   */
+/* the message list below the fold. */
+.autonomous-session-header {
+  padding: var(--space-3) var(--space-8);
+  border-bottom: 1px solid var(--color-paper-line);
+  background: var(--color-paper-alt);
+  font-size: var(--font-size-xs);
+}
+.autonomous-session-header--pending {
+  /* First-poll placeholder — reserve vertical space without content so the
+     layout doesn't jump when `get_session_state` resolves. */
+  min-height: 32px;
+  opacity: 0.5;
+}
+.autonomous-session-header__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  flex-wrap: wrap;
+}
+.autonomous-session-header__pill {
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--color-status-pending);
+  color: var(--color-text-primary);
+}
+/* Lifecycle-state colors reuse the existing status palette so a reader
+   who already recognizes ticket statuses gets the same signal here. */
+.autonomous-session-header__pill.pill-state-planning {
+  background: var(--color-status-pending);
+  color: var(--color-text-primary);
+}
+.autonomous-session-header__pill.pill-state-dispatching {
+  background: var(--color-status-executing);
+  color: #fff;
+}
+.autonomous-session-header__pill.pill-state-winding_down {
+  background: var(--color-status-verifying);
+  color: #fff;
+}
+.autonomous-session-header__pill.pill-state-audit {
+  background: var(--color-accent-sky);
+  color: #fff;
+}
+.autonomous-session-header__pill.pill-state-done {
+  background: var(--color-status-completed);
+  color: #fff;
+}
+.autonomous-session-header__pill.pill-state-killed {
+  background: var(--color-status-failed);
+  color: #fff;
+}
+.autonomous-session-header__trust {
+  color: var(--color-text-muted);
+}
+.autonomous-session-header__metric {
+  color: var(--color-text-muted);
+}
+.autonomous-session-header__metric strong {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+/* Token-severity tints for the budget pill. Mirror the AL-1 threshold
+   tiers — the same crossings that fire `onThreshold` events in the CLI
+   are reflected visually here. */
+.autonomous-session-header__metric.metric--tokens-warn strong {
+  color: var(--color-accent-amber);
+}
+.autonomous-session-header__metric.metric--tokens-hot strong {
+  color: var(--color-accent-coral);
+}
+.autonomous-session-header__metric.metric--tokens-overrun strong {
+  color: var(--color-status-failed);
+  font-weight: 700;
+}
+.autonomous-session-header__ticket-link {
+  font-family: var(--font-mono);
+  color: var(--color-accent-sky);
+  text-decoration: none;
+}
+.autonomous-session-header__ticket-link:hover {
+  text-decoration: underline;
+}
+.autonomous-session-header__spacer {
+  flex: 1;
+}
+.autonomous-session-header__kill {
+  background: var(--color-status-failed);
+  color: #fff;
+  border: none;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+.autonomous-session-header__kill:hover:not(:disabled) {
+  filter: brightness(0.9);
+}
+.autonomous-session-header__kill:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+/* Confirm dialog. Inline (not a full modal) — keeps the confirmation close
+   to the button that triggered it so there's no context loss. */
+.autonomous-session-header__confirm {
+  margin-top: var(--space-3);
+  padding: var(--space-4);
+  background: var(--color-paper-base);
+  border: 1px solid var(--color-status-failed);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-base);
+}
+.autonomous-session-header__confirm-body code {
+  font-family: var(--font-mono);
+  background: var(--color-paper-alt);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.autonomous-session-header__confirm-error {
+  margin-top: var(--space-2);
+  color: var(--color-status-failed);
+}
+.autonomous-session-header__confirm-actions {
+  display: flex;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  justify-content: flex-end;
+}
+.autonomous-session-header__confirm-actions .danger {
+  background: var(--color-status-failed);
+  color: #fff;
+  border: none;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------------ */
+/* AL-10: approvals panel (right rail)                                */
+/* ------------------------------------------------------------------ */
+.approvals-panel {
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-accent-coral-soft);
+  border-bottom: 1px solid var(--color-paper-line);
+}
+.approvals-panel__title {
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-accent-coral);
+  margin: 0 0 var(--space-3);
+  font-weight: 700;
+}
+.approvals-panel__row {
+  padding: var(--space-3);
+  background: var(--color-paper-base);
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--space-2);
+}
+.approvals-panel__meta {
+  display: flex;
+  gap: var(--space-3);
+  align-items: baseline;
+  margin-bottom: var(--space-1);
+}
+.approvals-panel__kind {
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-accent-magenta);
+  font-weight: 600;
+}
+.approvals-panel__time {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-dim);
+}
+.approvals-panel__summary {
+  font-size: var(--font-size-base);
+  color: var(--color-text-primary);
+  margin-bottom: var(--space-2);
+}
+.approvals-panel__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+.approvals-panel__error {
+  color: var(--color-status-failed);
+  font-size: var(--font-size-xs);
+  margin-top: var(--space-2);
+}

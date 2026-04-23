@@ -250,6 +250,25 @@ pub struct ChannelRunLink {
 // `src/domain/pr-row.ts` — keep these in sync. Optional CI/review/state
 // fields are null when the row has been tracked but not yet polled.
 
+/// Structured findings produced by AL-5's PR reviewer wrapper. Present only
+/// on rows where `openedByAutonomous == true` AND the reviewer has already
+/// run. Mirrors `PrReviewFindingsSchema` in `src/domain/pr-row.ts` — keep
+/// these in sync when the TS schema grows new fields.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PrReviewFindings {
+    pub blocking: u32,
+    pub nits: u32,
+    #[serde(default)]
+    pub files: Vec<String>,
+    pub summary: String,
+    /// One of `ready_for_human_ack`, `inconclusive`, `error`. Kept as a
+    /// plain string so the TUI can surface new variants (added by later
+    /// AL-7 / AL-8 work) without a Rust-side code change.
+    pub status: String,
+    pub reviewed_at: String,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackedPrRow {
@@ -264,6 +283,14 @@ pub struct TrackedPrRow {
     pub review: Option<String>,
     pub pr_state: Option<String>,
     pub updated_at: String,
+    /// AL-5: true when the PR was opened by a worker spawned under an
+    /// autonomous ticket. Defaults to `false` on rows written before AL-5.
+    #[serde(default)]
+    pub opened_by_autonomous: bool,
+    /// AL-5 reviewer output. Absent until the reviewer has run; may stay
+    /// absent indefinitely for `openedByAutonomous == false` rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_findings: Option<PrReviewFindings>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -288,6 +315,85 @@ pub struct ApprovalRecord {
     #[serde(default)]
     pub feedback: Option<String>,
     pub timestamp: String,
+}
+
+// --- AL-7/AL-8 Approvals Queue ---
+//
+// Distinct from the plan-approval `ApprovalRecord` above. The queue stores
+// per-session records of actions awaiting user ack (PR auto-merge,
+// audit-proposed ticket creation, …) at
+// `~/.relay/approvals/<sessionId>/queue.jsonl`. Writers: TS
+// `ApprovalsQueue` class (stub shipped in AL-8; absorbed by AL-7 when
+// that lands). Readers: CLI / TUI / GUI — this crate provides a shared
+// parser so TUI + GUI stay byte-compatible with the TS writer.
+//
+// Shape mirrors `src/approvals/queue.ts::ApprovalRecord`. `payload` is
+// deliberately `serde_json::Value` so dashboards don't need to know every
+// kind ahead of time.
+
+/// Constrained approval-queue status. Mirrors the TS
+/// `ApprovalStatus = "pending" | "approved" | "rejected"`. The struct's
+/// `status` field stays a plain `String` for serde round-trip compatibility
+/// with records written by any future kind, but the crate exposes this
+/// enum so callers can filter / match without stringly-typed bugs.
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ApprovalStatus {
+    Pending,
+    Approved,
+    Rejected,
+}
+
+impl ApprovalStatus {
+    /// Parse a record's `status` field into the enum. Returns `None` for
+    /// anything the enum doesn't recognise (forward-compat with a future
+    /// status code; the caller chooses whether to treat unknown as
+    /// excluded or included).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "pending" => Some(Self::Pending),
+            "approved" => Some(Self::Approved),
+            "rejected" => Some(Self::Rejected),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Approved => "approved",
+            Self::Rejected => "rejected",
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalQueueRecord {
+    pub id: String,
+    pub session_id: String,
+    pub kind: String,
+    #[serde(default)]
+    pub payload: serde_json::Value,
+    pub created_at: String,
+    pub status: String,
+    #[serde(default)]
+    pub decided_at: Option<String>,
+    #[serde(default)]
+    pub feedback: Option<String>,
+    // AL-7 god-mode marker. Present on records auto-approved by the trust
+    // gate ("god-mode" is the only value today). Mirror TS
+    // `ApprovalRecord.autoApprovedBy`; `serde(default)` so pre-AL-7
+    // records parse cleanly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_approved_by: Option<String>,
+}
+
+impl ApprovalQueueRecord {
+    /// Structured view of `status`. `None` for unknown codes.
+    pub fn status_enum(&self) -> Option<ApprovalStatus> {
+        ApprovalStatus::parse(&self.status)
+    }
 }
 
 // --- Global Config ---
@@ -627,6 +733,96 @@ pub fn load_approval_record(run_id: &str) -> Option<ApprovalRecord> {
 /// yet. Matches the CLI's `rly pending-plans` semantics.
 pub fn is_awaiting_approval(run: &RunIndexEntry) -> bool {
     run.state == "AWAITING_APPROVAL" && load_approval_record(&run.run_id).is_none()
+}
+
+// --- Approvals queue I/O (AL-7/AL-8) ---
+
+/// Filesystem path to a session's queue file. Exposed so callers can embed
+/// it in error messages / debug surfaces; don't write to it directly —
+/// mutations must go through `append_approval_record` /
+/// `rewrite_approval_queue` to preserve the temp-rename atomicity contract
+/// shared with the TS `ApprovalsQueue`.
+pub fn approval_queue_path(session_id: &str) -> PathBuf {
+    harness_root()
+        .join("approvals")
+        .join(session_id)
+        .join("queue.jsonl")
+}
+
+/// Parse a queue.jsonl file. Returns an empty vec if the file is absent or
+/// every line is malformed — a corrupt queue shouldn't blank surfaces.
+pub fn load_approval_queue(session_id: &str) -> Vec<ApprovalQueueRecord> {
+    let path = approval_queue_path(session_id);
+    let raw = match fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(rec) = serde_json::from_str::<ApprovalQueueRecord>(trimmed) {
+            out.push(rec);
+        }
+    }
+    out
+}
+
+/// Walk `<root>/approvals/` and return every pending record across all
+/// sessions, sorted by `created_at`. Mirrors the TS
+/// `ApprovalsQueue.listAllPending` so TUI/GUI pickers don't reimplement it.
+pub fn load_all_pending_approvals() -> Vec<ApprovalQueueRecord> {
+    let root = harness_root().join("approvals");
+    let entries = match fs::read_dir(&root) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) if !n.starts_with('.') => n.to_string(),
+            _ => continue,
+        };
+        for rec in load_approval_queue(&name) {
+            if rec.status_enum() == Some(ApprovalStatus::Pending) {
+                out.push(rec);
+            }
+        }
+    }
+    out.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    out
+}
+
+/// Rewrite a session's queue file atomically. The TS writer uses the same
+/// temp-rename pattern; keeping them byte-compatible means either surface
+/// can decide a record without the other torn-reading a partial write.
+pub fn rewrite_approval_queue(
+    session_id: &str,
+    records: &[ApprovalQueueRecord],
+) -> Result<(), String> {
+    let path = approval_queue_path(session_id);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let mut body = String::new();
+    for r in records {
+        let line = serde_json::to_string(r).map_err(|e| e.to_string())?;
+        body.push_str(&line);
+        body.push('\n');
+    }
+    let tmp = path.with_extension("jsonl.tmp");
+    fs::write(&tmp, &body).map_err(|e| e.to_string())?;
+    if let Err(e) = fs::rename(&tmp, &path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e.to_string());
+    }
+    Ok(())
 }
 
 pub fn load_channel_decisions(channel_id: &str) -> Vec<Decision> {
@@ -1725,5 +1921,124 @@ mod tests {
         let before = ch.repo_assignments[0].workspace_id.clone();
         let out = migrate_channel(ch);
         assert_eq!(out.repo_assignments[0].workspace_id, before);
+    }
+
+    // --- AL-7/AL-8 approvals queue round-trip --------------------------------
+    //
+    // Confirms the Rust side parses the exact JSONL shape the TS writer
+    // emits. Hand-built JSON rather than round-tripping through the Rust
+    // serializer so TS field drift (e.g. dropping `decidedAt`) surfaces
+    // here instead of silently in the dashboards.
+
+    #[test]
+    fn approval_queue_record_parses_camelcase_jsonl() {
+        let json = r#"{
+            "id":"apv-abc",
+            "sessionId":"sess-1",
+            "kind":"pr_merge",
+            "payload":{"pr":42},
+            "createdAt":"2026-01-01T00:00:00Z",
+            "status":"pending"
+        }"#;
+        let r: ApprovalQueueRecord = serde_json::from_str(json).unwrap();
+        assert_eq!(r.id, "apv-abc");
+        assert_eq!(r.session_id, "sess-1");
+        assert_eq!(r.kind, "pr_merge");
+        assert_eq!(r.status, "pending");
+        assert_eq!(r.decided_at, None);
+        assert_eq!(r.feedback, None);
+    }
+
+    #[test]
+    fn approval_queue_record_parses_decided_with_feedback() {
+        let json = r#"{
+            "id":"apv-2",
+            "sessionId":"sess-y",
+            "kind":"create_ticket",
+            "payload":{"title":"x"},
+            "createdAt":"2026-01-01T00:00:00Z",
+            "status":"rejected",
+            "decidedAt":"2026-01-02T00:00:00Z",
+            "feedback":"out of scope"
+        }"#;
+        let r: ApprovalQueueRecord = serde_json::from_str(json).unwrap();
+        assert_eq!(r.status, "rejected");
+        assert_eq!(r.decided_at.as_deref(), Some("2026-01-02T00:00:00Z"));
+        assert_eq!(r.feedback.as_deref(), Some("out of scope"));
+    }
+
+    #[test]
+    fn load_approval_queue_parses_jsonl_file() {
+        let _guard = scoped_root();
+        let session = "sess-load";
+        let path = approval_queue_path(session);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+
+        let line1 = r#"{"id":"apv-1","sessionId":"sess-load","kind":"k","payload":{},"createdAt":"2026-01-01T00:00:00Z","status":"pending"}"#;
+        let line2 = r#"{"id":"apv-2","sessionId":"sess-load","kind":"k","payload":{},"createdAt":"2026-01-02T00:00:00Z","status":"approved","decidedAt":"2026-01-03T00:00:00Z"}"#;
+        fs::write(&path, format!("{}\n{}\n", line1, line2)).unwrap();
+
+        let records = load_approval_queue(session);
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].id, "apv-1");
+        assert_eq!(records[1].status, "approved");
+    }
+
+    #[test]
+    fn load_approval_queue_skips_malformed_lines() {
+        let _guard = scoped_root();
+        let session = "sess-mal";
+        let path = approval_queue_path(session);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+
+        let good = r#"{"id":"apv-good","sessionId":"sess-mal","kind":"k","payload":{},"createdAt":"2026-01-01T00:00:00Z","status":"pending"}"#;
+        fs::write(&path, format!("{{not-json\n{}\n", good)).unwrap();
+
+        let records = load_approval_queue(session);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, "apv-good");
+    }
+
+    #[test]
+    fn load_all_pending_approvals_walks_every_session_dir() {
+        let _guard = scoped_root();
+        for (session, created) in [
+            ("sess-a", "2026-01-01T00:00:00Z"),
+            ("sess-b", "2026-01-02T00:00:00Z"),
+        ] {
+            let path = approval_queue_path(session);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let rec = format!(
+                r#"{{"id":"apv-{}","sessionId":"{}","kind":"k","payload":{{}},"createdAt":"{}","status":"pending"}}"#,
+                session, session, created
+            );
+            fs::write(&path, format!("{}\n", rec)).unwrap();
+        }
+        let all = load_all_pending_approvals();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].session_id, "sess-a");
+        assert_eq!(all[1].session_id, "sess-b");
+    }
+
+    #[test]
+    fn rewrite_approval_queue_is_temp_rename_atomic() {
+        let _guard = scoped_root();
+        let session = "sess-rw";
+        let records = vec![ApprovalQueueRecord {
+            id: "apv-1".into(),
+            session_id: session.into(),
+            kind: "k".into(),
+            payload: serde_json::json!({"a": 1}),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            status: "approved".into(),
+            decided_at: Some("2026-01-02T00:00:00Z".into()),
+            feedback: None,
+            auto_approved_by: None,
+        }];
+        rewrite_approval_queue(session, &records).expect("write ok");
+        let reloaded = load_approval_queue(session);
+        assert_eq!(reloaded.len(), 1);
+        assert_eq!(reloaded[0].id, "apv-1");
+        assert_eq!(reloaded[0].status, "approved");
     }
 }
