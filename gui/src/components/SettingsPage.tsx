@@ -197,6 +197,14 @@ function GeneralSection() {
 
 type EnvRow = { key: string; value: string };
 
+// Two mutually-exclusive ways a provider can authenticate. cli-login
+// means the underlying CLI manages its own auth via `claude login` /
+// `codex login` — Relay forwards CLAUDE_CONFIG_DIR / CODEX_HOME so the
+// cached session just works, no API key env var needed. api-key means
+// the user exports the key in their shell and the profile references
+// it by name via apiKeyEnvRef.
+type AuthMode = "cli-login" | "api-key";
+
 type DraftProfile = {
   id: string;
   displayName: string;
@@ -205,6 +213,7 @@ type DraftProfile = {
   apiKeyEnvRef: string;
   envRows: EnvRow[];
   presetId: string;
+  authMode: AuthMode;
 };
 
 const emptyDraft = (): DraftProfile => ({
@@ -215,6 +224,7 @@ const emptyDraft = (): DraftProfile => ({
   apiKeyEnvRef: "",
   envRows: [],
   presetId: "",
+  authMode: "api-key",
 });
 
 // Mirror of `isLikelySecretValue` from src/domain/provider-profile.ts so
@@ -256,6 +266,18 @@ type ProviderPreset = {
   envOverrides: Record<string, string>;
   models: string[];
   description: string;
+  /**
+   * Auth modes this provider supports. Order matters — the first entry
+   * is the default when the user picks the preset. Providers with only
+   * `api-key` hide the auth-mode selector.
+   */
+  supportedAuthModes: AuthMode[];
+  /**
+   * Shell command a user runs to authenticate via the provider's CLI
+   * flow (when {@link supportedAuthModes} includes `cli-login`). Shown
+   * as inline help, e.g. "Run `claude login` in a terminal first."
+   */
+  cliLoginCommand?: string;
 };
 
 // Known-good provider presets. Picking one auto-fills id, displayName,
@@ -272,7 +294,9 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
     apiKeyEnvRef: "ANTHROPIC_API_KEY",
     envOverrides: {},
     models: ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
-    description: "Direct Anthropic API",
+    description: "Claude Max / Pro / API",
+    supportedAuthModes: ["cli-login", "api-key"],
+    cliLoginCommand: "claude login",
   },
   {
     id: "openai",
@@ -281,7 +305,9 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
     apiKeyEnvRef: "OPENAI_API_KEY",
     envOverrides: {},
     models: ["gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4.1-mini", "o4-mini"],
-    description: "Direct OpenAI API",
+    description: "ChatGPT Plus / Team / API",
+    supportedAuthModes: ["cli-login", "api-key"],
+    cliLoginCommand: "codex login",
   },
   {
     id: "minimax",
@@ -291,6 +317,7 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
     envOverrides: { OPENAI_BASE_URL: "https://api.minimax.io/v1" },
     models: ["MiniMax-M2"],
     description: "OpenAI-compatible MiniMax endpoint",
+    supportedAuthModes: ["api-key"],
   },
   {
     id: "openrouter",
@@ -305,6 +332,7 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
       "deepseek/deepseek-chat",
     ],
     description: "Multi-model gateway",
+    supportedAuthModes: ["api-key"],
   },
   {
     id: "deepseek",
@@ -314,6 +342,7 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
     envOverrides: { OPENAI_BASE_URL: "https://api.deepseek.com/v1" },
     models: ["deepseek-chat", "deepseek-coder"],
     description: "OpenAI-compatible DeepSeek endpoint",
+    supportedAuthModes: ["api-key"],
   },
   {
     id: "groq",
@@ -323,6 +352,7 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
     envOverrides: { OPENAI_BASE_URL: "https://api.groq.com/openai/v1" },
     models: ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile"],
     description: "Fast Groq inference",
+    supportedAuthModes: ["api-key"],
   },
   {
     id: "together",
@@ -332,6 +362,7 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
     envOverrides: { OPENAI_BASE_URL: "https://api.together.xyz/v1" },
     models: ["Qwen/Qwen2.5-Coder-32B-Instruct", "meta-llama/Llama-3.3-70B-Instruct-Turbo"],
     description: "Together AI multi-model platform",
+    supportedAuthModes: ["api-key"],
   },
   {
     id: "litellm",
@@ -341,6 +372,7 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
     envOverrides: { OPENAI_BASE_URL: "http://localhost:4000" },
     models: [],
     description: "LiteLLM proxy on localhost",
+    supportedAuthModes: ["api-key"],
   },
 ];
 
@@ -441,6 +473,7 @@ function applyPresetToDraft(preset: ProviderPreset, existingId: string): DraftPr
   // to the preset's own id when the draft is blank or the user picked the
   // same preset twice.
   const nextId = existingId && existingId !== preset.id ? existingId : preset.id;
+  const defaultAuthMode = preset.supportedAuthModes[0];
   return {
     id: nextId,
     displayName: preset.displayName,
@@ -449,7 +482,80 @@ function applyPresetToDraft(preset: ProviderPreset, existingId: string): DraftPr
     apiKeyEnvRef: preset.apiKeyEnvRef,
     envRows: Object.entries(preset.envOverrides).map(([key, value]) => ({ key, value })),
     presetId: preset.id,
+    authMode: defaultAuthMode,
   };
+}
+
+function AuthSection({
+  draft,
+  onChange,
+}: {
+  draft: DraftProfile;
+  onChange: (next: DraftProfile) => void;
+}) {
+  const preset = PROVIDER_PRESETS.find((p) => p.id === draft.presetId);
+  const modes = preset?.supportedAuthModes ?? ["cli-login", "api-key"];
+  const showSelector = modes.length > 1;
+
+  return (
+    <>
+      {showSelector && (
+        <div className="provider-form-row">
+          <label className="provider-form-field">
+            <span>Authentication</span>
+            <select
+              value={draft.authMode}
+              onChange={(e) =>
+                onChange({
+                  ...draft,
+                  authMode: e.target.value as AuthMode,
+                  // Entering api-key mode with a blank ref? Prefill from
+                  // the preset so the user sees what to type.
+                  apiKeyEnvRef:
+                    e.target.value === "api-key" && !draft.apiKeyEnvRef && preset
+                      ? preset.apiKeyEnvRef
+                      : draft.apiKeyEnvRef,
+                })
+              }
+            >
+              <option value="cli-login">Subscription / CLI login (no API key)</option>
+              <option value="api-key">API key from env var</option>
+            </select>
+          </label>
+        </div>
+      )}
+
+      {draft.authMode === "cli-login" && preset?.cliLoginCommand && (
+        <div className="provider-form-row">
+          <div className="provider-form-field provider-form-field-full">
+            <span>Login command</span>
+            <small className="provider-form-hint">
+              Relay will use your existing {preset.displayName} login. Run{" "}
+              <code>{preset.cliLoginCommand}</code> in a terminal once to cache the credentials; the{" "}
+              {preset.adapter} CLI picks them up automatically on every dispatch.
+            </small>
+          </div>
+        </div>
+      )}
+
+      {draft.authMode === "api-key" && (
+        <div className="provider-form-row">
+          <label className="provider-form-field">
+            <span>API key env var</span>
+            <input
+              value={draft.apiKeyEnvRef}
+              onChange={(e) => onChange({ ...draft, apiKeyEnvRef: e.target.value })}
+              placeholder="e.g. MINIMAX_API_KEY"
+            />
+            <small className="provider-form-hint">
+              Relay reads the secret from this env var in your shell at dispatch time. The key value
+              itself is never persisted in the profile.
+            </small>
+          </label>
+        </div>
+      )}
+    </>
+  );
 }
 
 function ProvidersSection() {
@@ -507,7 +613,12 @@ function ProvidersSection() {
       displayName: draft.displayName.trim(),
       adapter: draft.adapter,
       envOverrides,
-      apiKeyEnvRef: draft.apiKeyEnvRef.trim() || undefined,
+      // cli-login mode intentionally drops any leftover apiKeyEnvRef so
+      // the saved profile reflects "no env-var auth needed" rather than
+      // pointing at a stale env var the dispatch path would try to pass
+      // through.
+      apiKeyEnvRef:
+        draft.authMode === "cli-login" ? undefined : draft.apiKeyEnvRef.trim() || undefined,
       defaultModel: draft.defaultModel.trim() || undefined,
       createdAt: now,
       updatedAt: now,
@@ -593,7 +704,7 @@ function ProvidersSection() {
                 <th style={{ padding: "6px 8px" }}>Name</th>
                 <th style={{ padding: "6px 8px" }}>Adapter</th>
                 <th style={{ padding: "6px 8px" }}>Model</th>
-                <th style={{ padding: "6px 8px" }}>Key env var</th>
+                <th style={{ padding: "6px 8px" }}>Auth</th>
                 <th style={{ padding: "6px 8px" }}></th>
               </tr>
             </thead>
@@ -620,10 +731,11 @@ function ProvidersSection() {
                   <td
                     style={{
                       padding: "6px 8px",
-                      fontFamily: "var(--font-mono)",
+                      fontFamily: p.apiKeyEnvRef ? "var(--font-mono)" : "inherit",
+                      color: p.apiKeyEnvRef ? "inherit" : "var(--color-text-muted)",
                     }}
                   >
-                    {p.apiKeyEnvRef ?? "—"}
+                    {p.apiKeyEnvRef ?? "CLI login"}
                   </td>
                   <td style={{ padding: "6px 8px", textAlign: "right" }}>
                     {defaultId !== p.id && (
@@ -712,20 +824,7 @@ function ProvidersSection() {
             <ModelField draft={draft} onChange={setDraft} />
           </div>
 
-          <div className="provider-form-row">
-            <label className="provider-form-field">
-              <span>API key env var</span>
-              <input
-                value={draft.apiKeyEnvRef}
-                onChange={(e) => setDraft({ ...draft, apiKeyEnvRef: e.target.value })}
-                placeholder="e.g. MINIMAX_API_KEY"
-              />
-              <small className="provider-form-hint">
-                Relay reads the secret from this env var at dispatch time. It is never persisted in
-                the profile.
-              </small>
-            </label>
-          </div>
+          <AuthSection draft={draft} onChange={setDraft} />
 
           <div className="provider-form-row">
             <div className="provider-form-field provider-form-field-full">
