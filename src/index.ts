@@ -201,6 +201,11 @@ export async function main(): Promise<void> {
     return;
   }
 
+  if (command === "sweep-worktrees") {
+    await handleSweepWorktreesCommand(args);
+    return;
+  }
+
   if (command === "approve" || command === "reject") {
     // Route to the AL-7/AL-8 approvals queue when:
     //   - positional is `next` / `all` (approve only); OR
@@ -1172,6 +1177,131 @@ async function handlePrStatusCommand(args: string[] = []): Promise<void> {
       `  ${t.ticketId.padEnd(18)} ${label.padEnd(36)} ${state.padEnd(9)} ${ci.padEnd(9)} ${review}`
     );
   }
+}
+
+/**
+ * `rly sweep-worktrees [--session <id>] [--older-than <hours>] [--json]` —
+ * AL-14 follow-up crash-recovery CLI. Walks the channel ticket board(s),
+ * finds `verifying` tickets whose PRs have merged, and destroys the
+ * orphaned worktrees + transitions the tickets to `completed`.
+ *
+ * Defaults match the AL-14 contract: all sessions, 24h grace window,
+ * destructive mode. Pass `--json` for a dry-run that prints the candidate
+ * list without destroying anything.
+ *
+ * Flag semantics:
+ *  - `--session <id>` narrows the sweep to the channel a given session
+ *    was scoped to. When omitted, the sweep covers every channel
+ *    visible in `~/.relay/channels/`.
+ *  - `--older-than <hours>` overrides the default 24h grace window.
+ *    `0` sweeps everything eligible (useful for "clean up right now"
+ *    post-mortem workflows).
+ *  - `--json` flips the command into dry-run mode AND switches output
+ *    to a machine-readable JSON dump of the candidate list. Operators
+ *    running from cron can diff the output to decide whether to re-run
+ *    without `--json`.
+ */
+async function handleSweepWorktreesCommand(args: string[] = []): Promise<void> {
+  const { sweepAbandonedWorktrees, DEFAULT_SWEEP_OLDER_THAN_HOURS } =
+    await import("./orchestrator/worktree-sweep.js");
+  const { WorkerSpawner } = await import("./orchestrator/worker-spawner.js");
+
+  const dryRun = args.includes("--json");
+  const sessionId = parseNamedArg(args, "--session");
+  const olderThanRaw = parseNamedArg(args, "--older-than");
+  const olderThanHours =
+    olderThanRaw !== undefined ? Number(olderThanRaw) : DEFAULT_SWEEP_OLDER_THAN_HOURS;
+  if (!Number.isFinite(olderThanHours) || olderThanHours < 0) {
+    console.error(`Invalid --older-than value: ${olderThanRaw} (expected non-negative hours).`);
+    process.exitCode = 1;
+    return;
+  }
+
+  // `--session <id>` filters by session, but sweep operates on channels.
+  // Resolve the session's channel-id by reading the session's lifecycle
+  // metadata; fall back to treating the value as a raw channel id for
+  // operators who pass one through without thinking. Missing session
+  // files resolve to "no channel" → the sweep covers nothing.
+  let channelId: string | null = null;
+  if (sessionId) {
+    channelId = await resolveChannelIdForSession(sessionId);
+    if (!channelId) {
+      console.error(
+        `Could not resolve a channel for session ${sessionId}. If you meant to pass a channel id directly, omit --session.`
+      );
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  const channelStore = new ChannelStore(undefined, getHarnessStore());
+  const spawner = new WorkerSpawner();
+
+  try {
+    const result = await sweepAbandonedWorktrees({
+      channelStore,
+      spawner,
+      channelId,
+      olderThanHours,
+      dryRun,
+    });
+
+    if (args.includes("--json")) {
+      jsonOut({
+        dryRun: true,
+        olderThanHours,
+        channelId,
+        ...result,
+      });
+      return;
+    }
+
+    if (result.considered === 0) {
+      console.log("No verifying tickets found. Nothing to sweep.");
+      return;
+    }
+
+    console.log(
+      `Worktree sweep: considered=${result.considered} destroyed=${result.destroyed} preserved=${result.preserved} skipped=${result.skipped} errored=${result.errored}`
+    );
+    for (const c of result.candidates) {
+      const url = c.prUrl ?? "(no PR URL)";
+      const path = c.worktreePath ?? "(no worktree)";
+      const state = c.prState ?? "unknown";
+      console.log(
+        `  [${c.action.padEnd(9)}] ${c.ticketId} pr=${state} ${url} wt=${path} — ${c.reason}`
+      );
+    }
+  } catch (err) {
+    console.error(`sweep-worktrees failed: ${err instanceof Error ? err.message : String(err)}`);
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * Map a sessionId back to its channel id. Sessions write a small
+ * session.json stub at `~/.relay/sessions/<id>/session.json` including
+ * the `channelId` they were started against. Returns `null` when the
+ * session is unknown.
+ */
+async function resolveChannelIdForSession(sessionId: string): Promise<string | null> {
+  const { readFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const { getRelayDir } = await import("./cli/paths.js");
+  const candidates = [
+    join(getRelayDir(), "sessions", sessionId, "session.json"),
+    join(getRelayDir(), "sessions", sessionId, "lifecycle.json"),
+  ];
+  for (const candidate of candidates) {
+    try {
+      const raw = await readFile(candidate, "utf8");
+      const parsed = JSON.parse(raw) as { channelId?: string };
+      if (parsed?.channelId) return parsed.channelId;
+    } catch {
+      // try next candidate
+    }
+  }
+  return null;
 }
 
 /**
@@ -2566,6 +2696,7 @@ async function printTopLevelHelp(): Promise<void> {
     "PR tracking:",
     "  pr-watch <pr>            Manually track a GitHub PR",
     "  pr-status                List tracked PRs with CI + review state",
+    "  sweep-worktrees          Clean up orphaned worktrees whose PRs have merged",
     "",
     "Workspace:",
     "  up                       Register the current repo as a workspace",
