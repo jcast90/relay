@@ -18,9 +18,17 @@ type Props = {
   onSelectSession: (sessionId: string | null) => void;
   refreshTick: number;
   onRefresh: () => void;
+  onClose?: () => void;
 };
 
-export function RightPane({ channel, sessionId, onSelectSession, refreshTick, onRefresh }: Props) {
+export function RightPane({
+  channel,
+  sessionId,
+  onSelectSession,
+  refreshTick,
+  onRefresh,
+  onClose,
+}: Props) {
   const [tab, setTab] = useState<Tab>("threads");
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [prs, setPrs] = useState<TrackedPrRow[]>([]);
@@ -98,6 +106,17 @@ export function RightPane({ channel, sessionId, onSelectSession, refreshTick, on
             {counts[t] > 0 && <span className="tab-count">{counts[t]}</span>}
           </button>
         ))}
+        {onClose && (
+          <button
+            type="button"
+            className="rail-close"
+            onClick={onClose}
+            title="Close right rail"
+            aria-label="Close right rail"
+          >
+            ×
+          </button>
+        )}
       </div>
       <div className="rail-scroll">
         {tab === "threads" && (

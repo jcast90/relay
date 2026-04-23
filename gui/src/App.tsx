@@ -143,6 +143,7 @@ export function App() {
               onSelectSession={setSessionId}
               refreshTick={refreshTick}
               onRefresh={refresh}
+              onClose={() => setRightRailOpen(false)}
             />
           )}
           {!rightRailOpen && <div />}
