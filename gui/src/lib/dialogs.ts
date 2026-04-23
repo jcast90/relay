@@ -17,10 +17,7 @@ export async function confirmAction(
   });
 }
 
-export async function notifyError(
-  messageText: string,
-  opts?: { title?: string }
-): Promise<void> {
+export async function notifyError(messageText: string, opts?: { title?: string }): Promise<void> {
   await message(messageText, {
     title: opts?.title ?? "Error",
     kind: "error",

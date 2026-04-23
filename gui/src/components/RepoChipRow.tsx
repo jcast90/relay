@@ -273,11 +273,15 @@ function AddRepoPopover({
         <button type="button" onClick={onClose} disabled={busy}>
           Cancel
         </button>
-        <button type="button" className="primary" onClick={attach} disabled={busy || picked.size === 0}>
+        <button
+          type="button"
+          className="primary"
+          onClick={attach}
+          disabled={busy || picked.size === 0}
+        >
           {busy ? "Attaching…" : picked.size > 1 ? `Attach ${picked.size} repos` : "Attach repo"}
         </button>
       </div>
     </div>
   );
 }
-

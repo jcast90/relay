@@ -263,4 +263,3 @@ export function CenterPane({
     </div>
   );
 }
-

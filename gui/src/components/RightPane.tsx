@@ -421,10 +421,12 @@ function PrsTab({
                 )}
                 <div className="rail-pr-footer">
                   <span className={`rail-pr-chip pr-ci-${r.ci ?? "unknown"}`}>
-                    <span className="chip-dot" />CI {ciLabel}
+                    <span className="chip-dot" />
+                    CI {ciLabel}
                   </span>
                   <span className={`rail-pr-chip pr-review-${r.review ?? "unknown"}`}>
-                    <span className="chip-dot" />review {reviewLabel}
+                    <span className="chip-dot" />
+                    review {reviewLabel}
                   </span>
                   {r.prState && (
                     <span className={`rail-pr-chip pr-state-${r.prState}`}>

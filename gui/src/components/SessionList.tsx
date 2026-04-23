@@ -50,9 +50,7 @@ export function SessionList({ channelId, selectedSessionId, onSelect, refreshTic
         </button>
       </div>
       {sessions.length === 0 && (
-        <div className="rail-empty">
-          No sessions yet — send a message to start one.
-        </div>
+        <div className="rail-empty">No sessions yet — send a message to start one.</div>
       )}
       <div className="rail-session-body">
         {selectedSessionId && (

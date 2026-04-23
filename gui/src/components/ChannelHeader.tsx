@@ -105,7 +105,15 @@ export function ChannelHeader({
           aria-pressed={rightRailOpen}
         >
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
-            <rect x="2" y="3" width="10" height="8" rx="1" stroke="currentColor" strokeWidth="1.3" />
+            <rect
+              x="2"
+              y="3"
+              width="10"
+              height="8"
+              rx="1"
+              stroke="currentColor"
+              strokeWidth="1.3"
+            />
             <path d="M9 3v8" stroke="currentColor" strokeWidth="1.3" />
           </svg>
         </button>
