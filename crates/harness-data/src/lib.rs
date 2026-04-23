@@ -481,7 +481,29 @@ fn channel_json_path(channel_id: &str) -> PathBuf {
 }
 
 pub fn load_channel(channel_id: &str) -> Option<Channel> {
-    load_json::<Channel>(&channel_json_path(channel_id))
+    load_json::<Channel>(&channel_json_path(channel_id)).map(migrate_channel)
+}
+
+/// In-memory migration for legacy channel JSON. Historically the
+/// "discovered" workspace code path wrote repo assignments as
+/// `discovered:<alias>` — that ':' is now reserved as the `--repos` CLI
+/// delimiter, and the GUI validator correctly rejects it. Strip the
+/// prefix on load so round-trip mutations (detach, attach, set-primary)
+/// stop tripping on stale data. Also drops repo assignments whose
+/// resulting workspaceId would still be empty or invalid.
+fn migrate_channel(mut ch: Channel) -> Channel {
+    ch.repo_assignments.retain_mut(|r| {
+        if let Some(rest) = r.workspace_id.strip_prefix("discovered:") {
+            r.workspace_id = rest.to_string();
+        }
+        !r.workspace_id.is_empty() && !r.workspace_id.contains(':')
+    });
+    if let Some(ref prim) = ch.primary_workspace_id {
+        if let Some(rest) = prim.strip_prefix("discovered:") {
+            ch.primary_workspace_id = Some(rest.to_string());
+        }
+    }
+    ch
 }
 
 /// Atomic write of a Channel record. Stamps `updated_at` to now before
@@ -513,7 +535,7 @@ pub fn load_channels_with_status(include_archived: bool) -> Vec<Channel> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "json") {
-                if let Some(ch) = load_json::<Channel>(&path) {
+                if let Some(ch) = load_json::<Channel>(&path).map(migrate_channel) {
                     if include_archived || ch.status == "active" {
                         channels.push(ch);
                     }

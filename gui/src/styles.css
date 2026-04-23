@@ -463,7 +463,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   display: flex;
   align-items: center;
   gap: var(--space-5);
-  padding: var(--space-5) var(--space-8) var(--space-4);
+  padding: var(--space-6) var(--space-10) var(--space-3);
   min-height: 44px;
 }
 .channel-header-name {
@@ -570,7 +570,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .channel-header-row2 {
   display: flex;
   align-items: flex-end;
-  padding: 0 var(--space-8);
+  padding: 0 var(--space-10);
   gap: var(--space-2);
 }
 .channel-tabs {
@@ -838,7 +838,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   background: var(--color-paper-base);
 }
 .dm-header {
-  padding: var(--space-6) var(--space-8);
+  padding: var(--space-6) var(--space-10);
   display: flex;
   align-items: center;
   gap: var(--space-6);
@@ -899,7 +899,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .dm-promote-btn:hover { background: #d24b41; }
 
 .dm-banner {
-  padding: var(--space-4) var(--space-8);
+  padding: var(--space-4) var(--space-10);
   background: var(--color-paper-alt);
   border-top: 1px solid var(--color-paper-line);
   font-size: 12px;
@@ -927,7 +927,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .chat-scroll {
   flex: 1;
   overflow-y: auto;
-  padding: var(--space-6) var(--space-8);
+  padding: var(--space-8) var(--space-10) var(--space-6);
   min-height: 0;
 }
 .chat-scroll.board, .chat-scroll.decisions { padding: var(--space-6) var(--space-8); }
@@ -1076,7 +1076,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 /* ── Composer ─────────────────────────────────────────────── */
 
 .composer {
-  padding: var(--space-5) var(--space-8) var(--space-8);
+  padding: var(--space-4) var(--space-10) var(--space-8);
   background: var(--color-paper-base);
   flex-shrink: 0;
   display: flex;
@@ -1092,7 +1092,11 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   border-radius: var(--radius-xl);
   background: #fff;
   transition: border-color 0.15s ease;
-  overflow: hidden;
+}
+/* Keep the inner textarea corner clipping without clipping the mention
+ * popover, which is a descendant but positioned OUTSIDE the box. */
+.composer-textarea {
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
 }
 .composer-box:focus-within {
   border-color: var(--color-accent-coral);
@@ -1103,9 +1107,9 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   outline: none;
   background: transparent;
   resize: none;
-  min-height: 52px;
+  min-height: 44px;
   max-height: 240px;
-  padding: var(--space-6) var(--space-7) var(--space-4);
+  padding: var(--space-5) var(--space-6) var(--space-4);
   font: inherit;
   font-size: var(--font-size-body);
   line-height: var(--line-normal);
@@ -1117,7 +1121,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-3) var(--space-5);
+  padding: var(--space-3) var(--space-4);
   border-top: 1px solid var(--color-paper-line);
   background: transparent;
 }
@@ -1434,7 +1438,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .rail-scroll {
   flex: 1;
   overflow-y: auto;
-  padding: var(--space-5) var(--space-5);
+  padding: var(--space-6) var(--space-5);
 }
 
 .rail-section-title {
@@ -1794,11 +1798,11 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 }
 .modal-header .close-btn:hover { color: var(--color-text-primary); }
 .modal-body {
-  padding: var(--space-8);
+  padding: var(--space-8) var(--space-10);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: var(--space-6);
   flex: 1;
   font-size: var(--font-size-base);
 }

@@ -210,29 +210,31 @@ export function Composer({
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (mention && filteredAliases.length > 0) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setMention({ ...mention, index: (mention.index + 1) % filteredAliases.length });
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setMention({
-          ...mention,
-          index: (mention.index - 1 + filteredAliases.length) % filteredAliases.length,
-        });
-        return;
-      }
-      if (e.key === "Enter" || e.key === "Tab") {
-        e.preventDefault();
-        applyMention(filteredAliases[mention.index]);
-        return;
-      }
+    if (mention) {
       if (e.key === "Escape") {
         e.preventDefault();
         setMention(null);
         return;
+      }
+      if (filteredAliases.length > 0) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setMention({ ...mention, index: (mention.index + 1) % filteredAliases.length });
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setMention({
+            ...mention,
+            index: (mention.index - 1 + filteredAliases.length) % filteredAliases.length,
+          });
+          return;
+        }
+        if (e.key === "Enter" || e.key === "Tab") {
+          e.preventDefault();
+          applyMention(filteredAliases[mention.index]);
+          return;
+        }
       }
     }
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -247,7 +249,10 @@ export function Composer({
   };
 
   const disabled = busy || streaming;
-  const showMentions = !!mention && (filteredAliases.length > 0 || !!attachCandidate);
+  // Show the popover whenever `@` has been typed, even if no repos are
+  // attached or the query matches nothing — the popover always includes the
+  // humans section (@jcast, @channel) so it's never truly empty.
+  const showMentions = !!mention;
 
   // Scan the drafted text for @alias mentions of registered-but-unattached
   // workspaces. The user can still send — we just surface a heads-up that
