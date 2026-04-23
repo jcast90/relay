@@ -63,7 +63,10 @@ async function withToolState(
       channelId: channel.channelId,
     });
     try {
-      await body({ alias: aliases[0] ?? null, coordinator }, { dir, channelId: channel.channelId });
+      await body(
+        { alias: aliases[0] ?? null, coordinator, sessionId: null },
+        { dir, channelId: channel.channelId }
+      );
     } finally {
       await coordinator.close();
     }
@@ -86,13 +89,14 @@ describe("coordination_send MCP tool", () => {
       description: string;
       inputSchema: { required: string[]; properties: { to: unknown; payload: unknown } };
     }>;
-    expect(defs).toHaveLength(1);
+    expect(defs).toHaveLength(2);
     expect(defs[0].name).toBe("coordination_send");
     expect(defs[0].inputSchema.required).toEqual(["to", "payload"]);
+    expect(defs[1].name).toBe("coordination_receive");
   });
 
   it("returns session-not-repo-admin when alias is null", async () => {
-    const state: CoordinationToolState = { alias: null, coordinator: null };
+    const state: CoordinationToolState = { alias: null, coordinator: null, sessionId: null };
     const result = (await callCoordinationTool(
       "coordination_send",
       { to: "frontend", payload: { kind: "repo-ready" } },
@@ -103,7 +107,7 @@ describe("coordination_send MCP tool", () => {
   });
 
   it("returns coordinator-not-configured when the coordinator is absent", async () => {
-    const state: CoordinationToolState = { alias: "backend", coordinator: null };
+    const state: CoordinationToolState = { alias: "backend", coordinator: null, sessionId: null };
     const result = (await callCoordinationTool(
       "coordination_send",
       { to: "frontend", payload: { kind: "repo-ready" } },

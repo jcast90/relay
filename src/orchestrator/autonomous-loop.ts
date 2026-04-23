@@ -4,6 +4,7 @@ import type { Channel, RepoAssignment } from "../domain/channel.js";
 import type { TicketLedgerEntry } from "../domain/ticket.js";
 import { ChannelStore } from "../channels/channel-store.js";
 import { Coordinator } from "../crosslink/coordinator.js";
+import { IpcBridge } from "../crosslink/ipc-bridge.js";
 import type { PrMergedEvent, PrPoller } from "../integrations/pr-poller.js";
 import { runPostCompletionAudit, type AuditInvoker, type AuditRunResult } from "./audit-agent.js";
 import { RepoAdminPool, isRepoAdminPoolEnabled } from "./repo-admin-pool.js";
@@ -473,6 +474,35 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
     }
   }
 
+  // AL-16 IPC follow-up: tails each admin's outbox file and routes
+  // messages through the live Coordinator. Necessary because each
+  // repo-admin MCP server runs as a Claude-CLI child process that
+  // can't share a heap with this Coordinator instance. Tests inject
+  // rootDir via testOverrides so outbox/inbox paths land under a
+  // tmpdir instead of ~/.relay.
+  const bridge =
+    coordinator && pool
+      ? new IpcBridge({
+          sessionId,
+          coordinator,
+          rootDir: testOverrides?.rootDir,
+        })
+      : null;
+  if (bridge && pool) {
+    for (const admin of pool.listSessions()) {
+      bridge.registerAlias(admin.alias);
+    }
+    try {
+      await bridge.start();
+    } catch (err) {
+      console.warn(
+        `[autonomous-loop] IPC bridge failed to start: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+  }
+
   // AL-7 integration anchor. When AL-5 (PR reviewer) and AL-6 (audit agent)
   // land their driver hooks, each of their ack-requiring outputs must be
   // threaded through `decide({trust: opts.trust, ...})` from
@@ -827,6 +857,33 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
         err instanceof Error ? err.message : String(err)
       }`
     );
+  }
+
+  // AL-16 IPC: stop the bridge BEFORE closing the coordinator. In-flight
+  // messages already appended to the outbox need one last drain so they
+  // hit the coordinator while it's still live; new writes after stop()
+  // sit in the outbox until the NEXT autonomous run (which seeds its
+  // cursor past them on start, i.e. they're dropped — acceptable for a
+  // session that's already terminating).
+  if (bridge) {
+    try {
+      await bridge.drainOnce();
+    } catch (err) {
+      console.warn(
+        `[autonomous-loop] final IPC drain failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+    try {
+      await bridge.stop();
+    } catch (err) {
+      console.warn(
+        `[autonomous-loop] IPC bridge stop failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
   }
 
   // AL-16: close the coordinator BEFORE stopping the pool. Order
