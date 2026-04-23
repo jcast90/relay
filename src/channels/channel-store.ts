@@ -192,6 +192,7 @@ export class ChannelStore {
         | "starred"
         | "kind"
         | "sectionId"
+        | "providerProfileId"
       >
     >
   ): Promise<Channel | null> {
@@ -328,6 +329,63 @@ export class ChannelStore {
       rationale: `Agent subprocesses dispatched for this channel will ${
         next ? "run with" : "no longer receive"
       } --dangerously-skip-permissions (Claude) / --sandbox workspace-write --ask-for-approval never (Codex).`,
+      alternatives: [],
+      decidedBy,
+      decidedByName,
+      linkedArtifacts: [],
+    });
+
+    return updated;
+  }
+
+  /**
+   * Bind (or clear) the provider-profile reference on a channel. Mirrors
+   * the `setFullAccess` pattern: atomic write of the channel manifest,
+   * followed by a decision entry so the audit trail captures every
+   * invocation (including no-op re-binds to the same profile).
+   *
+   * Pass `null` to clear the binding and fall back to the dispatcher's
+   * default resolution chain (explicit default profile → `HARNESS_PROVIDER`).
+   * The profile id itself is NOT validated here — the CLI is expected to
+   * confirm it exists before calling; the store accepts whatever id the
+   * caller passes so the interface stays backend-agnostic (PR 1 owns the
+   * referential-integrity check).
+   */
+  async setProviderProfileId(
+    channelId: string,
+    profileId: string | null,
+    actor?: { id?: string; name?: string; source?: string }
+  ): Promise<Channel | null> {
+    assertSafeSegment(channelId, "channelId");
+    const existing = await this.getChannel(channelId);
+    if (!existing) return null;
+
+    const previous = existing.providerProfileId ?? null;
+    const next = profileId;
+
+    const updated: Channel = {
+      ...existing,
+      providerProfileId: next ?? undefined,
+      updatedAt: new Date().toISOString(),
+    };
+    await this.writeChannel(updated);
+
+    const decidedBy = actor?.id ?? "user";
+    const decidedByName = actor?.name ?? "User";
+    const label = next ?? "(none — inherit default)";
+    await this.recordDecision(channelId, {
+      runId: null,
+      ticketId: null,
+      title: `Provider profile set to ${label}`,
+      description:
+        `Channel ${channelId} providerProfileId set to ${next ?? "null"} ` +
+        `(previous: ${previous ?? "null"}).`,
+      rationale:
+        next !== null
+          ? `Agents dispatched for this channel will use profile '${next}' ` +
+            `instead of the process-wide HARNESS_PROVIDER default.`
+          : `Agents dispatched for this channel will fall back to the explicit ` +
+            `default profile (if any) or HARNESS_PROVIDER.`,
       alternatives: [],
       decidedBy,
       decidedByName,

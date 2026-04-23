@@ -90,6 +90,22 @@ interface AgentFactoryOptions {
    * have full-access on and the restricted role on at the same time.
    */
   role?: AgentRoleName;
+  /**
+   * Provider-profile env overlay merged into every spawned agent's
+   * subprocess env. Overrides same-named values from the parent shell so
+   * a channel bound to a non-default profile can flip `ANTHROPIC_BASE_URL`
+   * / `OPENAI_BASE_URL` / `ANTHROPIC_MODEL` / `HARNESS_AGENT_*_MODEL`
+   * without mutating the operator's global environment.
+   */
+  envOverlay?: Record<string, string>;
+  /**
+   * Extra env-var names appended to each adapter's default pass-env list.
+   * Used to forward the profile's `apiKeyEnvRef` so the CLI subprocess
+   * can read its own auth token. Relay never dereferences the secret —
+   * the name just gets added to the allowlist the invoker copies from
+   * `process.env`.
+   */
+  extraPassEnv?: string[];
 }
 
 export function createLiveAgents(options: AgentFactoryOptions): Agent[] {
@@ -119,6 +135,8 @@ export function createLiveAgents(options: AgentFactoryOptions): Agent[] {
       onStreamLine,
       fullAccess: options.fullAccess,
       role: options.role,
+      envOverlay: options.envOverlay,
+      extraPassEnv: options.extraPassEnv,
     });
   });
 }
