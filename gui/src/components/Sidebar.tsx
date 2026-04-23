@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import { notifyError } from "../lib/dialogs";
-import type { Channel } from "../types";
+import { confirmAction, notifyError } from "../lib/dialogs";
+import type { Channel, Section } from "../types";
 
 type Props = {
   channels: Channel[];
@@ -44,8 +44,10 @@ export function Sidebar({
   onRefresh,
 }: Props) {
   const [starredOpen, setStarredOpen] = useState(true);
-  const [channelsOpen, setChannelsOpen] = useState(true);
   const [dmsOpen, setDmsOpen] = useState(true);
+  const [uncategorizedOpen, setUncategorizedOpen] = useState(true);
+  const [sectionOpen, setSectionOpen] = useState<Record<string, boolean>>({});
+  const [sections, setSections] = useState<Section[]>([]);
   const [workspaceCount, setWorkspaceCount] = useState<number>(0);
 
   useEffect(() => {
@@ -55,12 +57,93 @@ export function Sidebar({
       .catch(() => setWorkspaceCount(0));
   }, []);
 
+  const refreshSections = () =>
+    api
+      .listSections()
+      .then(setSections)
+      .catch(() => setSections([]));
+
+  useEffect(() => {
+    refreshSections();
+  }, [channels]);
+
+  const isSectionOpen = (id: string) => sectionOpen[id] !== false;
+  const toggleSectionOpen = (id: string) =>
+    setSectionOpen((prev) => ({ ...prev, [id]: !isSectionOpen(id) }));
+
+  const newSection = async () => {
+    const name = window.prompt("Section name");
+    if (!name?.trim()) return;
+    try {
+      await api.createSection(name.trim());
+      await refreshSections();
+    } catch (err) {
+      await notifyError(`Failed to create section: ${err}`);
+    }
+  };
+
+  const renameSection = async (section: Section) => {
+    const name = window.prompt("Rename section", section.name);
+    if (!name?.trim() || name.trim() === section.name) return;
+    try {
+      await api.renameSection(section.sectionId, name.trim());
+      await refreshSections();
+    } catch (err) {
+      await notifyError(`Rename failed: ${err}`);
+    }
+  };
+
+  const decommissionSection = async (section: Section) => {
+    const ok = await confirmAction(
+      `Decommission "${section.name}"? Its channels will move to Uncategorized. You can restore it later.`,
+      { title: "Decommission section" }
+    );
+    if (!ok) return;
+    try {
+      await api.decommissionSection(section.sectionId);
+      await refreshSections();
+      onRefresh();
+    } catch (err) {
+      await notifyError(`Decommission failed: ${err}`);
+    }
+  };
+
+  const deleteSection = async (section: Section) => {
+    const ok = await confirmAction(
+      `Delete "${section.name}" permanently? Only works if no channel is still in this section.`,
+      { title: "Delete section", kind: "warning" }
+    );
+    if (!ok) return;
+    try {
+      await api.deleteSection(section.sectionId);
+      await refreshSections();
+    } catch (err) {
+      await notifyError(`Delete failed: ${err}`);
+    }
+  };
+
   const sorted = useMemo(() => sortByActivity(channels), [channels]);
   const isDm = (c: Channel) => c.kind === "dm";
   const starred = sorted.filter((c) => c.starred && c.status === "active" && !isDm(c));
   const active = sorted.filter((c) => !c.starred && c.status === "active" && !isDm(c));
   const dms = sorted.filter((c) => c.status === "active" && isDm(c));
   const archived = sorted.filter((c) => c.status === "archived");
+
+  // Bucket active channels by section. Channels whose sectionId doesn't
+  // resolve to an active section land in Uncategorized — matches the
+  // Rust-side migration + decommission behavior.
+  const activeSectionIds = new Set(sections.map((s) => s.sectionId));
+  const grouped = new Map<string, Channel[]>();
+  const uncategorized: Channel[] = [];
+  for (const c of active) {
+    if (c.sectionId && activeSectionIds.has(c.sectionId)) {
+      const arr = grouped.get(c.sectionId) ?? [];
+      arr.push(c);
+      grouped.set(c.sectionId, arr);
+    } else {
+      uncategorized.push(c);
+    }
+  }
 
   // Activity = channels touched in the last hour. Cheap signal that matches
   // the design's "fresh since you last looked" read.
@@ -154,16 +237,55 @@ export function Sidebar({
           </SidebarSection>
         )}
 
+        {sections.map((s) => {
+          const members = grouped.get(s.sectionId) ?? [];
+          return (
+            <SidebarSection
+              key={s.sectionId}
+              title={s.name}
+              count={members.length}
+              collapsed={!isSectionOpen(s.sectionId)}
+              onToggle={() => toggleSectionOpen(s.sectionId)}
+              onAdd={onNewChannel}
+              addTitle={`New channel in ${s.name}`}
+              menu={{
+                onRename: () => renameSection(s),
+                onDecommission: () => decommissionSection(s),
+                onDelete: members.length === 0 ? () => deleteSection(s) : undefined,
+                deleteDisabledHint:
+                  members.length > 0 ? "Move channels out first" : undefined,
+              }}
+            >
+              {members.length === 0 && (
+                <div className="sidebar-empty">No channels — press + to add one</div>
+              )}
+              {members.map((c) => (
+                <ChannelRow
+                  key={c.channelId}
+                  channel={c}
+                  active={c.channelId === selectedId}
+                  onSelect={() => onSelect(c.channelId)}
+                  onStarToggle={() => toggleStar(c)}
+                />
+              ))}
+            </SidebarSection>
+          );
+        })}
+
         <SidebarSection
-          title="Channels"
-          count={active.length}
-          collapsed={!channelsOpen}
-          onToggle={() => setChannelsOpen((v) => !v)}
+          title={sections.length === 0 ? "Channels" : "Uncategorized"}
+          count={uncategorized.length}
+          collapsed={!uncategorizedOpen}
+          onToggle={() => setUncategorizedOpen((v) => !v)}
           onAdd={onNewChannel}
           addTitle="New channel"
+          onHeaderPlus={sections.length === 0 ? newSection : undefined}
+          headerPlusTitle="New section"
         >
-          {active.length === 0 && <div className="sidebar-empty">No active channels</div>}
-          {active.map((c) => (
+          {uncategorized.length === 0 && sections.length === 0 && (
+            <div className="sidebar-empty">No active channels</div>
+          )}
+          {uncategorized.map((c) => (
             <ChannelRow
               key={c.channelId}
               channel={c}
@@ -173,6 +295,12 @@ export function Sidebar({
             />
           ))}
         </SidebarSection>
+
+        {sections.length > 0 && (
+          <button type="button" className="sidebar-new-section" onClick={newSection}>
+            + New section
+          </button>
+        )}
 
         <SidebarSection
           title="Direct messages"
@@ -246,6 +374,9 @@ function SidebarSection({
   onToggle,
   onAdd,
   addTitle,
+  onHeaderPlus,
+  headerPlusTitle,
+  menu,
   children,
 }: {
   title: string;
@@ -254,8 +385,25 @@ function SidebarSection({
   onToggle: () => void;
   onAdd?: () => void;
   addTitle?: string;
+  /** Extra `+` rendered alongside the section name — used for "New section"
+   * on the first uncategorized bucket when no real sections exist yet. */
+  onHeaderPlus?: () => void;
+  headerPlusTitle?: string;
+  menu?: {
+    onRename?: () => void;
+    onDecommission?: () => void;
+    onDelete?: () => void;
+    deleteDisabledHint?: string;
+  };
   children: React.ReactNode;
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = () => setMenuOpen(false);
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [menuOpen]);
   return (
     <section className="sidebar-section">
       <header className="sidebar-section-head">
@@ -271,6 +419,52 @@ function SidebarSection({
           {title}
           <span className="section-count"> · {count}</span>
         </span>
+        {onHeaderPlus && (
+          <button
+            className="section-add"
+            onClick={(e) => {
+              e.stopPropagation();
+              onHeaderPlus();
+            }}
+            title={headerPlusTitle}
+            aria-label={headerPlusTitle}
+          >
+            +
+          </button>
+        )}
+        {menu && (
+          <div className="section-menu-wrap" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="section-add"
+              onClick={() => setMenuOpen((v) => !v)}
+              title="Section actions"
+              aria-label="Section actions"
+            >
+              ⋯
+            </button>
+            {menuOpen && (
+              <div className="section-menu">
+                {menu.onRename && (
+                  <button onClick={menu.onRename}>Rename</button>
+                )}
+                {menu.onDecommission && (
+                  <button onClick={menu.onDecommission}>Decommission</button>
+                )}
+                <button
+                  onClick={menu.onDelete}
+                  disabled={!menu.onDelete}
+                  className="danger"
+                  title={menu.deleteDisabledHint}
+                >
+                  Delete
+                  {menu.deleteDisabledHint && !menu.onDelete && (
+                    <span className="menu-hint"> · {menu.deleteDisabledHint}</span>
+                  )}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         {onAdd && (
           <button
             className="section-add"
