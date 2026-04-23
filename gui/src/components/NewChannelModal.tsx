@@ -181,34 +181,67 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
     }
   };
 
+  const primaryAlias =
+    selectedRows.find((r) => r.workspace.workspaceId === primaryWorkspaceId)?.alias ?? "";
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          New channel
-          <button className="close-btn" onClick={onClose}>
+      <div className="modal modal-wizard" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header modal-header-wizard">
+          <span className="modal-hash" aria-hidden>#</span>
+          <div className="modal-header-text">
+            <div className="modal-title">New channel</div>
+            <div className="modal-subtitle">
+              Attach repos, set a primary, kick off with a first message.
+            </div>
+          </div>
+          <button className="close-btn" onClick={onClose} aria-label="Close">
             ×
           </button>
+        </div>
+        <div className="wizard-stepper">
+          {[
+            { n: 1, label: "Basics" },
+            { n: 2, label: "Repos" },
+            { n: 3, label: "Kick off" },
+          ].map((s, i, arr) => (
+            <div key={s.n} className="wizard-stepper-row">
+              <button
+                type="button"
+                className={`wizard-step-chip ${step === s.n ? "active" : ""} ${step > s.n ? "done" : ""}`}
+                onClick={() => {
+                  if (s.n < step || (s.n === 2 && canNextFromStep1) || s.n === step) setStep(s.n as Step);
+                }}
+              >
+                <span className="wizard-step-num">{step > s.n ? "✓" : s.n}</span>
+                <span className="wizard-step-label">{s.label}</span>
+              </button>
+              {i < arr.length - 1 && (
+                <div className={`wizard-step-connector ${step > s.n ? "done" : ""}`} />
+              )}
+            </div>
+          ))}
         </div>
         <div className="modal-body">
           {step === 1 && (
             <div className="wizard-step">
-              <h3>Basics</h3>
-              <p className="help">Give this channel a short name. Topic is optional.</p>
               <label>
                 Channel name
-                <input
-                  autoFocus
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="oauth-api-users"
-                />
-                {name && slug !== name && (
-                  <small style={{ color: "var(--color-text-dim)" }}>will be #{slug}</small>
-                )}
+                <div className="wizard-name-field">
+                  <span className="wizard-name-hash">#</span>
+                  <input
+                    autoFocus
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="oauth-api-users"
+                  />
+                </div>
+                <small style={{ color: "var(--color-text-dim)" }}>
+                  Lowercase, dashes for spaces. Shown as <code>#{slug || "your-channel"}</code>.
+                </small>
               </label>
               <label>
-                Topic
+                Topic (optional)
                 <input
                   value={topic}
                   onChange={(e) => setTopic(e.target.value)}
@@ -300,21 +333,53 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
 
           {step === 3 && (
             <div className="wizard-step">
-              <h3>Kick-off</h3>
               <p className="help">
-                This first message goes straight to the primary agent (@
-                {selectedRows.find((r) => r.workspace.workspaceId === primaryWorkspaceId)?.alias}).
-                The classifier assigns a tier and plans tickets.
+                First message goes straight to the primary agent{" "}
+                <strong style={{ color: "var(--color-accent-coral)", fontFamily: "var(--font-mono)" }}>
+                  @{primaryAlias}
+                </strong>
+                . Paste an issue URL, describe a feature, or ask a question — Relay classifies and
+                either plans tickets or answers directly.
               </p>
               <label>
-                First message (optional)
+                First message
                 <textarea
                   value={firstMessage}
                   onChange={(e) => setFirstMessage(e.target.value)}
-                  placeholder="Describe the work you want to kick off…"
+                  placeholder={`e.g. "Add OAuth2 to /api/users — github and google to start." or paste an issue URL…`}
                   rows={6}
                 />
               </label>
+              <div className="wizard-summary">
+                <div className="wizard-summary-title">Summary</div>
+                <div className="wizard-summary-row">
+                  Channel: <code>#{slug || "your-channel"}</code>
+                </div>
+                <div className="wizard-summary-row">
+                  Repos:{" "}
+                  {selectedRows.length === 0 ? (
+                    <em>none</em>
+                  ) : (
+                    selectedRows.map((r, i) => {
+                      const isPrimary = r.workspace.workspaceId === primaryWorkspaceId;
+                      return (
+                        <span key={r.workspace.workspaceId}>
+                          {i > 0 && ", "}
+                          <code
+                            style={{
+                              color: isPrimary
+                                ? "var(--color-accent-coral)"
+                                : "var(--color-text-primary)",
+                            }}
+                          >
+                            @{r.alias}
+                          </code>
+                        </span>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
             </div>
           )}
 
@@ -322,29 +387,33 @@ export function NewChannelModal({ open, onClose, onCreated }: Props) {
           {spawnWarning && <div className="warning">{spawnWarning}</div>}
         </div>
         <div className="modal-footer">
-          <div className="steps">
-            <span className={`step-dot ${step >= 1 ? "active" : ""}`} />
-            <span className={`step-dot ${step >= 2 ? "active" : ""}`} />
-            <span className={`step-dot ${step >= 3 ? "active" : ""}`} />
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {step > 1 && (
               <button onClick={() => setStep((s) => (s - 1) as Step)} disabled={busy}>
-                Back
+                ← Back
               </button>
             )}
+          </div>
+          <div className="wizard-footer-hint">
+            Also:{" "}
+            <code>
+              /new #{slug || "name"}{" "}
+              {selectedRows.map((r) => r.alias).join(",") || "repo1,repo2"}
+            </code>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
             {step < 3 && (
               <button
                 className="primary"
                 onClick={() => setStep((s) => (s + 1) as Step)}
                 disabled={(step === 1 && !canNextFromStep1) || (step === 2 && !canNextFromStep2)}
               >
-                Next
+                Next →
               </button>
             )}
             {step === 3 && (
               <button className="primary" onClick={submit} disabled={busy}>
-                {busy ? "Creating…" : "Create channel"}
+                {busy ? "Creating…" : "Create & post"}
               </button>
             )}
           </div>

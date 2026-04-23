@@ -395,10 +395,16 @@ function MentionPopover({
   attaching: boolean;
   onAttach: () => void;
 }) {
+  const primaryId = channel.primaryWorkspaceId ?? channel.repoAssignments[0]?.workspaceId;
   return (
     <div className="mention-popover" role="listbox">
+      <div className="mention-header">
+        <span>{aliases.length > 0 ? "Repos in channel" : "Attach"}</span>
+        <span className="mention-kbd">↑↓ Enter</span>
+      </div>
       {aliases.map((a, i) => {
         const repo = channel.repoAssignments.find((r) => r.alias === a);
+        const isPrimary = repo?.workspaceId === primaryId;
         return (
           <button
             key={a}
@@ -411,20 +417,35 @@ function MentionPopover({
               onPick(a);
             }}
           >
-            <span className="mention-alias">@{a}</span>
-            {repo?.repoPath && <span className="mention-path">{repo.repoPath}</span>}
+            <span className={`mention-tile ${isPrimary ? "primary" : "attached"}`} aria-hidden>
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+                <rect
+                  x="1.5"
+                  y="2"
+                  width="9"
+                  height="8"
+                  rx="1"
+                  stroke="currentColor"
+                  strokeWidth="1.2"
+                />
+                <path d="M4 5h4M4 7h2.5" stroke="currentColor" strokeWidth="1.2" />
+              </svg>
+            </span>
+            <span className="mention-body">
+              <span className="mention-row-main">
+                <span className="mention-alias">@{a}</span>
+                {isPrimary && <span className="mention-primary-tag">PRIMARY</span>}
+              </span>
+              {repo?.repoPath && <span className="mention-row-path">{repo.repoPath}</span>}
+            </span>
+            <span className="mention-role">agent in repo</span>
           </button>
         );
       })}
       {attachCandidate && (
         <button
           type="button"
-          className="mention-option"
-          style={{
-            borderTop: aliases.length > 0 ? "1px solid var(--color-paper-line)" : undefined,
-            marginTop: aliases.length > 0 ? 4 : 0,
-            paddingTop: aliases.length > 0 ? 8 : undefined,
-          }}
+          className={`mention-option mention-attach ${aliases.length > 0 ? "has-divider" : ""}`}
           disabled={attaching}
           onMouseDown={(e) => {
             e.preventDefault();
@@ -432,12 +453,57 @@ function MentionPopover({
           }}
           title="Attach this workspace to the channel"
         >
-          <span className="mention-alias">+ @{attachCandidate.alias}</span>
-          <span className="mention-path">
-            {attaching ? "attaching…" : `attach ${attachCandidate.path}`}
+          <span className="mention-tile attached" aria-hidden>
+            +
           </span>
+          <span className="mention-body">
+            <span className="mention-row-main">
+              <span className="mention-alias">@{attachCandidate.alias}</span>
+            </span>
+            <span className="mention-row-path">
+              {attaching ? "attaching…" : attachCandidate.path}
+            </span>
+          </span>
+          <span className="mention-role">attach to channel</span>
         </button>
       )}
+      <div className="mention-section-head">Members</div>
+      <button
+        type="button"
+        className="mention-option"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          onPick("jcast");
+        }}
+      >
+        <span className="mention-tile human" aria-hidden>
+          ◉
+        </span>
+        <span className="mention-body">
+          <span className="mention-row-main">
+            <span className="mention-alias">@jcast</span>
+          </span>
+          <span className="mention-row-path">You</span>
+        </span>
+      </button>
+      <button
+        type="button"
+        className="mention-option"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          onPick("channel");
+        }}
+      >
+        <span className="mention-tile human" aria-hidden>
+          #
+        </span>
+        <span className="mention-body">
+          <span className="mention-row-main">
+            <span className="mention-alias">@channel</span>
+          </span>
+          <span className="mention-row-path">Everyone here</span>
+        </span>
+      </button>
     </div>
   );
 }
