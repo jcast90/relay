@@ -204,6 +204,7 @@ type DraftProfile = {
   defaultModel: string;
   apiKeyEnvRef: string;
   envRows: EnvRow[];
+  presetId: string;
 };
 
 const emptyDraft = (): DraftProfile => ({
@@ -213,7 +214,243 @@ const emptyDraft = (): DraftProfile => ({
   defaultModel: "",
   apiKeyEnvRef: "",
   envRows: [],
+  presetId: "",
 });
+
+// Mirror of `isLikelySecretValue` from src/domain/provider-profile.ts so
+// we can fail fast in the GUI before round-tripping through Tauri. Keep
+// this list synced with the canonical TS version — CLI is still the
+// source of truth, this is just UX.
+function looksLikeSecret(value: string): boolean {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return false;
+  const lower = trimmed.toLowerCase();
+  const prefixes = [
+    "sk-",
+    "sk_",
+    "pk-",
+    "anthropic_",
+    "anthropic-",
+    "sess-",
+    "sess_",
+    "ghp_",
+    "gho_",
+    "ghs_",
+    "github_pat_",
+    "xoxb-",
+    "xoxp-",
+    "aws_",
+    "akia",
+    "bearer ",
+  ];
+  if (prefixes.some((p) => lower.startsWith(p))) return true;
+  if (/^[A-Za-z0-9_\-+/=]{32,}$/.test(trimmed)) return true;
+  return false;
+}
+
+type ProviderPreset = {
+  id: string;
+  displayName: string;
+  adapter: "claude" | "codex";
+  apiKeyEnvRef: string;
+  envOverrides: Record<string, string>;
+  models: string[];
+  description: string;
+};
+
+// Known-good provider presets. Picking one auto-fills id, displayName,
+// adapter, apiKeyEnvRef, and envOverrides so the user doesn't have to
+// remember which base URL belongs to which vendor. Model lists are
+// suggestions only — every provider rolls new models constantly, so the
+// model <select> always exposes a "Custom…" escape hatch. If a suggested
+// id 404s, the user types the current id and saves.
+const PROVIDER_PRESETS: ProviderPreset[] = [
+  {
+    id: "anthropic",
+    displayName: "Anthropic",
+    adapter: "claude",
+    apiKeyEnvRef: "ANTHROPIC_API_KEY",
+    envOverrides: {},
+    models: ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
+    description: "Direct Anthropic API",
+  },
+  {
+    id: "openai",
+    displayName: "OpenAI",
+    adapter: "codex",
+    apiKeyEnvRef: "OPENAI_API_KEY",
+    envOverrides: {},
+    models: ["gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4.1-mini", "o4-mini"],
+    description: "Direct OpenAI API",
+  },
+  {
+    id: "minimax",
+    displayName: "MiniMax",
+    adapter: "codex",
+    apiKeyEnvRef: "MINIMAX_API_KEY",
+    envOverrides: { OPENAI_BASE_URL: "https://api.minimax.io/v1" },
+    models: ["MiniMax-M2"],
+    description: "OpenAI-compatible MiniMax endpoint",
+  },
+  {
+    id: "openrouter",
+    displayName: "OpenRouter",
+    adapter: "codex",
+    apiKeyEnvRef: "OPENROUTER_API_KEY",
+    envOverrides: { OPENAI_BASE_URL: "https://openrouter.ai/api/v1" },
+    models: [
+      "anthropic/claude-sonnet-4",
+      "anthropic/claude-opus-4",
+      "openai/gpt-5",
+      "deepseek/deepseek-chat",
+    ],
+    description: "Multi-model gateway",
+  },
+  {
+    id: "deepseek",
+    displayName: "DeepSeek",
+    adapter: "codex",
+    apiKeyEnvRef: "DEEPSEEK_API_KEY",
+    envOverrides: { OPENAI_BASE_URL: "https://api.deepseek.com/v1" },
+    models: ["deepseek-chat", "deepseek-coder"],
+    description: "OpenAI-compatible DeepSeek endpoint",
+  },
+  {
+    id: "groq",
+    displayName: "Groq",
+    adapter: "codex",
+    apiKeyEnvRef: "GROQ_API_KEY",
+    envOverrides: { OPENAI_BASE_URL: "https://api.groq.com/openai/v1" },
+    models: ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile"],
+    description: "Fast Groq inference",
+  },
+  {
+    id: "together",
+    displayName: "Together",
+    adapter: "codex",
+    apiKeyEnvRef: "TOGETHER_API_KEY",
+    envOverrides: { OPENAI_BASE_URL: "https://api.together.xyz/v1" },
+    models: ["Qwen/Qwen2.5-Coder-32B-Instruct", "meta-llama/Llama-3.3-70B-Instruct-Turbo"],
+    description: "Together AI multi-model platform",
+  },
+  {
+    id: "litellm",
+    displayName: "LiteLLM (local)",
+    adapter: "codex",
+    apiKeyEnvRef: "OPENAI_API_KEY",
+    envOverrides: { OPENAI_BASE_URL: "http://localhost:4000" },
+    models: [],
+    description: "LiteLLM proxy on localhost",
+  },
+];
+
+const CUSTOM_PRESET_ID = "__custom__";
+const MODEL_CUSTOM_SENTINEL = "__model_custom__";
+
+function ModelField({
+  draft,
+  onChange,
+}: {
+  draft: DraftProfile;
+  onChange: (next: DraftProfile) => void;
+}) {
+  const preset = PROVIDER_PRESETS.find((p) => p.id === draft.presetId);
+  const suggestions = preset?.models ?? [];
+
+  // Show a <select> when the preset has suggestions AND the current value
+  // matches one of them; otherwise fall back to a free-form text input.
+  const valueMatchesSuggestion = !!draft.defaultModel && suggestions.includes(draft.defaultModel);
+  const [customMode, setCustomMode] = useState(
+    () => suggestions.length === 0 || (!!draft.defaultModel && !valueMatchesSuggestion)
+  );
+
+  useEffect(() => {
+    // Re-evaluate custom-mode when the preset changes. Dep is only
+    // `draft.presetId` on purpose: `applyPresetToDraft` resets
+    // `draft.defaultModel` in the same setState, so by the time this
+    // effect runs the closure's `suggestions` and `defaultModel` are
+    // already from the new preset. Adding `draft.defaultModel` as a dep
+    // would fire the effect on every keystroke in the custom-mode input
+    // and flip the UI back out of custom-mode mid-typing.
+    if (suggestions.length === 0) {
+      setCustomMode(true);
+    } else if (draft.defaultModel && !suggestions.includes(draft.defaultModel)) {
+      setCustomMode(true);
+    } else {
+      setCustomMode(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft.presetId]);
+
+  if (customMode) {
+    return (
+      <label className="provider-form-field">
+        <span>Default model</span>
+        <input
+          value={draft.defaultModel}
+          onChange={(e) => onChange({ ...draft, defaultModel: e.target.value })}
+          placeholder="e.g. claude-sonnet-4-6"
+        />
+        {suggestions.length > 0 && (
+          <button
+            type="button"
+            className="provider-form-inline-action"
+            onClick={() => {
+              setCustomMode(false);
+              onChange({ ...draft, defaultModel: suggestions[0] ?? "" });
+            }}
+          >
+            ← Use a suggested model
+          </button>
+        )}
+      </label>
+    );
+  }
+
+  return (
+    <label className="provider-form-field">
+      <span>Default model</span>
+      <select
+        value={draft.defaultModel || ""}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (v === MODEL_CUSTOM_SENTINEL) {
+            setCustomMode(true);
+            onChange({ ...draft, defaultModel: "" });
+            return;
+          }
+          onChange({ ...draft, defaultModel: v });
+        }}
+      >
+        <option value="">(none — adapter default)</option>
+        {suggestions.map((m) => (
+          <option key={m} value={m}>
+            {m}
+          </option>
+        ))}
+        <option value={MODEL_CUSTOM_SENTINEL}>Custom…</option>
+      </select>
+    </label>
+  );
+}
+
+function applyPresetToDraft(preset: ProviderPreset, existingId: string): DraftProfile {
+  // Keep the user's id if they've typed something other than the previous
+  // preset's default id — covers the "openai-prod" case where someone
+  // picks OpenAI, renames the id, then switches to OpenRouter. Falls back
+  // to the preset's own id when the draft is blank or the user picked the
+  // same preset twice.
+  const nextId = existingId && existingId !== preset.id ? existingId : preset.id;
+  return {
+    id: nextId,
+    displayName: preset.displayName,
+    adapter: preset.adapter,
+    defaultModel: preset.models[0] ?? "",
+    apiKeyEnvRef: preset.apiKeyEnvRef,
+    envRows: Object.entries(preset.envOverrides).map(([key, value]) => ({ key, value })),
+    presetId: preset.id,
+  };
+}
 
 function ProvidersSection() {
   const [profiles, setProfiles] = useState<ProviderProfile[]>([]);
@@ -250,6 +487,19 @@ function ProvidersSection() {
     const envOverrides: Record<string, string> = {};
     for (const row of draft.envRows) {
       if (row.key.trim()) envOverrides[row.key.trim()] = row.value;
+    }
+    // Client-side mirror of the CLI's isLikelySecretValue check. We still
+    // rely on the CLI to be the source of truth (it rejects at write
+    // time), but surfacing the rule here gives users an immediate
+    // explanation instead of a Tauri error popup with a stringified
+    // reason buried in it.
+    for (const [key, value] of Object.entries(envOverrides)) {
+      if (looksLikeSecret(value)) {
+        setError(
+          `Env override "${key}" looks like a raw secret. Move the value to your shell and reference it via the "API key env var" field instead.`
+        );
+        return;
+      }
     }
     const now = new Date().toISOString();
     const next: ProviderProfile = {
@@ -394,78 +644,134 @@ function ProvidersSection() {
 
       <div className="settings-section">
         <h3>Add profile</h3>
-        <label>
-          ID
-          <input
-            value={draft.id}
-            onChange={(e) => setDraft({ ...draft, id: e.target.value })}
-            placeholder="minimax-pro"
-          />
-        </label>
-        <label>
-          Display name
-          <input
-            value={draft.displayName}
-            onChange={(e) => setDraft({ ...draft, displayName: e.target.value })}
-            placeholder="MiniMax Pro"
-          />
-        </label>
-        <label>
-          Adapter
-          <select
-            value={draft.adapter}
-            onChange={(e) => setDraft({ ...draft, adapter: e.target.value as "claude" | "codex" })}
-          >
-            <option value="claude">claude</option>
-            <option value="codex">codex</option>
-          </select>
-        </label>
-        <label>
-          Default model (optional)
-          <input
-            value={draft.defaultModel}
-            onChange={(e) => setDraft({ ...draft, defaultModel: e.target.value })}
-            placeholder="claude-sonnet-4"
-          />
-        </label>
-        <label>
-          API key env var (optional)
-          <input
-            value={draft.apiKeyEnvRef}
-            onChange={(e) => setDraft({ ...draft, apiKeyEnvRef: e.target.value })}
-            placeholder="MINIMAX_API_KEY"
-          />
-        </label>
-        <div style={{ marginTop: 10 }}>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>Env overrides</div>
-          {draft.envRows.map((row, i) => (
-            <div key={i} style={{ display: "flex", gap: 6, marginBottom: 4, alignItems: "center" }}>
+        <p className="help">
+          Pick a template to pre-fill the common fields, then adjust the id / model as needed.
+          "Custom" leaves everything blank for fully manual setup.
+        </p>
+
+        <div className="provider-form">
+          <div className="provider-form-row">
+            <label className="provider-form-field">
+              <span>Template</span>
+              <select
+                value={draft.presetId}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  if (id === "") return;
+                  if (id === CUSTOM_PRESET_ID) {
+                    setDraft({ ...emptyDraft(), presetId: CUSTOM_PRESET_ID });
+                    return;
+                  }
+                  const preset = PROVIDER_PRESETS.find((p) => p.id === id);
+                  if (preset) setDraft(applyPresetToDraft(preset, draft.id));
+                }}
+              >
+                <option value="">(choose a template)</option>
+                {PROVIDER_PRESETS.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.displayName} — {p.description}
+                  </option>
+                ))}
+                <option value={CUSTOM_PRESET_ID}>Custom…</option>
+              </select>
+            </label>
+          </div>
+
+          <div className="provider-form-row">
+            <label className="provider-form-field">
+              <span>Profile ID</span>
               <input
-                placeholder="KEY"
-                value={row.key}
-                onChange={(e) => updateEnvRow(i, { key: e.target.value })}
-                style={{ flex: 1 }}
+                value={draft.id}
+                onChange={(e) => setDraft({ ...draft, id: e.target.value })}
+                placeholder="e.g. anthropic or openai-prod"
               />
-              <span>=</span>
+            </label>
+            <label className="provider-form-field">
+              <span>Display name</span>
               <input
-                placeholder="value"
-                value={row.value}
-                onChange={(e) => updateEnvRow(i, { value: e.target.value })}
-                style={{ flex: 2 }}
+                value={draft.displayName}
+                onChange={(e) => setDraft({ ...draft, displayName: e.target.value })}
+                placeholder="Shown in channel dropdown"
               />
-              <button onClick={() => removeEnvRow(i)} className="danger">
-                ✕
-              </button>
+            </label>
+          </div>
+
+          <div className="provider-form-row">
+            <label className="provider-form-field">
+              <span>Adapter</span>
+              <select
+                value={draft.adapter}
+                onChange={(e) =>
+                  setDraft({ ...draft, adapter: e.target.value as "claude" | "codex" })
+                }
+              >
+                <option value="claude">Claude CLI (Anthropic-compatible)</option>
+                <option value="codex">Codex CLI (OpenAI-compatible)</option>
+              </select>
+            </label>
+            <ModelField draft={draft} onChange={setDraft} />
+          </div>
+
+          <div className="provider-form-row">
+            <label className="provider-form-field">
+              <span>API key env var</span>
+              <input
+                value={draft.apiKeyEnvRef}
+                onChange={(e) => setDraft({ ...draft, apiKeyEnvRef: e.target.value })}
+                placeholder="e.g. MINIMAX_API_KEY"
+              />
+              <small className="provider-form-hint">
+                Relay reads the secret from this env var at dispatch time. It is never persisted in
+                the profile.
+              </small>
+            </label>
+          </div>
+
+          <div className="provider-form-row">
+            <div className="provider-form-field provider-form-field-full">
+              <span>Env overrides</span>
+              <small className="provider-form-hint">
+                Extra env vars passed to the CLI subprocess (e.g. <code>OPENAI_BASE_URL</code>).
+                Leave the value blank for secrets — use the API key env var field above instead.
+              </small>
+              <div className="provider-env-rows">
+                {draft.envRows.map((row, i) => (
+                  <div key={i} className="provider-env-row">
+                    <input
+                      placeholder="KEY"
+                      value={row.key}
+                      onChange={(e) => updateEnvRow(i, { key: e.target.value })}
+                      className="provider-env-key"
+                    />
+                    <span className="provider-env-sep">=</span>
+                    <input
+                      placeholder="value"
+                      value={row.value}
+                      onChange={(e) => updateEnvRow(i, { value: e.target.value })}
+                      className="provider-env-value"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeEnvRow(i)}
+                      className="danger provider-env-remove"
+                      aria-label="Remove env override"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+                <button type="button" onClick={addEnvRow} className="provider-env-add">
+                  + Add env override
+                </button>
+              </div>
             </div>
-          ))}
-          <button onClick={addEnvRow} style={{ marginTop: 4 }}>
-            Add row
-          </button>
-        </div>
-        <div style={{ marginTop: 12 }}>
-          <button onClick={addProfile} disabled={busy}>
-            {busy ? "Saving…" : "Add profile"}
-          </button>
+          </div>
+
+          <div className="provider-form-actions">
+            <button onClick={addProfile} disabled={busy}>
+              {busy ? "Saving…" : "Save profile"}
+            </button>
+          </div>
         </div>
       </div>
 
