@@ -157,8 +157,19 @@ export class SectionStore {
   private async readAll(): Promise<Section[]> {
     try {
       const raw = await readFile(this.path, "utf8");
-      const parsed = JSON.parse(raw) as Section[];
-      return Array.isArray(parsed) ? parsed : [];
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) return [];
+      // Normalize `status` on read so a hand-edited sections.json with
+      // an unexpected value (e.g. "archived") doesn't arrive in the GUI
+      // typed as `Section` but containing a string outside the
+      // "active" | "decommissioned" union. Unknown values coerce to
+      // "active" — the more conservative choice (visible, not dropped).
+      return parsed.map((raw) => {
+        const s = raw as Section;
+        const status: Section["status"] =
+          s.status === "active" || s.status === "decommissioned" ? s.status : "active";
+        return { ...s, status };
+      });
     } catch {
       return [];
     }

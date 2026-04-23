@@ -946,12 +946,16 @@ async function handleSectionCommand(args: string[]): Promise<void> {
   }
 
   if (sub === "create") {
-    const name = args
-      .slice(1)
-      .filter((a) => !a.startsWith("--"))
-      .join(" ");
-    if (!name) {
-      console.error("Usage: rly section create <name> [--json]");
+    // Take the name as a single positional argv. Previously we joined
+    // every non-flag word with spaces, which silently dropped `--`-
+    // prefixed words from user-supplied names ("--fancy features") and
+    // produced wrong data. Shell callers must now quote names with
+    // spaces (`rly section create "My section"`) — which matches every
+    // other Unix CLI and mirrors how the Tauri bindings already pass
+    // the name (single argv entry).
+    const name = args[1];
+    if (!name || name.startsWith("--")) {
+      console.error('Usage: rly section create "<name>" [--json]');
       process.exitCode = 1;
       return;
     }
@@ -968,12 +972,9 @@ async function handleSectionCommand(args: string[]): Promise<void> {
 
   if (sub === "rename") {
     const sectionId = args[1];
-    const name = args
-      .slice(2)
-      .filter((a) => !a.startsWith("--"))
-      .join(" ");
-    if (!sectionId || !name) {
-      console.error("Usage: rly section rename <sectionId> <name> [--json]");
+    const name = args[2];
+    if (!sectionId || !name || name.startsWith("--")) {
+      console.error('Usage: rly section rename <sectionId> "<name>" [--json]');
       process.exitCode = 1;
       return;
     }
