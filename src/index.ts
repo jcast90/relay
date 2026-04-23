@@ -37,6 +37,7 @@ import { Orchestrator } from "./orchestrator/orchestrator.js";
 import { OrchestratorV2 } from "./orchestrator/orchestrator-v2.js";
 import { ScriptedInvoker } from "./simulation/scripted-invoker.js";
 import { ChannelStore } from "./channels/channel-store.js";
+import { SectionStore } from "./channels/section-store.js";
 import { resolveBoardTickets } from "./channels/board-resolver.js";
 import { createPrWatcherFactory, getActiveWatcher } from "./cli/pr-watcher-factory.js";
 import type { HarnessPR } from "./integrations/scm.js";
@@ -168,6 +169,11 @@ export async function main(): Promise<void> {
 
   if (command === "channel") {
     await handleChannelCommand(args);
+    return;
+  }
+
+  if (command === "section") {
+    await handleSectionCommand(args);
     return;
   }
 
@@ -850,9 +856,31 @@ async function handleChannelCommand(args: string[]): Promise<void> {
     return;
   }
 
+  if (sub === "assign") {
+    const channelId = args[1];
+    const target = args[2];
+    if (!channelId || !target) {
+      console.error("Usage: rly channel assign <channelId> <sectionId|--none>");
+      process.exitCode = 1;
+      return;
+    }
+    const sectionStore = new SectionStore(undefined, store);
+    try {
+      await sectionStore.assignChannel(channelId, target === "--none" ? null : target);
+    } catch (err) {
+      console.error(String(err));
+      process.exitCode = 1;
+      return;
+    }
+    const updated = await store.getChannel(channelId);
+    if (args.includes("--json")) jsonOut(updated);
+    else console.log(`Channel ${channelId} assigned to ${target === "--none" ? "(none)" : target}`);
+    return;
+  }
+
   if (!sub) {
     console.error(
-      "Usage: rly channel <channelId|create|archive|unarchive|set-full-access|update|feed|post>"
+      "Usage: rly channel <channelId|create|archive|unarchive|set-full-access|update|feed|post|assign>"
     );
     process.exitCode = 1;
     return;
@@ -894,6 +922,134 @@ async function handleChannelCommand(args: string[]): Promise<void> {
       console.log(`  [${entry.type}] ${from}: ${entry.content.slice(0, 120)}`);
     }
   }
+}
+
+async function handleSectionCommand(args: string[]): Promise<void> {
+  const sub = args[0];
+  const sectionStore = new SectionStore();
+  const asJson = args.includes("--json");
+
+  if (sub === "list" || !sub) {
+    const includeDecomm = args.includes("--include-decommissioned");
+    const all = await sectionStore.list(includeDecomm);
+    if (asJson) {
+      jsonOut(all);
+    } else if (all.length === 0) {
+      console.log("(no sections)");
+    } else {
+      for (const s of all) {
+        const tag = s.status === "active" ? "" : " [decommissioned]";
+        console.log(`${s.sectionId}  ${s.name}${tag}`);
+      }
+    }
+    return;
+  }
+
+  if (sub === "create") {
+    // Take the name as a single positional argv. Previously we joined
+    // every non-flag word with spaces, which silently dropped `--`-
+    // prefixed words from user-supplied names ("--fancy features") and
+    // produced wrong data. Shell callers must now quote names with
+    // spaces (`rly section create "My section"`) — which matches every
+    // other Unix CLI and mirrors how the Tauri bindings already pass
+    // the name (single argv entry).
+    const name = args[1];
+    if (!name || name.startsWith("--")) {
+      console.error('Usage: rly section create "<name>" [--json]');
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const s = await sectionStore.create(name);
+      if (asJson) jsonOut(s);
+      else console.log(`${s.sectionId}  ${s.name}`);
+    } catch (err) {
+      console.error(String(err));
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (sub === "rename") {
+    const sectionId = args[1];
+    const name = args[2];
+    if (!sectionId || !name || name.startsWith("--")) {
+      console.error('Usage: rly section rename <sectionId> "<name>" [--json]');
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const s = await sectionStore.rename(sectionId, name);
+      if (!s) {
+        console.error(`Section not found: ${sectionId}`);
+        process.exitCode = 1;
+        return;
+      }
+      if (asJson) jsonOut(s);
+      else console.log(`${s.sectionId}  ${s.name}`);
+    } catch (err) {
+      console.error(String(err));
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (sub === "decommission") {
+    const sectionId = args[1];
+    if (!sectionId) {
+      console.error("Usage: rly section decommission <sectionId> [--json]");
+      process.exitCode = 1;
+      return;
+    }
+    const s = await sectionStore.decommission(sectionId);
+    if (!s) {
+      console.error(`Section not found: ${sectionId}`);
+      process.exitCode = 1;
+      return;
+    }
+    if (asJson) jsonOut(s);
+    else console.log(`Decommissioned ${s.sectionId}; channels moved to Uncategorized.`);
+    return;
+  }
+
+  if (sub === "restore") {
+    const sectionId = args[1];
+    if (!sectionId) {
+      console.error("Usage: rly section restore <sectionId> [--json]");
+      process.exitCode = 1;
+      return;
+    }
+    const s = await sectionStore.restore(sectionId);
+    if (!s) {
+      console.error(`Section not found: ${sectionId}`);
+      process.exitCode = 1;
+      return;
+    }
+    if (asJson) jsonOut(s);
+    else console.log(`Restored ${s.sectionId}.`);
+    return;
+  }
+
+  if (sub === "delete") {
+    const sectionId = args[1];
+    if (!sectionId) {
+      console.error("Usage: rly section delete <sectionId>");
+      process.exitCode = 1;
+      return;
+    }
+    const result = await sectionStore.delete(sectionId);
+    if (!result.ok) {
+      console.error(result.reason);
+      process.exitCode = 1;
+      return;
+    }
+    if (asJson) jsonOut({ ok: true });
+    else console.log(`Deleted ${sectionId}.`);
+    return;
+  }
+
+  console.error("Usage: rly section <list|create|rename|decommission|restore|delete>");
+  process.exitCode = 1;
 }
 
 function getLinearApiKey(): string | null {
@@ -2668,7 +2824,8 @@ async function printTopLevelHelp(): Promise<void> {
     "",
     "Channels & sessions:",
     "  channels                 List channels (most-recently-active first)",
-    "  channel <subcommand>     Manage channels (create/update/archive/set-full-access/feed/post/...)",
+    "  channel <subcommand>     Manage channels (create/update/archive/set-full-access/feed/post/assign/...)",
+    "  section <subcommand>     Manage sidebar sections (list/create/rename/decommission/restore/delete)",
     "  session <subcommand>     Manage session transcripts",
     "  board <channelId>        Kanban view of tickets",
     "  decisions <channelId>    List decisions with rationale",

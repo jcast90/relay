@@ -98,12 +98,7 @@ fn with_dropped_repos(mut value: serde_json::Value, dropped: Vec<String>) -> ser
     if let Some(obj) = value.as_object_mut() {
         obj.insert(
             "droppedRepos".to_string(),
-            serde_json::Value::Array(
-                dropped
-                    .into_iter()
-                    .map(serde_json::Value::String)
-                    .collect(),
-            ),
+            serde_json::Value::Array(dropped.into_iter().map(serde_json::Value::String).collect()),
         );
     }
     value
@@ -540,6 +535,7 @@ fn create_dm(
         starred: false,
         full_access: None,
         kind: Some("dm".to_string()),
+        section_id: None,
         created_at: Some(now.to_rfc3339()),
         updated_at: Some(now.to_rfc3339()),
     };
@@ -589,6 +585,71 @@ fn promote_dm(
 fn archive_channel(channel_id: String) -> Result<serde_json::Value, String> {
     validate_id_segment(&channel_id, "channelId")?;
     cli_json(&["channel", "archive", &channel_id, "--json"])
+}
+
+// ─── Sections ────────────────────────────────────────────────────
+// Sidebar grouping layer. All writes shell out to `rly section …`
+// via cli_json so the CLI and GUI share a single mutation path and
+// the sections.json on disk stays consistent.
+
+#[tauri::command]
+fn list_sections(include_decommissioned: Option<bool>) -> Result<serde_json::Value, String> {
+    if include_decommissioned.unwrap_or(false) {
+        cli_json(&["section", "list", "--include-decommissioned", "--json"])
+    } else {
+        cli_json(&["section", "list", "--json"])
+    }
+}
+
+#[tauri::command]
+fn create_section(name: String) -> Result<serde_json::Value, String> {
+    if name.trim().is_empty() {
+        return Err("section name must not be empty".into());
+    }
+    cli_json(&["section", "create", &name, "--json"])
+}
+
+#[tauri::command]
+fn rename_section(section_id: String, name: String) -> Result<serde_json::Value, String> {
+    validate_id_segment(&section_id, "sectionId")?;
+    if name.trim().is_empty() {
+        return Err("section name must not be empty".into());
+    }
+    cli_json(&["section", "rename", &section_id, &name, "--json"])
+}
+
+#[tauri::command]
+fn decommission_section(section_id: String) -> Result<serde_json::Value, String> {
+    validate_id_segment(&section_id, "sectionId")?;
+    cli_json(&["section", "decommission", &section_id, "--json"])
+}
+
+#[tauri::command]
+fn restore_section(section_id: String) -> Result<serde_json::Value, String> {
+    validate_id_segment(&section_id, "sectionId")?;
+    cli_json(&["section", "restore", &section_id, "--json"])
+}
+
+#[tauri::command]
+fn delete_section(section_id: String) -> Result<serde_json::Value, String> {
+    validate_id_segment(&section_id, "sectionId")?;
+    cli_json(&["section", "delete", &section_id, "--json"])
+}
+
+#[tauri::command]
+fn assign_channel_section(
+    channel_id: String,
+    section_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    let target = match section_id.as_deref() {
+        None | Some("") => "--none".to_string(),
+        Some(s) => {
+            validate_id_segment(s, "sectionId")?;
+            s.to_string()
+        }
+    };
+    cli_json(&["channel", "assign", &channel_id, &target, "--json"])
 }
 
 #[tauri::command]
@@ -2668,6 +2729,13 @@ pub fn run() {
             list_pending_plans,
             approve_plan,
             reject_plan,
+            list_sections,
+            create_section,
+            rename_section,
+            decommission_section,
+            restore_section,
+            delete_section,
+            assign_channel_section,
             // AL-8 approvals surface.
             list_pending_approvals,
             approve_queue_entry,

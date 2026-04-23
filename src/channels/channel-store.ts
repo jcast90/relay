@@ -109,6 +109,7 @@ export class ChannelStore {
     workspaceIds?: string[];
     repoAssignments?: RepoAssignment[];
     primaryWorkspaceId?: string;
+    sectionId?: string;
   }): Promise<Channel> {
     await mkdir(this.channelsDir, { recursive: true });
 
@@ -133,6 +134,7 @@ export class ChannelStore {
       pinnedRefs: [],
       repoAssignments: assignments,
       primaryWorkspaceId,
+      sectionId: input.sectionId,
       createdAt: now,
       updatedAt: now,
     };
@@ -189,6 +191,7 @@ export class ChannelStore {
         | "tier"
         | "starred"
         | "kind"
+        | "sectionId"
       >
     >
   ): Promise<Channel | null> {

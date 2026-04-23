@@ -171,6 +171,44 @@ pub struct Channel {
     pub created_at: Option<String>,
     #[serde(default)]
     pub updated_at: Option<String>,
+    /// Optional section (Slack-style sidebar group) this channel belongs to.
+    /// `None` renders the channel in an "Uncategorized" bucket at the
+    /// bottom of the sidebar. See `Section` for the grouping model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_id: Option<String>,
+}
+
+/// A sidebar grouping ("section") for channels — maps to Slack's
+/// collapsible section concept. Sections live in a single
+/// `~/.relay/sections.json` file (one bag, not one-file-per-section) so
+/// the sidebar can load ordering + name + status in a single read.
+///
+/// `status` distinguishes hard delete (file removed, only allowed when
+/// empty) from soft decommission (status flipped, channels auto-moved
+/// to Uncategorized, reversible). A `decommissioned` section is hidden
+/// from the sidebar by default but retained so an Undo action can
+/// restore it.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Section {
+    pub section_id: String,
+    pub name: String,
+    /// Smaller = higher in the sidebar. Assigned at create-time by
+    /// `save_sections` when missing.
+    #[serde(default)]
+    pub order: i32,
+    /// "active" | "decommissioned". Default preserves back-compat with
+    /// any ad-hoc section JSON that may predate the field.
+    #[serde(default = "default_section_status")]
+    pub status: String,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+fn default_section_status() -> String {
+    "active".to_string()
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -637,6 +675,44 @@ pub fn save_channel(channel: &Channel) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let content = serde_json::to_string_pretty(&ch).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, &content).map_err(|e| e.to_string())?;
+    if let Err(e) = fs::rename(&tmp, &path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e.to_string());
+    }
+    Ok(())
+}
+
+// ────────────────────────────────────────────────────────────────
+// Sections — sidebar grouping above channels.
+//
+// Stored as a single file at ~/.relay/sections.json so ordering +
+// status live alongside the entries. Empty/missing file deserializes
+// as an empty list, which the UI renders as "everything sits in
+// Uncategorized." First-run seeding happens one layer up (the GUI /
+// CLI) — harness-data just provides load/save.
+// ────────────────────────────────────────────────────────────────
+
+fn sections_json_path() -> PathBuf {
+    harness_root().join("sections.json")
+}
+
+/// Load all sections, including decommissioned ones. Callers that
+/// want only the sidebar-visible set should filter on `status == "active"`.
+pub fn load_sections() -> Vec<Section> {
+    load_json::<Vec<Section>>(&sections_json_path()).unwrap_or_default()
+}
+
+/// Atomic write of the sections list. Stamps `updated_at` on entries
+/// whose `order` is unset (assigns order = current max + 1) so callers
+/// don't have to manage ordering manually for appends.
+pub fn save_sections(sections: &[Section]) -> Result<(), String> {
+    let path = sections_json_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let content = serde_json::to_string_pretty(sections).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, &content).map_err(|e| e.to_string())?;
     if let Err(e) = fs::rename(&tmp, &path) {
@@ -1687,6 +1763,7 @@ mod tests {
             starred: false,
             full_access: None,
             kind: None,
+            section_id: None,
             created_at: Some("2026-01-01T00:00:00Z".to_string()),
             updated_at: Some("2026-01-01T00:00:00Z".to_string()),
         }
@@ -1863,6 +1940,7 @@ mod tests {
             starred: false,
             full_access: None,
             kind: None,
+            section_id: None,
             created_at: None,
             updated_at: None,
         }

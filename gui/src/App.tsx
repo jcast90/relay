@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
+import { maybeSeedFirstRun } from "./lib/firstRun";
 import { useAppearance } from "./lib/appearance";
 import type { Channel, GuiSettings } from "./types";
 import { CenterPane } from "./components/CenterPane";
@@ -17,6 +18,7 @@ export function App() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
   const [modalOpen, setModalOpen] = useState(false);
+  const [newChannelSection, setNewChannelSection] = useState<string | null>(null);
   const [dmModalOpen, setDmModalOpen] = useState(false);
   const [includeArchived, setIncludeArchived] = useState(false);
   const [settings, setSettings] = useState<GuiSettings | null>(null);
@@ -48,14 +50,22 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
-    api.listChannels(includeArchived).then((cs) => {
+    (async () => {
+      // On the first-ever boot (no sections + no channels), drop a
+      // Workspace section + #general welcome channel so the user lands
+      // on content instead of a blank sidebar. Noop on every boot after.
+      if (refreshTick === 0) {
+        const seeded = await maybeSeedFirstRun();
+        if (seeded) setRefreshTick((n) => n + 1);
+      }
+      const cs = await api.listChannels(includeArchived);
       if (cancelled) return;
       setChannels(cs);
       if (!selectedId && cs.length > 0) {
         const firstActive = cs.find((c) => c.status === "active") ?? cs[0];
         setSelectedId(firstActive.channelId);
       }
-    });
+    })();
     return () => {
       cancelled = true;
     };
@@ -115,7 +125,10 @@ export function App() {
             sessionCounts={sessionCounts}
             runningStreams={runningStreams}
             onSelect={setSelectedId}
-            onNewChannel={() => setModalOpen(true)}
+            onNewChannel={(sectionId) => {
+              setNewChannelSection(sectionId ?? null);
+              setModalOpen(true);
+            }}
             onNewDm={() => setDmModalOpen(true)}
             onToggleIncludeArchived={setIncludeArchived}
             onOpenSettings={() => setSettingsOpen(true)}
@@ -151,6 +164,7 @@ export function App() {
       )}
       <NewChannelModal
         open={modalOpen}
+        defaultSectionId={newChannelSection}
         onClose={() => setModalOpen(false)}
         onCreated={(id) => {
           setSelectedId(id);
