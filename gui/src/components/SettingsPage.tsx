@@ -217,6 +217,37 @@ const emptyDraft = (): DraftProfile => ({
   presetId: "",
 });
 
+// Mirror of `isLikelySecretValue` from src/domain/provider-profile.ts so
+// we can fail fast in the GUI before round-tripping through Tauri. Keep
+// this list synced with the canonical TS version — CLI is still the
+// source of truth, this is just UX.
+function looksLikeSecret(value: string): boolean {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return false;
+  const lower = trimmed.toLowerCase();
+  const prefixes = [
+    "sk-",
+    "sk_",
+    "pk-",
+    "anthropic_",
+    "anthropic-",
+    "sess-",
+    "sess_",
+    "ghp_",
+    "gho_",
+    "ghs_",
+    "github_pat_",
+    "xoxb-",
+    "xoxp-",
+    "aws_",
+    "akia",
+    "bearer ",
+  ];
+  if (prefixes.some((p) => lower.startsWith(p))) return true;
+  if (/^[A-Za-z0-9_\-+/=]{32,}$/.test(trimmed)) return true;
+  return false;
+}
+
 type ProviderPreset = {
   id: string;
   displayName: string;
@@ -229,8 +260,10 @@ type ProviderPreset = {
 
 // Known-good provider presets. Picking one auto-fills id, displayName,
 // adapter, apiKeyEnvRef, and envOverrides so the user doesn't have to
-// remember which base URL belongs to which vendor. Models are suggestions
-// — the model <select> still allows a custom value.
+// remember which base URL belongs to which vendor. Model lists are
+// suggestions only — every provider rolls new models constantly, so the
+// model <select> always exposes a "Custom…" escape hatch. If a suggested
+// id 404s, the user types the current id and saves.
 const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     id: "anthropic",
@@ -332,8 +365,13 @@ function ModelField({
   );
 
   useEffect(() => {
-    // Switching presets resets the model field; re-evaluate custom-mode so
-    // the UI reflects the new suggestions.
+    // Re-evaluate custom-mode when the preset changes. Dep is only
+    // `draft.presetId` on purpose: `applyPresetToDraft` resets
+    // `draft.defaultModel` in the same setState, so by the time this
+    // effect runs the closure's `suggestions` and `defaultModel` are
+    // already from the new preset. Adding `draft.defaultModel` as a dep
+    // would fire the effect on every keystroke in the custom-mode input
+    // and flip the UI back out of custom-mode mid-typing.
     if (suggestions.length === 0) {
       setCustomMode(true);
     } else if (draft.defaultModel && !suggestions.includes(draft.defaultModel)) {
@@ -397,6 +435,11 @@ function ModelField({
 }
 
 function applyPresetToDraft(preset: ProviderPreset, existingId: string): DraftProfile {
+  // Keep the user's id if they've typed something other than the previous
+  // preset's default id — covers the "openai-prod" case where someone
+  // picks OpenAI, renames the id, then switches to OpenRouter. Falls back
+  // to the preset's own id when the draft is blank or the user picked the
+  // same preset twice.
   const nextId = existingId && existingId !== preset.id ? existingId : preset.id;
   return {
     id: nextId,
@@ -444,6 +487,19 @@ function ProvidersSection() {
     const envOverrides: Record<string, string> = {};
     for (const row of draft.envRows) {
       if (row.key.trim()) envOverrides[row.key.trim()] = row.value;
+    }
+    // Client-side mirror of the CLI's isLikelySecretValue check. We still
+    // rely on the CLI to be the source of truth (it rejects at write
+    // time), but surfacing the rule here gives users an immediate
+    // explanation instead of a Tauri error popup with a stringified
+    // reason buried in it.
+    for (const [key, value] of Object.entries(envOverrides)) {
+      if (looksLikeSecret(value)) {
+        setError(
+          `Env override "${key}" looks like a raw secret. Move the value to your shell and reference it via the "API key env var" field instead.`
+        );
+        return;
+      }
     }
     const now = new Date().toISOString();
     const next: ProviderProfile = {
@@ -598,9 +654,10 @@ function ProvidersSection() {
             <label className="provider-form-field">
               <span>Template</span>
               <select
-                value={draft.presetId || CUSTOM_PRESET_ID}
+                value={draft.presetId}
                 onChange={(e) => {
                   const id = e.target.value;
+                  if (id === "") return;
                   if (id === CUSTOM_PRESET_ID) {
                     setDraft({ ...emptyDraft(), presetId: CUSTOM_PRESET_ID });
                     return;
