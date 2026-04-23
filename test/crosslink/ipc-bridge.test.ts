@@ -297,6 +297,51 @@ describe("AL-16 IPC bridge — file-based cross-process coordination", () => {
     });
   });
 
+  it("rejects spoofed `from` where record.from != outbox alias", async () => {
+    await withFixture(["a", "b", "c"], async ({ rootDir, coordinator }) => {
+      const outbox = getOutboxPath(SESSION_ID, "a", rootDir);
+      await mkdir(join(rootDir, "sessions", SESSION_ID, "coordination"), {
+        recursive: true,
+      });
+      // Admin "a" writes a record claiming to be from "b" (spoof).
+      const spoof: IpcRecord = {
+        id: "spoof-1",
+        from: "b", // lie
+        to: "c",
+        payload: {
+          kind: "repo-ready",
+          alias: "b",
+          ticketId: "T-spoof",
+          prUrl: "https://x.test/pull/1",
+          announcedAt: "2026-04-22T00:00:00Z",
+        },
+        writtenAt: "2026-04-22T00:00:00Z",
+      };
+      await writeFile(outbox, JSON.stringify(spoof) + "\n", "utf8");
+
+      const bridge = new IpcBridge({ sessionId: SESSION_ID, coordinator, rootDir });
+      bridge.registerAlias("a");
+      bridge.registerAlias("b");
+      bridge.registerAlias("c");
+
+      const events: string[] = [];
+      bridge.on("ipc-event", (e: { kind: string; detail?: string }) => {
+        if (e.kind === "route-failure") events.push(e.detail ?? "");
+      });
+      await bridge.drainOnce();
+
+      // Spoof rejected before coordinator.send — c's inbox must NOT carry the message.
+      let inboxRaw = "";
+      try {
+        inboxRaw = await readFile(getInboxPath(SESSION_ID, "c", rootDir), "utf8");
+      } catch {
+        // inbox file may not exist at all, which is the stronger proof.
+      }
+      expect(inboxRaw).not.toContain("T-spoof");
+      expect(events.some((d) => d.includes("spoof-rejected"))).toBe(true);
+    });
+  });
+
   it("bridge stop is idempotent + clears the poll timer", async () => {
     await withFixture(["a"], async ({ rootDir, coordinator }) => {
       const bridge = new IpcBridge({

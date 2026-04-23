@@ -214,9 +214,23 @@ export class IpcBridge extends EventEmitter {
   }
 
   private async routeRecord(record: IpcRecord, outboxAlias: string): Promise<void> {
-    // `from` SHOULD match the outbox alias (the child writing to its own
-    // outbox). If it doesn't, the coordinator's own spoof guard catches
-    // it — we still attempt the send so the rejection is logged.
+    // Spoof guard: only the child that owns `outbox-<alias>.jsonl` can
+    // write to it, so `record.from` MUST match the outbox alias. The
+    // coordinator's own guard only cross-checks `from` against the
+    // `requester`/`blocker` fields on `blocked-on-repo` — `repo-ready`
+    // and `merge-order-proposal` carry `alias`/`proposer` that aren't
+    // cross-checked against `from`. Without this bridge-level check a
+    // malicious or buggy child could route messages under any identity
+    // AND poison the decisions audit trail.
+    if (record.from !== outboxAlias) {
+      this.emit("ipc-event", {
+        kind: "route-failure",
+        alias: outboxAlias,
+        record,
+        detail: `spoof-rejected: record.from="${record.from}" does not match outbox alias "${outboxAlias}"`,
+      } satisfies IpcBridgeEvent);
+      return;
+    }
     const result = await this.coordinator.send(record.from, record.to, record.payload);
     if (!result.ok) {
       this.emit("ipc-event", {
