@@ -41,6 +41,41 @@ fn validate_id_segment<'a>(value: &'a str, field: &str) -> Result<&'a str, Strin
     Ok(value)
 }
 
+/// Filter a `repos` payload to only the assignments whose alias +
+/// workspaceId can round-trip through the `--repos a:b:c` CLI encoding.
+/// Any rejects are logged and silently dropped — attach/create proceeds
+/// with the rest. This keeps legacy `discovered:*` shapes (or whatever
+/// next code-archaeology dig we haven't done yet) from failing otherwise
+/// well-formed requests.
+fn sanitize_repos(repos: Vec<RepoAssignmentInput>) -> Vec<RepoAssignmentInput> {
+    repos
+        .into_iter()
+        .filter(|r| {
+            let alias_ok = !r.alias.is_empty()
+                && r.alias != "."
+                && r.alias != ".."
+                && r.alias
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-');
+            let ws_ok = !r.workspace_id.is_empty()
+                && r.workspace_id != "."
+                && r.workspace_id != ".."
+                && r.workspace_id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-');
+            if !alias_ok || !ws_ok {
+                eprintln!(
+                    "[gui] dropping unrepresentable repo assignment alias='{}' workspaceId='{}' repoPath='{}'",
+                    r.alias, r.workspace_id, r.repo_path
+                );
+                false
+            } else {
+                true
+            }
+        })
+        .collect()
+}
+
 #[tauri::command]
 fn list_workspaces() -> Vec<data::WorkspaceEntry> {
     data::load_workspaces()
@@ -333,10 +368,7 @@ fn create_channel(
     repos: Vec<RepoAssignmentInput>,
     #[allow(non_snake_case)] primaryWorkspaceId: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    for repo in &repos {
-        validate_id_segment(&repo.alias, "repo.alias")?;
-        validate_id_segment(&repo.workspace_id, "repo.workspaceId")?;
-    }
+    let repos = sanitize_repos(repos);
     if let Some(ref id) = primaryWorkspaceId {
         validate_id_segment(id, "primaryWorkspaceId")?;
     }
@@ -433,10 +465,7 @@ fn promote_dm(
     #[allow(non_snake_case)] primaryWorkspaceId: Option<String>,
 ) -> Result<(), String> {
     validate_id_segment(&channel_id, "channelId")?;
-    for repo in &repos {
-        validate_id_segment(&repo.alias, "repo.alias")?;
-        validate_id_segment(&repo.workspace_id, "repo.workspaceId")?;
-    }
+    let repos = sanitize_repos(repos);
     let mut ch = data::load_channel(&channel_id)
         .ok_or_else(|| format!("channel {} not found", channel_id))?;
     ch.kind = Some("channel".to_string());
@@ -499,10 +528,7 @@ fn update_channel_repos(
     repos: Vec<RepoAssignmentInput>,
 ) -> Result<serde_json::Value, String> {
     validate_id_segment(&channel_id, "channelId")?;
-    for repo in &repos {
-        validate_id_segment(&repo.alias, "repo.alias")?;
-        validate_id_segment(&repo.workspace_id, "repo.workspaceId")?;
-    }
+    let repos = sanitize_repos(repos);
     let repos = repos_arg(&repos);
     cli_json(&["channel", "update", &channel_id, "--repos", &repos, "--json"])
 }
