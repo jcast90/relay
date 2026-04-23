@@ -1,6 +1,6 @@
 # Providers
 
-> **Status: beta.** Multi-provider support is actively being built — expect rough edges, breaking CLI flag changes, and dispatch paths that aren't yet wired up. If you hit a bug, please [open an issue](https://github.com/jcast90/relay/issues/new) with a reproduction, or send a PR. Tracked work: [GitHub Project — Multi-provider](https://github.com/jcast90/relay/projects) _(TODO: replace with real project URL once created)_.
+> Relay is pre-v1 — see the [top-level beta note](../README.md#what-relay-is) in the README. This page is accurate as of the current release; CLI flags and the named-profiles surface may change. Issues and PRs welcome.
 
 Relay dispatches work through CLI-based coding agents. Out of the box it ships adapters for two:
 
