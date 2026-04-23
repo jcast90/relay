@@ -95,6 +95,20 @@ export async function runRebuild(options: RebuildOptions): Promise<number> {
   }
 
   if (options.gui) {
+    // gui/ is its own pnpm project with its own lockfile — it's not part
+    // of the root workspace, so a root `pnpm install` never touches it.
+    // Without this step, a freshly-added GUI dep surfaces as
+    // "Cannot find module '@tauri-apps/plugin-X'" during tsc and the
+    // actual fix (install gui deps) is hidden behind what looks like a
+    // code bug. Cheap no-op when already in sync.
+    if (!options.skipInstall) {
+      console.log("[rly rebuild] GUI deps — pnpm install (gui/)");
+      const installExit = await runTool("pnpm", ["install"], `${repoRoot}/gui`);
+      if (installExit !== 0) {
+        console.error("[rly rebuild] GUI pnpm install failed — stopping.");
+        return installExit;
+      }
+    }
     console.log("[rly rebuild] GUI — pnpm gui:build");
     const exit = await runTool("pnpm", ["gui:build"], repoRoot);
     if (exit !== 0) {
