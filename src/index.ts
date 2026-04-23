@@ -731,6 +731,47 @@ async function handleChannelCommand(args: string[]): Promise<void> {
     return;
   }
 
+  if (sub === "set-provider") {
+    const channelId = args[1];
+    const profileArg = args[2];
+    if (!channelId || !profileArg) {
+      console.error(
+        "Usage: rly channel set-provider <channelId> <profileId|clear> [--source <s>] [--actor <name>] [--json]"
+      );
+      process.exitCode = 1;
+      return;
+    }
+
+    // `clear` is the explicit "fall back to default resolution" token.
+    // Accepting a literal id is the common case; anything else is user
+    // error we surface rather than silently coercing.
+    const nextProfileId: string | null = profileArg === "clear" ? null : profileArg;
+
+    const sourceArg = parseNamedArg(args, "--source");
+    const actorName = parseNamedArg(args, "--actor");
+    const actor = {
+      source: sourceArg ?? "cli",
+      name: actorName ?? "CLI",
+      id: actorName ?? "cli",
+    };
+
+    const updated = await store.setProviderProfileId(channelId, nextProfileId, actor);
+
+    if (args.includes("--json")) {
+      jsonOut(updated);
+    } else if (updated) {
+      // TODO(PR1): resolve the display name through the profile store
+      // once the import unblocks. Until then, print the id so the
+      // audit-visible output stays informative.
+      const label = updated.providerProfileId ?? "(none — inherit default)";
+      console.log(`Channel provider set to ${label} (${updated.providerProfileId ?? "cleared"})`);
+    } else {
+      console.error(`Channel not found: ${channelId}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   if (sub === "update") {
     const channelId = args[1];
     if (!channelId) {
@@ -880,7 +921,7 @@ async function handleChannelCommand(args: string[]): Promise<void> {
 
   if (!sub) {
     console.error(
-      "Usage: rly channel <channelId|create|archive|unarchive|set-full-access|update|feed|post|assign>"
+      "Usage: rly channel <channelId|create|archive|unarchive|set-full-access|set-provider|update|feed|post|assign>"
     );
     process.exitCode = 1;
     return;
@@ -2824,7 +2865,7 @@ async function printTopLevelHelp(): Promise<void> {
     "",
     "Channels & sessions:",
     "  channels                 List channels (most-recently-active first)",
-    "  channel <subcommand>     Manage channels (create/update/archive/set-full-access/feed/post/assign/...)",
+    "  channel <subcommand>     Manage channels (create/update/archive/set-full-access/set-provider/feed/post/assign/...)",
     "  section <subcommand>     Manage sidebar sections (list/create/rename/decommission/restore/delete)",
     "  session <subcommand>     Manage session transcripts",
     "  board <channelId>        Kanban view of tickets",
