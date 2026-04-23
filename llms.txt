@@ -1,0 +1,59 @@
+# Relay
+
+> Local-first orchestration for coding agents. Relay turns a sentence, a GitHub issue, or a Linear ticket into a plan, decomposes it into tickets, dispatches them to Claude or Codex CLI agents across one or more repos, tracks long-running work, and keeps a durable decision log — all on the user's machine, with no hosted service. CLI binary is `rly`; npm package is `@jcast90/relay`.
+
+## Install
+
+```bash
+npm install -g @jcast90/relay
+rly welcome
+```
+
+No hosted service, no telemetry, no phone-home — all state stays in `~/.relay/` on disk. MIT licensed.
+
+## Docs
+
+- [README](https://github.com/jcast90/relay/blob/main/README.md): install, quickstart, CLI reference, architecture, concepts
+- [Getting started](https://github.com/jcast90/relay/blob/main/docs/getting-started.md): canonical walkthrough
+- [Providers](https://github.com/jcast90/relay/blob/main/docs/providers.md): Claude, Codex, and any OpenAI-compatible provider (MiniMax, OpenRouter, DeepSeek, Groq, Together, LiteLLM, vLLM)
+- [Contributing](https://github.com/jcast90/relay/blob/main/CONTRIBUTING.md): how to send a PR
+- [AGENTS.md](https://github.com/jcast90/relay/blob/main/AGENTS.md): coding conventions for agents working inside the Relay repo
+- [Security](https://github.com/jcast90/relay/blob/main/SECURITY.md): supported versions + reporting
+
+## Key concepts
+
+- **Channel**: Slack-style workspace for one piece of work — feed, tickets, runs, decisions, sessions. One channel can attach multiple repos; exactly one is primary.
+- **Ticket**: parallelisable work unit with a dependency DAG, retry budget, specialty tag (`general | ui | business_logic | api_crud | devops | testing`), optional `assignedAlias` for routing to an associated-repo agent, and verification commands.
+- **Decision**: first-class record with title, description, rationale, alternatives, and linkedArtifacts. Atomically written per-decision to `channels/<id>/decisions/<id>.json`.
+- **Crosslink**: live agent discovery and messaging across sessions in different repos, via `crosslink_discover` / `crosslink_send` / `crosslink_poll` MCP tools.
+- **Complexity tiers**: `trivial`, `bugfix`, `feature_small`, `feature_large` (requires user approval), `architectural` (design-doc first), `multi_repo`.
+- **Dashboards**: CLI (`rly channels`, `rly board`, `rly decisions`), TUI (`rly tui`, Rust / ratatui), and GUI (`rly gui`, Tauri desktop app). All three read the same `~/.relay/` files; no split brain.
+
+## Use cases
+
+- Individual developer wanting supervised multi-hour coding runs with durable decision logging
+- Team coordinating work across multiple repos where agents need to message each other and share context
+- Users who want to run AI coding agents without sending code to a hosted service
+- Existing Claude CLI / Codex CLI users who want to turn single-turn sessions into orchestrated workflows
+
+## Not a good fit
+
+- Users wanting a hosted SaaS — Relay has no hosted offering
+- Users who prefer an IDE-embedded experience like Cursor or Windsurf — Relay is CLI/TUI/GUI-first
+- Users on exotic platforms — macOS is daily-driven, Linux and Windows are supported but integration-test coverage is still being promoted
+
+## MCP tools exposed to agents
+
+- **Harness (8)**: `harness_status`, `harness_list_runs`, `harness_get_run_detail`, `harness_get_artifact`, `harness_approve_plan`, `harness_reject_plan`, `harness_dispatch`, `project_create`
+- **Channels (6)**: `channel_create`, `channel_get`, `channel_post`, `channel_record_decision`, `channel_task_board`, `harness_running_tasks`
+- **Crosslink (3)**: `crosslink_discover`, `crosslink_send`, `crosslink_poll`
+
+Run `rly inspect-mcp` for the authoritative live list.
+
+## Optional
+
+- [CHANGELOG](https://github.com/jcast90/relay/blob/main/CHANGELOG.md)
+- [Open issues tagged good-first-issue](https://github.com/jcast90/relay/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22)
+- [Open issues tagged help-wanted](https://github.com/jcast90/relay/issues?q=is%3Aopen+is%3Aissue+label%3A%22help+wanted%22)
+- [Latest release](https://github.com/jcast90/relay/releases/latest)
+- [npm package page](https://www.npmjs.com/package/@jcast90/relay)

@@ -24,7 +24,7 @@
 
 ---
 
-> ⚠️ **Beta — pre-v1.** Relay is actively developed and hasn't cut a 1.0 yet. APIs, CLI flags, file layouts under `~/.relay/`, and GUI surfaces can change between releases. Expect bugs. If you hit one, please [open an issue](https://github.com/jcast90/relay/issues/new) with a reproduction — or send a PR. Work-in-progress features + things up for grabs live on the [GitHub Projects board](https://github.com/users/jcast90/projects/3) — pick something up and collaborate.
+> ⚠️ **Beta — pre-v1.** Relay is actively developed and hasn't cut a 1.0 yet. APIs, CLI flags, file layouts under `~/.relay/`, and GUI surfaces can change between releases. Expect bugs. If you hit one, please [open an issue](https://github.com/jcast90/relay/issues/new) with a reproduction — or send a PR. Newcomer-friendly work is tagged [`good first issue`](https://github.com/jcast90/relay/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22); meatier tickets live under [`help wanted`](https://github.com/jcast90/relay/issues?q=is%3Aopen+is%3Aissue+label%3A%22help+wanted%22). Pick something up and comment "I'll take this."
 
 ## What Relay is
 
@@ -548,7 +548,11 @@ Per-area quick loops:
 
 ## Contributing
 
-Relay is pre-v1 and issues/PRs are genuinely welcome — including from folks who've never contributed before. If you hit a bug, file it with a reproduction. If you want to help: the [GitHub Projects board](https://github.com/users/jcast90/projects/3) is the canonical list of work-in-progress features and things up for grabs. Pick a card, comment "I'll take this," and open a PR. For larger changes, open an issue first so we can align on shape before you burn time.
+Relay is pre-v1 and issues/PRs are genuinely welcome — including from folks who've never contributed before. If you hit a bug, file it with a reproduction. If you want to help:
+
+- **First-time contributors** → [`good first issue`](https://github.com/jcast90/relay/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22) — small, scoped, concrete. Comment "I'll take this" before you start so two people don't collide.
+- **Repeat contributors** → [`help wanted`](https://github.com/jcast90/relay/issues?q=is%3Aopen+is%3Aissue+label%3A%22help+wanted%22) — bigger efforts like distribution channels, cross-platform CI, and cost guardrails.
+- **For larger changes**, open an issue first so we can align on shape before you burn time.
 
 See [`AGENTS.md`](./AGENTS.md) for the coding-agent conventions.
 
