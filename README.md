@@ -5,8 +5,12 @@
 <h1 align="center">Relay</h1>
 
 <p align="center">
-  <b>Orchestrate coding agents across repos. Local-first, self-hosted, runs inside your existing Claude / Codex CLI.</b><br/>
-  Relay turns a single request into a plan, decomposes it into tickets, dispatches them to agents across one or more repos, tracks long-running work, and keeps a durable decision log — all on your machine, with no hosted service required.
+  <b>Slack for your coding agents.</b><br/>
+  Coordinate coding agents across repos — with an audit trail.
+</p>
+
+<p align="center">
+  Runs inside your existing Claude or Codex CLI via MCP. Local-first, self-hosted, all state in <code>~/.relay/</code> on your machine. No hosted service, no telemetry.
 </p>
 
 <p align="center">
@@ -26,17 +30,34 @@
 
 > ⚠️ **Beta — pre-v1.** Relay is actively developed and hasn't cut a 1.0 yet. APIs, CLI flags, file layouts under `~/.relay/`, and GUI surfaces can change between releases. Expect bugs. If you hit one, please [open an issue](https://github.com/jcast90/relay/issues/new) with a reproduction — or send a PR. Newcomer-friendly work is tagged [`good first issue`](https://github.com/jcast90/relay/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22); meatier tickets live under [`help wanted`](https://github.com/jcast90/relay/issues?q=is%3Aopen+is%3Aissue+label%3A%22help+wanted%22). Pick something up and comment "I'll take this."
 
+## What makes Relay different
+
+The agent-harness space is crowded, but most tools solve only **one** of: running agents in parallel, orchestrating a single repo, or wrapping everything in a chat UI. Relay is built for the work that needs all three — with first-class cross-repo coordination on top.
+
+- 🗣 **Agents talk to each other — not just run side-by-side.** Sessions in different repos discover each other through MCP crosslink tools. A live agent in the `backend` repo can ask the live agent in the `web` repo a question instead of grepping its files. Parallel agent runners don't do this; Relay does.
+- 📋 **One ticket board spans many repos.** Tickets carry a dependency DAG and `assignedAlias` routing — a feature touching 3 repos is one plan with 3 ticket streams, not 3 uncorrelated sessions. Single-repo orchestrators can't express this.
+- 💬 **Every decision is logged with rationale + alternatives.** Like Slack threads, but for architectural choices. Step away for 4 hours, come back to an audit trail — who chose what, why, and what else was considered. Most harnesses don't persist anything beyond the raw transcript.
+- 🎛 **Three dashboards, one source of truth — no cloud.** CLI (`rly`), ratatui TUI, and Tauri desktop GUI all read the same `~/.relay/` files. No sync layer, no split brain, no hosted service, no telemetry. Rare in AI tooling, required in regulated environments.
+
 ## What Relay is
 
-Relay turns a sentence, a GitHub issue URL, or a Linear ticket into a **running plan of AI-coded work** — with tickets, verification loops, live PR tracking, and optional human approval gates. Sessions run inside your normal Claude or Codex CLI; Relay wraps them with an MCP server that records everything into Slack-style **channels** you can query later.
+Relay turns a sentence, a GitHub issue URL, or a Linear ticket into a **running plan of AI-coded work**: classify → plan → decompose into a ticket DAG → dispatch to Claude or Codex agents → verify → open PR → track until merged. Every event — tool calls, state changes, decisions — lands in a Slack-style channel feed you can query later.
 
-**Suitable for individual developers and for teams working inside a company.** Relay runs entirely on your machine. There is no hosted Relay service, no telemetry, and no phone-home — all state stays in `~/.relay/` on disk. What it's built for:
+Suitable for individual developers and teams. CLI: **`rly`**.
 
-- **Agent orchestration** — classify, plan, decompose, dispatch, and verify. One request turns into a supervised workflow.
-- **Multi-repo coordination** — sessions running in different repos can discover each other, message, and share context via the crosslink MCP tools.
-- **Long-running work** — background PR tracking, plan-approval gates, and a durable decision log so you can step away and come back.
+## Use cases
 
-CLI: **`rly`**.
+Where Relay earns its keep today:
+
+**1. Multi-repo feature rollouts.** You change an API contract in `backend`, the frontend needs the new payload shape, and the client SDK needs a version bump. One channel, three attached repos, dependency DAG ensures the backend ticket completes before the frontend / SDK work starts. Agents crosslink-message each other as shapes stabilize.
+
+**2. Dependency upgrades that ripple.** Bumping a shared library across a dozen service repos. One ticket per repo, agents run in parallel (capped by max-concurrency), status on one board. Agents that hit a migration wall post a decision with alternatives before continuing — so the fifth repo's agent inherits the first repo's answer instead of re-solving it.
+
+**3. Incident response + post-mortems.** Fixes that span services — the `api` hotfix, the `worker` retry change, the `infra` timeout bump. Relay's decision log, with rationale and alternatives per decision, doubles as the post-mortem artifact. Named agents ("Saturn reviewed the migration") give the writeup a coherent narrative instead of `agent-3`.
+
+**4. Long-form refactors.** "Migrate every `axios` call to `fetch` across 40 repos." One autonomous channel, tickets per repo, approval gates at milestones. Run it with `rly run --autonomous <channelId> --budget-tokens 500000 --max-hours 8`, step away, come back to a stack of PRs and a decision log showing what each agent chose.
+
+**5. Overnight autonomous runs.** Queue a backlog Friday evening, run with a budget cap. Monday you have merged PRs plus a decision log showing each architectural choice. Bounded by wall-clock, token budget, and a STOP-file kill switch — not "trust the agent and hope."
 
 ## Table of contents
 
