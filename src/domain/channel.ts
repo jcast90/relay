@@ -37,8 +37,37 @@ export const ChannelEntryTypeSchema = z.enum([
   "ref_added",
   "run_started",
   "run_completed",
+  // Cross-link from a parent (usually a repo's "general") channel to a PR
+  // review DM, and vice versa. GUI renders these as a link-out; readers that
+  // don't know the type fall back to the usual status-update layout.
+  "pr_link",
 ]);
 export type ChannelEntryType = z.infer<typeof ChannelEntryTypeSchema>;
+
+/**
+ * PR-review DM metadata. Present on channels minted by `pr_review_start`,
+ * absent on every other channel. Keyed on `url` — `findChannelByPrUrl` uses
+ * exact match so draft→ready transitions and force-pushes stay on the same
+ * DM. `state` mirrors the GitHub PR state so poller updates / GUI pills can
+ * read a single source of truth.
+ */
+export const ChannelPrStateSchema = z.enum(["open", "merged", "closed"]);
+export type ChannelPrState = z.infer<typeof ChannelPrStateSchema>;
+
+export interface ChannelPr {
+  url: string;
+  number: number;
+  repo: { owner: string; name: string };
+  state: ChannelPrState;
+  title?: string;
+  /**
+   * Optional backlink to the channel that spawned the review (typically the
+   * repo's "general" channel). Absent for standalone review DMs — a PR
+   * submitted by an external user against a repo with no Relay project
+   * channel lands in a parentless DM.
+   */
+  parentChannelId?: string;
+}
 
 export interface ChannelMember {
   agentId: string;
@@ -132,6 +161,13 @@ export interface Channel {
    * (explicit default profile → `HARNESS_PROVIDER`). Optional for back-compat.
    */
   providerProfileId?: string;
+  /**
+   * PR-review metadata. Present on DMs minted by the `pr_review_start` MCP
+   * tool; absent on every other channel. Presence implies the channel's
+   * lifecycle is bound to the PR — `PrPoller` archives it when the PR
+   * transitions to `merged` / `closed`. See {@link ChannelPr}.
+   */
+  pr?: ChannelPr;
   createdAt: string;
   updatedAt: string;
 }

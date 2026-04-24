@@ -389,7 +389,66 @@ export class PrPoller {
         }
       }
     }
-    if (to === "merged" || to === "closed") this.untrack(entry.ticketId);
+    if (to === "merged" || to === "closed") {
+      await this.archiveReviewDmIfPresent(entry, to);
+      this.untrack(entry.ticketId);
+    }
+  }
+
+  /**
+   * When the tracked row's `channelId` points at a PR-review DM (minted by
+   * the `pr_review_start` MCP tool, identified by the `pr` block on the
+   * channel), flip the DM's `pr.state` to `to` — which also archives it —
+   * and cross-link back to the parent channel when one is set. Silently
+   * skips channels without a `pr` block so project/feature channels that
+   * happen to track a PR continue to behave as today.
+   */
+  private async archiveReviewDmIfPresent(entry: TrackedPr, to: "merged" | "closed"): Promise<void> {
+    let channel;
+    try {
+      channel = await this.channelStore.getChannel(entry.channelId);
+    } catch (err) {
+      console.warn("[pr-poller] failed to read channel for DM archive check", err);
+      return;
+    }
+    if (!channel?.pr) return;
+
+    try {
+      await this.channelStore.postEntry(entry.channelId, {
+        type: "status_update",
+        fromAgentId: null,
+        fromDisplayName: "pr-poller",
+        content: `PR ${to} — archiving review thread.`,
+        metadata: { prUrl: entry.pr.url, prState: to },
+      });
+    } catch (err) {
+      console.warn("[pr-poller] failed to post DM-archive notice", err);
+    }
+
+    try {
+      await this.channelStore.updatePrState(entry.channelId, to);
+    } catch (err) {
+      console.warn("[pr-poller] failed to archive PR DM", err);
+    }
+
+    const parentId = channel.pr.parentChannelId;
+    if (!parentId) return;
+    try {
+      await this.channelStore.postEntry(parentId, {
+        type: "pr_link",
+        fromAgentId: null,
+        fromDisplayName: "PR Review",
+        content: `PR ${to}: ${entry.pr.url}`,
+        metadata: {
+          prUrl: entry.pr.url,
+          prNumber: entry.pr.number,
+          prState: to,
+          dmChannelId: entry.channelId,
+        },
+      });
+    } catch (err) {
+      console.warn("[pr-poller] failed to post parent cross-link on PR close", err);
+    }
   }
 
   private async post(

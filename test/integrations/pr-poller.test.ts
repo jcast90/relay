@@ -333,4 +333,115 @@ describe("PrPoller", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  describe("PR review DM archival", () => {
+    it("archives a PR review DM when the PR merges and posts a parent cross-link", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "pr-poller-dm-merge-"));
+      const store = new ChannelStore(dir);
+      try {
+        const parent = await store.createChannel({ name: "general", description: "parent" });
+        const dm = await store.createPrDm({
+          pr: {
+            url: "https://github.com/acme/widgets/pull/42",
+            number: 42,
+            repo: { owner: "acme", name: "widgets" },
+            state: "open",
+            parentChannelId: parent.channelId,
+          },
+        });
+
+        const enqueueFollowUp = vi.fn<(req: FollowUpRequest) => Promise<string>>(
+          async () => "followup-id"
+        );
+        const scheduler: FollowUpDispatcher = { enqueueFollowUp };
+        const scm = scriptedScm([
+          new Map([["acme/widgets#42", seed({ prState: "open" })]]),
+          new Map([["acme/widgets#42", seed({ prState: "merged" })]]),
+        ]);
+        const poller = new PrPoller({ scm, channelStore: store, scheduler });
+        poller.track(makeTracked(dm.channelId));
+
+        await poller.tick();
+        await poller.tick();
+
+        const updatedDm = await store.getChannel(dm.channelId);
+        expect(updatedDm?.status).toBe("archived");
+        expect(updatedDm?.pr?.state).toBe("merged");
+
+        const dmFeed = await store.readFeed(dm.channelId);
+        const archiveNotice = dmFeed.find((e) => e.content.includes("archiving review thread"));
+        expect(archiveNotice).toBeDefined();
+
+        const parentFeed = await store.readFeed(parent.channelId);
+        const crossLink = parentFeed.find(
+          (e) => e.type === "pr_link" && e.content.startsWith("PR merged")
+        );
+        expect(crossLink).toBeDefined();
+        expect(crossLink!.metadata.dmChannelId).toBe(dm.channelId);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("skips DM archival for plain (non-PR) channels", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "pr-poller-plain-"));
+      const store = new ChannelStore(dir);
+      try {
+        const channel = await store.createChannel({ name: "#feature", description: "plain" });
+        const enqueueFollowUp = vi.fn<(req: FollowUpRequest) => Promise<string>>(
+          async () => "followup-id"
+        );
+        const scheduler: FollowUpDispatcher = { enqueueFollowUp };
+        const scm = scriptedScm([
+          new Map([["acme/widgets#42", seed({ prState: "open" })]]),
+          new Map([["acme/widgets#42", seed({ prState: "merged" })]]),
+        ]);
+        const poller = new PrPoller({ scm, channelStore: store, scheduler });
+        poller.track(makeTracked(channel.channelId));
+
+        await poller.tick();
+        await poller.tick();
+
+        const after = await store.getChannel(channel.channelId);
+        expect(after?.status).toBe("active");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("archives without a parent cross-link when the DM has no parentChannelId", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "pr-poller-standalone-"));
+      const store = new ChannelStore(dir);
+      try {
+        const dm = await store.createPrDm({
+          pr: {
+            url: "https://github.com/acme/widgets/pull/42",
+            number: 42,
+            repo: { owner: "acme", name: "widgets" },
+            state: "open",
+          },
+        });
+
+        const enqueueFollowUp = vi.fn<(req: FollowUpRequest) => Promise<string>>(
+          async () => "followup-id"
+        );
+        const scheduler: FollowUpDispatcher = { enqueueFollowUp };
+        const scm = scriptedScm([
+          new Map([["acme/widgets#42", seed({ prState: "open" })]]),
+          new Map([["acme/widgets#42", seed({ prState: "closed" })]]),
+        ]);
+        const poller = new PrPoller({ scm, channelStore: store, scheduler });
+        poller.track(makeTracked(dm.channelId));
+
+        await poller.tick();
+        await poller.tick();
+
+        const closed = await store.getChannel(dm.channelId);
+        expect(closed?.status).toBe("archived");
+        expect(closed?.pr?.state).toBe("closed");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  });
 });

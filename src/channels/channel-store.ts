@@ -10,6 +10,8 @@ import {
   type ChannelEntry,
   type ChannelEntryType,
   type ChannelMember,
+  type ChannelPr,
+  type ChannelPrState,
   type ChannelRef,
   type ChannelRunLink,
   type ChannelStatus,
@@ -193,6 +195,7 @@ export class ChannelStore {
         | "kind"
         | "sectionId"
         | "providerProfileId"
+        | "pr"
       >
     >
   ): Promise<Channel | null> {
@@ -268,6 +271,87 @@ export class ChannelStore {
   async unarchiveChannel(channelId: string): Promise<Channel | null> {
     assertSafeSegment(channelId, "channelId");
     return this.updateChannel(channelId, { status: "active" });
+  }
+
+  // --- PR review DMs ---
+
+  /**
+   * Find the first non-archived channel whose `pr.url` exactly matches the
+   * supplied URL. Used by `pr_review_start` for idempotency: a second
+   * invocation on the same PR returns the existing DM instead of minting
+   * another. Exact-match dedup (rather than owner+number) survives repo
+   * rename / transfer because the URL itself moves with the PR.
+   */
+  async findChannelByPrUrl(prUrl: string): Promise<Channel | null> {
+    const channels = await this.listChannels();
+    for (const c of channels) {
+      if (c.status === "archived") continue;
+      if (c.pr?.url === prUrl) return c;
+    }
+    return null;
+  }
+
+  /**
+   * Mint a DM channel bound to a pull request. The DM is `kind: "dm"` so the
+   * sidebar segregates it from project channels; lifecycle is driven by the
+   * PR's state (see {@link PrPoller.onPrStateChange} — archives on
+   * merged/closed). Not idempotent on its own — callers must first check
+   * {@link findChannelByPrUrl}. Keeping the two steps separate lets callers
+   * decide how to handle "already exists" (reuse vs. post a 'resumed' entry
+   * vs. error) without baking a policy into the store.
+   */
+  async createPrDm(input: {
+    pr: ChannelPr;
+    repoAssignment?: RepoAssignment;
+    workspaceId?: string;
+  }): Promise<Channel> {
+    await mkdir(this.channelsDir, { recursive: true });
+
+    const now = new Date().toISOString();
+    const assignments = input.repoAssignment ? [input.repoAssignment] : undefined;
+    const primaryWorkspaceId = input.repoAssignment?.workspaceId;
+    const name = input.pr.title
+      ? `${input.pr.repo.name}#${input.pr.number}: ${input.pr.title}`.slice(0, 80)
+      : `${input.pr.repo.owner}/${input.pr.repo.name}#${input.pr.number}`;
+
+    const channel: Channel = {
+      channelId: buildChannelId(),
+      name,
+      description: input.pr.url,
+      status: "active",
+      workspaceIds: input.workspaceId ? [input.workspaceId] : [],
+      members: [],
+      pinnedRefs: [],
+      repoAssignments: assignments,
+      primaryWorkspaceId,
+      kind: "dm",
+      pr: input.pr,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await this.writeChannel(channel);
+    await mkdir(join(this.channelsDir, channel.channelId), { recursive: true });
+
+    return channel;
+  }
+
+  /**
+   * Update the PR state on a PR-bound DM. When the new state is `merged` or
+   * `closed`, the channel is archived in the same write — the DM's purpose
+   * ends with the PR. No-op (returns `null`) if the channel has no `pr`
+   * block; callers can rely on this to reject mistargeted updates.
+   */
+  async updatePrState(channelId: string, state: ChannelPrState): Promise<Channel | null> {
+    assertSafeSegment(channelId, "channelId");
+    const channel = await this.getChannel(channelId);
+    if (!channel?.pr) return null;
+
+    const nextPr: ChannelPr = { ...channel.pr, state };
+    const nextStatus: ChannelStatus =
+      state === "merged" || state === "closed" ? "archived" : channel.status;
+
+    return this.updateChannel(channelId, { pr: nextPr, status: nextStatus });
   }
 
   /**
