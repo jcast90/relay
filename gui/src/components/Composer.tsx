@@ -24,6 +24,11 @@ export type ActiveStream = {
   // when the user switches channels. `closed` drives the pulse-dot
   // going static and the status label flipping to "done".
   closed?: boolean;
+  // When the turn terminated via an `error` event rather than `done`,
+  // we render the error text prominently so the user sees the real
+  // failure (e.g. "claude not found in PATH") instead of a misleading
+  // "done" state with no response body.
+  error?: string;
 };
 
 export type StreamDispatch = (s: ActiveStream | null) => void;

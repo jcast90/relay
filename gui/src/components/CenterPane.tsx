@@ -184,9 +184,17 @@ export function CenterPane({
         // are loaded — SessionMessages dedupes the duplicate assistant
         // content when a closed stream is present.
         const { streamId } = event;
+        const errorText = event.kind === "error" ? event.message : undefined;
+        // Mark the stream closed but DON'T auto-expand the activity
+        // stack — auto-expanding caused a visible height pop on done
+        // that registered as a flash. The user can still click "+N
+        // more" to reveal the full log whenever they want. If this was
+        // an error (claude failed to launch, non-zero exit, etc.),
+        // attach the message so StreamCard can render it prominently
+        // instead of showing a misleading "done" with no body.
         setStream((current) =>
           current && current.streamId === streamId
-            ? { ...current, closed: true, expanded: true }
+            ? { ...current, closed: true, error: errorText }
             : current
         );
         onRefresh();
@@ -267,6 +275,18 @@ export function CenterPane({
             onToggleStreamExpanded={() =>
               setStream((s) => (s ? { ...s, expanded: !s.expanded } : s))
             }
+            onStopStream={() => {
+              // Fire-and-forget: the backend's cancel flag truncates
+              // the session log and emits a terminal event, which the
+              // subscriber will flip to `closed`. Don't tear down stream
+              // state here — let the event loop close it so the final
+              // activity line still renders.
+              if (currentStream) {
+                api.cancelChatStream(currentStream.streamId).catch((err) => {
+                  console.warn("[center] cancelChatStream failed", err);
+                });
+              }
+            }}
             onRewound={() => {
               setStream(null);
               onRefresh();
@@ -281,11 +301,11 @@ export function CenterPane({
             onSessionCreated={onSessionCreated}
             onSlashNew={isDm ? () => setPromoteOpen(true) : undefined}
             onOptimisticUserMessage={(content, alias) => {
-              // The real user message gets persisted server-side and
-              // shows up via onRefresh when `done` fires; the optimistic
-              // insert just bridges the perceptual gap between click and
-              // round-trip. `loadSession` is the authority — its re-
-              // render replaces this stub.
+              // Append the user turn to sessionMessages synchronously so
+              // it renders on click, before api.startChat's IPC resolves.
+              // loadSession fires a moment later with the server-
+              // authoritative copy; MarkdownBody memoizes on text so the
+              // body DOM doesn't re-render when the two rows swap.
               setSessionMessages((prev) => [
                 ...prev,
                 {
@@ -296,7 +316,7 @@ export function CenterPane({
                 },
               ]);
               // Also clear any previously settled stream so the new
-              // optimistic turn isn't stacked against a stale card.
+              // turn isn't stacked against a stale card.
               setStream(null);
             }}
           />
