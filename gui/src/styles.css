@@ -1308,12 +1308,10 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
    (pulsing amber dot + "thinking/writing" label) next to the author.
    Closing the card fades out over 180ms; a matching setTimeout on the
    JS side unmounts after the transition. */
-.stream-card {
-  transition: opacity 180ms ease;
-}
-.stream-card.closing {
-  opacity: 0;
-}
+/* `.stream-card` stays mounted from first event through the end of the
+   turn. On done (`.closed`) the pulse stops and the status label flips
+   to "done" — everything else (activity log, response text, author
+   header) remains visible so the user can review what was run. */
 .stream-status {
   display: inline-flex;
   align-items: center;
@@ -1328,11 +1326,17 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   border-radius: 50%;
   background: var(--color-accent-amber);
   animation: var(--anim-pulse);
+  transition:
+    background 180ms ease,
+    opacity 180ms ease;
 }
-.stream-card.closing .stream-status .dot {
-  /* Stop pulsing while fading out — the motion competes with the fade. */
+.stream-card.closed .stream-status .dot {
   animation: none;
-  background: var(--color-paper-line);
+  background: var(--color-text-dim);
+  opacity: 0.6;
+}
+.stream-card.closed .stream-status {
+  color: var(--color-text-dim);
 }
 .stream-activity {
   font-size: var(--font-size-sm);

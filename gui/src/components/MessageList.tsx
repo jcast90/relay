@@ -7,7 +7,10 @@ import { agentAvatar } from "../lib/agents";
 import { useAppearance } from "../lib/appearance";
 import type { ActiveStream } from "./Composer";
 
-const ACTIVITY_TOP_N = 3;
+// Collapsed stream card shows the last 6 activity lines by default — 3
+// was too narrow and the user lost visibility into what the agent ran.
+// Expand (and keeping the card mounted post-done) reveals the full list.
+const ACTIVITY_TOP_N = 6;
 
 /**
  * Memoized markdown body. `renderMarkdown` runs react-markdown + remark-gfm
@@ -79,6 +82,7 @@ export function MessageList({
           messages={sessionMessages}
           streaming={!!stream}
           streamId={streamId}
+          closedStreamAccum={stream?.closed ? stream.accum : null}
           onRewound={onRewound}
         />
       ) : (
@@ -167,6 +171,7 @@ function SessionMessages({
   messages,
   streaming,
   streamId,
+  closedStreamAccum,
   onRewound,
 }: {
   channel: Channel;
@@ -174,19 +179,34 @@ function SessionMessages({
   messages: PersistedChatMessage[];
   streaming: boolean;
   streamId: number | null;
+  // When a stream has closed but is still mounted (we keep the card to
+  // preserve activity history), the backend has already persisted its
+  // assistant message — which would render here as a duplicate. Dedupe
+  // by dropping the trailing assistant message when its content matches
+  // the closed stream's accum.
+  closedStreamAccum: string | null;
   onRewound: () => void;
 }) {
   const ui = useMemo(() => mentionContext(toUiChannel(channel)), [channel]);
   const [rewindTarget, setRewindTarget] = useState<PersistedChatMessage | null>(null);
 
-  if (messages.length === 0)
+  const visibleMessages = useMemo(() => {
+    if (!closedStreamAccum || messages.length === 0) return messages;
+    const last = messages[messages.length - 1];
+    if (last.role === "assistant" && last.content === closedStreamAccum) {
+      return messages.slice(0, -1);
+    }
+    return messages;
+  }, [messages, closedStreamAccum]);
+
+  if (visibleMessages.length === 0 && !closedStreamAccum)
     return <div className="chat-empty">No messages in this session yet</div>;
   return (
     <>
-      {messages.map((m, i) => {
+      {visibleMessages.map((m, i) => {
         const rewindKey = m.metadata?.rewindKey;
         const canRewind = m.role === "user" && !!rewindKey && !streaming;
-        const prev = messages[i - 1];
+        const prev = visibleMessages[i - 1];
         const sameAuthor =
           prev && prev.role === m.role && (prev.agentAlias ?? "") === (m.agentAlias ?? "");
         const dt = prev ? Date.parse(m.timestamp) - Date.parse(prev.timestamp) : Infinity;
@@ -370,13 +390,13 @@ function StreamCard({
   const authorKey = stream.alias ?? "assistant";
   const authorLabel = stream.alias ? `@${stream.alias}` : "assistant";
   // Wrap the streaming content in the same .message / role-assistant
-  // layout used for persisted assistant messages so the transition at
-  // `done` is an in-place content swap, not a DOM-subtree replacement.
-  // The `closing` class drives a short fade-out; the amber pulse dot
-  // lives inside a status pill next to the author label, which stays
-  // stable across the thinking→writing transition (no card-color flip).
+  // layout used for persisted assistant messages so on `done` the only
+  // visible change is "dot pulsing → static" and the status label text.
+  // The card stays mounted post-done so the activity log remains
+  // reviewable; it unmounts only when the next user turn starts.
+  const statusLabel = stream.closed ? "done" : stream.accum ? "writing response" : "thinking";
   return (
-    <div className={`message role-assistant stream-card ${stream.closing ? "closing" : ""}`}>
+    <div className={`message role-assistant stream-card ${stream.closed ? "closed" : ""}`}>
       <MsgAvatar seed={authorKey} />
       <div>
         <div className="msg-head">
@@ -386,7 +406,7 @@ function StreamCard({
           <span className="stream-status">
             <span className="dot" aria-hidden />
             <span>
-              {stream.closing ? "done" : stream.accum ? "writing response" : "thinking"}
+              {statusLabel}
               {total > 0 ? ` · ${total} action${total === 1 ? "" : "s"}` : ""}
             </span>
           </span>

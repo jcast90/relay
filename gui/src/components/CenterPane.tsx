@@ -154,31 +154,28 @@ export function CenterPane({
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
-    const closingTimers = new Map<number, number>();
     subscribeChatEvents((event: ChatEvent) => {
       setStream((current) => {
         if (!current || event.streamId !== current.streamId) return current;
         return reduceStream(current, event);
       });
       if (event.kind === "done" || event.kind === "error") {
-        // Previously we set `stream` to null immediately on done; the
-        // stream card's amber-bordered container vanished and the
-        // persisted assistant message appeared in its place as a plain
-        // message row, producing a visible "pop". Keep the card mounted
-        // under a `closing` flag for one frame so StreamCard can fade
-        // out while the refreshed sessionMessages render underneath.
+        // Previously the card faded out and was torn down on done. The
+        // user asked for the activity history to stick around so they
+        // can see what the agent actually did — keep the card mounted,
+        // auto-expand the activity stack, and mark the turn as closed.
+        // The card unmounts on the NEXT user submit (optimistic handler
+        // above calls setStream(null)) or on channel switch. We still
+        // onRefresh so the persisted assistant message + user message
+        // are loaded — SessionMessages dedupes the duplicate assistant
+        // content when a closed stream is present.
         const { streamId } = event;
         setStream((current) =>
-          current && current.streamId === streamId ? { ...current, closing: true } : current
+          current && current.streamId === streamId
+            ? { ...current, closed: true, expanded: true }
+            : current
         );
         onRefresh();
-        const prev = closingTimers.get(streamId);
-        if (prev !== undefined) window.clearTimeout(prev);
-        const tid = window.setTimeout(() => {
-          closingTimers.delete(streamId);
-          setStream((current) => (current && current.streamId === streamId ? null : current));
-        }, 180);
-        closingTimers.set(streamId, tid);
       }
     }).then((u) => {
       if (cancelled) u();
@@ -187,8 +184,6 @@ export function CenterPane({
     return () => {
       cancelled = true;
       if (unlisten) unlisten();
-      for (const tid of closingTimers.values()) window.clearTimeout(tid);
-      closingTimers.clear();
     };
   }, [onRefresh]);
 
@@ -271,6 +266,25 @@ export function CenterPane({
             onStartStream={setStream}
             onSessionCreated={onSessionCreated}
             onSlashNew={isDm ? () => setPromoteOpen(true) : undefined}
+            onOptimisticUserMessage={(content, alias) => {
+              // The real user message gets persisted server-side and
+              // shows up via onRefresh when `done` fires; the optimistic
+              // insert just bridges the perceptual gap between click and
+              // round-trip. `loadSession` is the authority — its re-
+              // render replaces this stub.
+              setSessionMessages((prev) => [
+                ...prev,
+                {
+                  role: "user",
+                  content,
+                  timestamp: new Date().toISOString(),
+                  agentAlias: alias ?? undefined,
+                },
+              ]);
+              // Also clear any previously settled stream so the new
+              // optimistic turn isn't stacked against a stale card.
+              setStream(null);
+            }}
           />
         </>
       )}
