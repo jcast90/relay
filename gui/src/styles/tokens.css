@@ -140,6 +140,30 @@
   50%      { opacity: 1;    transform: scale(1.08); }
 }
 
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-paper-base:  #1a2232;
+  --color-paper-alt:   #232c40;
+  --color-paper-line:  #2b3550;
+
+  --color-text-primary:      #e8ecf4;
+  --color-text-muted:        #8a93a5;
+  --color-text-dim:          #5b6579;
+
+  --color-accent-coral-soft: rgba(230, 90, 79, 0.18);
+  --color-accent-mint-soft:  rgba(63, 185, 132, 0.18);
+
+  --color-mention-primary-bg:    rgba(230, 90, 79, 0.15);
+  --color-mention-attached-bg:   rgba(74, 127, 208, 0.15);
+  --color-mention-human-bg:      rgba(42, 122, 90, 0.15);
+
+  --shadow-card:    0 2px 8px rgba(0, 0, 0, 0.30);
+  --shadow-popover: 0 6px 18px rgba(0, 0, 0, 0.45);
+  --shadow-modal:   0 24px 80px rgba(0, 0, 0, 0.65);
+  --shadow-drawer:  -16px 0 48px rgba(0, 0, 0, 0.40);
+}
+
 /* Bundled Inter (variable) + JetBrains Mono served from Tauri's public/
    dir so the app is fully offline-capable. OS-installed fallbacks stay in
    the src list so a stripped bundle still renders in a reasonable font. */

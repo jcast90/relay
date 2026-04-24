@@ -3,6 +3,7 @@ import { api } from "../api";
 import { confirmAction, notifyError } from "../lib/dialogs";
 import type { Channel, Section } from "../types";
 import { PromptModal } from "./PromptModal";
+import { useAppearance, resolveEffectiveTheme } from "../lib/appearance";
 
 type Props = {
   channels: Channel[];
@@ -143,6 +144,11 @@ export function Sidebar({
       await notifyError(`Delete failed: ${err}`);
     }
   };
+
+  const [appearance, setAppearance] = useAppearance();
+  const isDark = resolveEffectiveTheme(appearance.theme) === "dark";
+  const toggleTheme = () =>
+    setAppearance({ ...appearance, theme: isDark ? "light" : "dark" });
 
   const sorted = useMemo(() => sortByActivity(channels), [channels]);
   const isDm = (c: Channel) => c.kind === "dm";
@@ -401,6 +407,14 @@ export function Sidebar({
             </div>
           </div>
         </div>
+        <button
+          className="sidebar-footer-btn"
+          onClick={toggleTheme}
+          title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+          aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+        >
+          {isDark ? "☀" : "☾"}
+        </button>
         <button
           className="sidebar-footer-btn"
           onClick={onOpenSettings}

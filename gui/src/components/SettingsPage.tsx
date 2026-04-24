@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { GuiSettings, ProviderProfile } from "../types";
-import { useAppearance, type AvatarStyle, type Density } from "../lib/appearance";
+import { useAppearance, type AvatarStyle, type Density, type Theme } from "../lib/appearance";
 
 type Section = "ticketing" | "providers" | "appearance" | "general";
 
@@ -892,6 +892,11 @@ function ProvidersSection() {
 
 function AppearanceSection() {
   const [appearance, setAppearance] = useAppearance();
+  const themes: Array<{ value: Theme; title: string; desc: string }> = [
+    { value: "light", title: "Light", desc: "Always use the light theme." },
+    { value: "dark", title: "Dark", desc: "Always use the dark theme." },
+    { value: "system", title: "System", desc: "Follow the OS preference automatically." },
+  ];
   const avatarStyles: Array<{ value: AvatarStyle; title: string; desc: string }> = [
     {
       value: "glyph",
@@ -913,6 +918,28 @@ function AppearanceSection() {
   return (
     <>
       <h2>Appearance</h2>
+      <div className="settings-section">
+        <h3>Theme</h3>
+        <p className="help">Choose the colour scheme for the application.</p>
+        <div className="settings-radio-group">
+          {themes.map((t) => (
+            <label key={t.value} className={appearance.theme === t.value ? "selected" : ""}>
+              <input
+                type="radio"
+                name="theme"
+                checked={appearance.theme === t.value}
+                onChange={() => setAppearance({ ...appearance, theme: t.value })}
+              />
+              <span>
+                <span className="settings-radio-title">{t.title}</span>
+                <span className="settings-radio-desc" style={{ display: "block" }}>
+                  {t.desc}
+                </span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
       <div className="settings-section">
         <h3>Avatar style</h3>
         <p className="help">How agent avatars render across message feeds and the header stack.</p>
