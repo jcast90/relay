@@ -93,7 +93,7 @@ describe("renderMarkdown", () => {
 
   it("renders headings, bullet lists, and paragraphs as real block elements", () => {
     const { container } = render(
-      <>{renderMarkdown("## Top picks\n\n- one\n- two\n\nEnjoy.", channel)}</>,
+      <>{renderMarkdown("## Top picks\n\n- one\n- two\n\nEnjoy.", channel)}</>
     );
     expect(container.querySelector("h2")?.textContent).toBe("Top picks");
     const items = container.querySelectorAll("li");
@@ -117,7 +117,9 @@ describe("renderMarkdown", () => {
   });
 
   it("opens links in a new tab so the webview doesn't navigate", () => {
-    const { container } = render(<>{renderMarkdown("See [docs](https://example.com).", channel)}</>);
+    const { container } = render(
+      <>{renderMarkdown("See [docs](https://example.com).", channel)}</>
+    );
     const anchor = container.querySelector("a");
     expect(anchor?.getAttribute("target")).toBe("_blank");
     expect(anchor?.getAttribute("rel")).toContain("noopener");

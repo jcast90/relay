@@ -16,11 +16,7 @@ const INLINE_TOKEN_RE = /(@[a-zA-Z0-9][a-zA-Z0-9_-]*)|(\*\*[^*]+\*\*)|(`[^`]+`)/
 // time react-markdown hands us the children, so we only need mentions.
 const MENTION_RE = /(@[a-zA-Z0-9][a-zA-Z0-9_-]*)/g;
 
-function mentionNode(
-  token: string,
-  channel: ChannelLike,
-  key: string | number,
-): ReactNode {
+function mentionNode(token: string, channel: ChannelLike, key: string | number): ReactNode {
   const alias = token.slice(1);
   const handle = alias.toLowerCase();
   const aliasSet = new Set(channel?.repos ?? []);
@@ -93,8 +89,7 @@ function injectMentions(children: ReactNode, channel: ChannelLike): ReactNode {
       out.push(mentionNode(match[0], channel, k++));
       lastIdx = idx + match[0].length;
     }
-    if (lastIdx < child.length)
-      out.push(<Fragment key={k++}>{child.slice(lastIdx)}</Fragment>);
+    if (lastIdx < child.length) out.push(<Fragment key={k++}>{child.slice(lastIdx)}</Fragment>);
   });
   return <>{out}</>;
 }

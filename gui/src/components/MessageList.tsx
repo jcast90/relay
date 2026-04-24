@@ -366,9 +366,7 @@ function StreamCard({
           </button>
         )}
       </div>
-      {stream.accum && (
-        <div className="stream-body">{renderMarkdown(stream.accum, channel)}</div>
-      )}
+      {stream.accum && <div className="stream-body">{renderMarkdown(stream.accum, channel)}</div>}
     </div>
   );
 }
