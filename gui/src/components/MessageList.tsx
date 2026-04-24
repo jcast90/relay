@@ -7,10 +7,10 @@ import { agentAvatar } from "../lib/agents";
 import { useAppearance } from "../lib/appearance";
 import type { ActiveStream } from "./Composer";
 
-// Collapsed stream card shows the last 6 activity lines by default — 3
-// was too narrow and the user lost visibility into what the agent ran.
-// Expand (and keeping the card mounted post-done) reveals the full list.
-const ACTIVITY_TOP_N = 6;
+// Collapsed stream card shows the 3 most recent activity lines. Enough
+// to signal liveness without dominating the chat surface; the user can
+// expand or keep the card mounted post-done to review the full run.
+const ACTIVITY_TOP_N = 3;
 
 /**
  * Memoized markdown body. `renderMarkdown` runs react-markdown + remark-gfm
@@ -34,6 +34,7 @@ type Props = {
   stream: ActiveStream | null;
   streamId: number | null;
   onToggleStreamExpanded: () => void;
+  onStopStream: () => void;
   onRewound: () => void;
 };
 
@@ -45,6 +46,7 @@ export function MessageList({
   stream,
   streamId,
   onToggleStreamExpanded,
+  onStopStream,
   onRewound,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -57,7 +59,10 @@ export function MessageList({
   // implementation forced a layout (scrollTop = scrollHeight) on every
   // chunk; on a fast-streaming reply that fires ~30x/sec and each write
   // triggers a synchronous layout, which the user perceives as jitter.
-  // rAF collapses bursts to one scroll per paint.
+  // rAF collapses bursts to one scroll per paint. Also depends on
+  // stream.activity.length so each new ⚙ line during the tool-use phase
+  // pulls the viewport down — otherwise activity renders below the
+  // fold and the user has to manually chase it.
   const pendingScroll = useRef(false);
   useEffect(() => {
     if (pendingScroll.current) return;
@@ -71,7 +76,15 @@ export function MessageList({
       cancelAnimationFrame(raf);
       pendingScroll.current = false;
     };
-  }, [sessionMessages.length, feed.length, sessionId, stream?.accum.length]);
+  }, [
+    sessionMessages.length,
+    feed.length,
+    sessionId,
+    stream?.accum.length,
+    stream?.activity.length,
+    stream?.streamId,
+    stream?.closed,
+  ]);
 
   return (
     <div className="chat-scroll" ref={scrollRef}>
@@ -80,7 +93,7 @@ export function MessageList({
           channel={channel}
           sessionId={sessionId}
           messages={sessionMessages}
-          streaming={!!stream}
+          streaming={!!stream && !stream.closed}
           streamId={streamId}
           closedStreamAccum={stream?.closed ? stream.accum : null}
           onRewound={onRewound}
@@ -89,7 +102,12 @@ export function MessageList({
         <FeedView entries={feed} channel={ui} />
       )}
       {stream && (
-        <StreamCard stream={stream} channel={ui} onToggleExpanded={onToggleStreamExpanded} />
+        <StreamCard
+          stream={stream}
+          channel={ui}
+          onToggleExpanded={onToggleStreamExpanded}
+          onStop={onStopStream}
+        />
       )}
     </div>
   );
@@ -404,10 +422,15 @@ function StreamCard({
   stream,
   channel,
   onToggleExpanded,
+  onStop,
 }: {
   stream: ActiveStream;
   channel: MentionContext;
   onToggleExpanded: () => void;
+  // Fires when the user clicks Stop on a live (non-closed) card. The
+  // card doesn't manage its own dismissal — the parent runs cancel,
+  // backend emits `done`/`error`, and the subscriber flips `closed`.
+  onStop: () => void;
 }) {
   const total = stream.activity.length;
   const visibleCount = stream.expanded ? total : Math.min(ACTIVITY_TOP_N, total);
@@ -421,9 +444,23 @@ function StreamCard({
   // visible change is "dot pulsing → static" and the status label text.
   // The card stays mounted post-done so the activity log remains
   // reviewable; it unmounts only when the next user turn starts.
-  const statusLabel = stream.closed ? "done" : stream.accum ? "writing response" : "thinking";
+  // "done" (normal close), "failed" (error event), "writing response"
+  // (streaming chunks), "thinking" (no accum yet). The failed label
+  // reads with the error body rendered below so the user sees the
+  // real diagnostic instead of a misleading success state.
+  const statusLabel = stream.error
+    ? "failed"
+    : stream.closed
+      ? "done"
+      : stream.accum
+        ? "writing response"
+        : "thinking";
   return (
-    <div className={`message role-assistant stream-card ${stream.closed ? "closed" : ""}`}>
+    <div
+      className={`message role-assistant stream-card ${stream.closed ? "closed" : ""} ${
+        stream.error ? "errored" : ""
+      }`}
+    >
       <MsgAvatar seed={authorKey} />
       <div>
         <div className="msg-head">
@@ -437,6 +474,17 @@ function StreamCard({
               {total > 0 ? ` · ${total} action${total === 1 ? "" : "s"}` : ""}
             </span>
           </span>
+          {!stream.closed && (
+            <button
+              type="button"
+              className="stream-stop-btn"
+              onClick={onStop}
+              title="Stop this turn"
+              aria-label="Stop"
+            >
+              ⏹ Stop
+            </button>
+          )}
         </div>
         <div className={`stream-activity ${stream.expanded ? "expanded" : ""}`}>
           {visible.map((entry, i) => {
@@ -466,6 +514,11 @@ function StreamCard({
         {stream.accum && (
           <div className="msg-body">
             <MarkdownBody text={stream.accum} channel={channel} />
+          </div>
+        )}
+        {stream.error && (
+          <div className="stream-error" role="alert">
+            <strong>Error:</strong> {stream.error}
           </div>
         )}
       </div>

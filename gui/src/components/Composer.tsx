@@ -8,6 +8,11 @@ type ActivityEntry = { text: string; ts: number };
 
 export type ActiveStream = {
   streamId: number;
+  // The channel the turn was submitted from. CenterPane gates the card's
+  // render + "am I streaming" predicate on this matching the currently
+  // open channel — otherwise a stream started in channel A would leak
+  // into channel B's view when the user switches.
+  channelId: string;
   alias: string | null;
   accum: string;
   activity: ActivityEntry[];
@@ -19,6 +24,11 @@ export type ActiveStream = {
   // when the user switches channels. `closed` drives the pulse-dot
   // going static and the status label flipping to "done".
   closed?: boolean;
+  // When the turn terminated via an `error` event rather than `done`,
+  // we render the error text prominently so the user sees the real
+  // failure (e.g. "claude not found in PATH") instead of a misleading
+  // "done" state with no response body.
+  error?: string;
 };
 
 export type StreamDispatch = (s: ActiveStream | null) => void;
@@ -218,6 +228,7 @@ export function Composer({
       });
       onStartStream({
         streamId,
+        channelId: channel.channelId,
         alias: target || null,
         accum: "",
         activity: [],
