@@ -412,36 +412,35 @@ fn find_on_path(name: &str) -> Option<String> {
 /// `ERR_UNKNOWN_BUILTIN_MODULE: node:readline/promises` before being
 /// shadowed by nvm).
 ///
-/// Cached once per process; the filesystem layout doesn't change under us.
+/// Thin wrapper — recomputes on each call. The work is a handful of
+/// `read_dir` + `is_dir` probes, dwarfed by the child-process spawn
+/// that consumes the result. Previous versions cached with `OnceLock`,
+/// but cargo-test runs multiple tests in the same process and a cache
+/// poisoned by early test env would leak into later tests.
 fn augmented_child_path() -> String {
-    static RESOLVED: OnceLock<String> = OnceLock::new();
-    RESOLVED
-        .get_or_init(|| {
-            let home = std::env::var("HOME").unwrap_or_default();
-            let parent = std::env::var_os("PATH").unwrap_or_default();
-            compute_augmented_path(&parent, &home)
-        })
-        .clone()
+    let home = std::env::var_os("HOME").unwrap_or_default();
+    let parent = std::env::var_os("PATH").unwrap_or_default();
+    compute_augmented_path(&parent, &home)
 }
 
 /// Pure helper — `augmented_child_path` reads from process env, this
 /// takes the parent PATH and HOME as inputs so tests can exercise it
 /// without mutating process-wide state.
-fn compute_augmented_path(parent_path: &std::ffi::OsStr, home: &str) -> String {
+fn compute_augmented_path(parent_path: &std::ffi::OsStr, home: &std::ffi::OsStr) -> String {
+    let home_path = PathBuf::from(home);
     let mut parts: Vec<PathBuf> = std::env::split_paths(parent_path).collect();
     let mut seen: HashSet<PathBuf> = parts.iter().cloned().collect();
 
     let mut extras: Vec<PathBuf> = Vec::new();
 
     // nvm first (highest priority). Newest version wins.
-    let nvm_root = PathBuf::from(home).join(".nvm/versions/node");
+    let nvm_root = home_path.join(".nvm/versions/node");
     if let Ok(entries) = std::fs::read_dir(&nvm_root) {
         let mut versions: Vec<PathBuf> = entries
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| p.is_dir())
             .collect();
-        versions.sort();
-        versions.reverse();
+        versions.sort_by(|a, b| b.cmp(a)); // newest first
         for v in versions {
             extras.push(v.join("bin"));
         }
@@ -459,7 +458,7 @@ fn compute_augmented_path(parent_path: &std::ffi::OsStr, home: &str) -> String {
         ".cargo/bin",
         ".local/bin",
     ] {
-        extras.push(PathBuf::from(home).join(rel));
+        extras.push(home_path.join(rel));
     }
 
     for dir in extras {
@@ -2588,20 +2587,23 @@ mod tests {
         // appear ahead of /usr/local/bin in the resulting PATH so the
         // shim's `exec node` doesn't pick up a stale system node.
         let home_dir = tempfile::tempdir().expect("tempdir");
-        let home = home_dir.path().to_str().unwrap().to_string();
+        let home = home_dir.path().as_os_str().to_owned();
         for v in ["v18.0.0", "v22.14.0"] {
             let bin = home_dir.path().join(".nvm/versions/node").join(v).join("bin");
             std::fs::create_dir_all(&bin).expect("mkdir nvm");
         }
-        // Also need /usr/local/bin to exist on the host for it to show up;
-        // if it's missing on this CI box the test still passes vacuously
-        // because the assertion below only kicks in when both are present.
+        // /usr/local/bin must exist on the host for the ordering assertion
+        // to fire — if missing, the test passes vacuously. That's fine: the
+        // comparison we care about (nvm before /usr/local/bin) is only
+        // meaningful when both are present, and the newest-vs-older-nvm
+        // assertion still covers the sort-order invariant unconditionally.
         let parent = std::ffi::OsString::from("/usr/bin:/bin");
         let result = compute_augmented_path(&parent, &home);
 
         let segments: Vec<&str> = result.split(':').collect();
-        let newest_nvm = format!("{home}/.nvm/versions/node/v22.14.0/bin");
-        let older_nvm = format!("{home}/.nvm/versions/node/v18.0.0/bin");
+        let home_str = home.to_str().unwrap();
+        let newest_nvm = format!("{home_str}/.nvm/versions/node/v22.14.0/bin");
+        let older_nvm = format!("{home_str}/.nvm/versions/node/v18.0.0/bin");
         let idx_newest = segments.iter().position(|s| *s == newest_nvm);
         let idx_older = segments.iter().position(|s| *s == older_nvm);
         assert!(idx_newest.is_some(), "expected newest nvm in PATH: {result}");
@@ -2624,7 +2626,7 @@ mod tests {
         // the helper must not reorder the parent's entries, only append
         // fallbacks.
         let home_dir = tempfile::tempdir().expect("tempdir");
-        let home = home_dir.path().to_str().unwrap().to_string();
+        let home = home_dir.path().as_os_str().to_owned();
         let parent = std::ffi::OsString::from("/custom/user/bin:/usr/bin");
         let result = compute_augmented_path(&parent, &home);
 
@@ -2646,7 +2648,7 @@ mod tests {
         // If /opt/homebrew/bin is already in the parent PATH, we must not
         // append a second copy.
         let home_dir = tempfile::tempdir().expect("tempdir");
-        let home = home_dir.path().to_str().unwrap().to_string();
+        let home = home_dir.path().as_os_str().to_owned();
         let parent = std::ffi::OsString::from("/opt/homebrew/bin:/usr/bin");
         let result = compute_augmented_path(&parent, &home);
 
