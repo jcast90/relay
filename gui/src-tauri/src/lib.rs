@@ -392,10 +392,91 @@ fn find_on_path(name: &str) -> Option<String> {
     None
 }
 
+/// Build a PATH for child processes that augments the inherited PATH
+/// with well-known node / user-bin install dirs.
+///
+/// `resolve_rly_bin` fixes finding the `rly` binary from a Finder-
+/// launched GUI (PR #129), but the pnpm-generated shim itself then runs
+/// `exec node …`. That second hop inherits the same minimal launchd
+/// PATH and fails with `node: not found`. Augmenting the child's PATH
+/// here fixes the whole chain — shim → node → rly.mjs — without having
+/// to patch every shim on every user's machine.
+///
+/// Extras are **appended** in highest→lowest priority order. The
+/// inherited parent PATH stays first so terminal-launched sessions keep
+/// using the user's own ordering; launchd-launched GUIs get nvm, the
+/// homebrew prefixes, and the usual user-local bins tacked on. Nvm
+/// leads the extras so its modern node wins over a stale
+/// `/usr/local/bin/node` (observed during testing — a crusty old node
+/// installed at `/usr/local/bin` crashed with
+/// `ERR_UNKNOWN_BUILTIN_MODULE: node:readline/promises` before being
+/// shadowed by nvm).
+///
+/// Thin wrapper — recomputes on each call. The work is a handful of
+/// `read_dir` + `is_dir` probes, dwarfed by the child-process spawn
+/// that consumes the result. Previous versions cached with `OnceLock`,
+/// but cargo-test runs multiple tests in the same process and a cache
+/// poisoned by early test env would leak into later tests.
+fn augmented_child_path() -> String {
+    let home = std::env::var_os("HOME").unwrap_or_default();
+    let parent = std::env::var_os("PATH").unwrap_or_default();
+    compute_augmented_path(&parent, &home)
+}
+
+/// Pure helper — `augmented_child_path` reads from process env, this
+/// takes the parent PATH and HOME as inputs so tests can exercise it
+/// without mutating process-wide state.
+fn compute_augmented_path(parent_path: &std::ffi::OsStr, home: &std::ffi::OsStr) -> String {
+    let home_path = PathBuf::from(home);
+    let mut parts: Vec<PathBuf> = std::env::split_paths(parent_path).collect();
+    let mut seen: HashSet<PathBuf> = parts.iter().cloned().collect();
+
+    let mut extras: Vec<PathBuf> = Vec::new();
+
+    // nvm first (highest priority). Newest version wins.
+    let nvm_root = home_path.join(".nvm/versions/node");
+    if let Ok(entries) = std::fs::read_dir(&nvm_root) {
+        let mut versions: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.is_dir())
+            .collect();
+        versions.sort_by(|a, b| b.cmp(a)); // newest first
+        for v in versions {
+            extras.push(v.join("bin"));
+        }
+    }
+
+    // Homebrew prefixes + misc user-local install dirs.
+    extras.push(PathBuf::from("/opt/homebrew/bin"));
+    extras.push(PathBuf::from("/usr/local/bin"));
+    for rel in [
+        "Library/pnpm",
+        ".local/share/pnpm",
+        ".npm-global/bin",
+        ".volta/bin",
+        ".asdf/shims",
+        ".cargo/bin",
+        ".local/bin",
+    ] {
+        extras.push(home_path.join(rel));
+    }
+
+    for dir in extras {
+        if dir.is_dir() && seen.insert(dir.clone()) {
+            parts.push(dir);
+        }
+    }
+
+    std::env::join_paths(parts)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 fn cli_run(args: &[&str]) -> CliResult {
     let bin = resolve_rly_bin();
     match Command::new(&bin)
         .args(args)
+        .env("PATH", augmented_child_path())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -1233,7 +1314,10 @@ fn start_chat(
         args.push(message);
 
         let mut cmd = Command::new(&claude_bin);
-        cmd.args(&args).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.args(&args)
+            .env("PATH", augmented_child_path())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         if let Some(ref dir) = cwd_thread {
             cmd.current_dir(dir);
         }
@@ -2493,6 +2577,83 @@ mod tests {
     #[test]
     fn find_on_path_returns_none_when_absent() {
         assert!(find_on_path("definitely-not-a-real-binary-xyz-7412").is_none());
+    }
+
+    // --- compute_augmented_path ---
+
+    #[test]
+    fn compute_augmented_path_prepends_nvm_ahead_of_local_prefixes() {
+        // Fake HOME containing two nvm node versions; the newest must
+        // appear ahead of /usr/local/bin in the resulting PATH so the
+        // shim's `exec node` doesn't pick up a stale system node.
+        let home_dir = tempfile::tempdir().expect("tempdir");
+        let home = home_dir.path().as_os_str().to_owned();
+        for v in ["v18.0.0", "v22.14.0"] {
+            let bin = home_dir.path().join(".nvm/versions/node").join(v).join("bin");
+            std::fs::create_dir_all(&bin).expect("mkdir nvm");
+        }
+        // /usr/local/bin must exist on the host for the ordering assertion
+        // to fire — if missing, the test passes vacuously. That's fine: the
+        // comparison we care about (nvm before /usr/local/bin) is only
+        // meaningful when both are present, and the newest-vs-older-nvm
+        // assertion still covers the sort-order invariant unconditionally.
+        let parent = std::ffi::OsString::from("/usr/bin:/bin");
+        let result = compute_augmented_path(&parent, &home);
+
+        let segments: Vec<&str> = result.split(':').collect();
+        let home_str = home.to_str().unwrap();
+        let newest_nvm = format!("{home_str}/.nvm/versions/node/v22.14.0/bin");
+        let older_nvm = format!("{home_str}/.nvm/versions/node/v18.0.0/bin");
+        let idx_newest = segments.iter().position(|s| *s == newest_nvm);
+        let idx_older = segments.iter().position(|s| *s == older_nvm);
+        assert!(idx_newest.is_some(), "expected newest nvm in PATH: {result}");
+        assert!(idx_older.is_some(), "expected older nvm in PATH: {result}");
+        assert!(
+            idx_newest.unwrap() < idx_older.unwrap(),
+            "newest nvm must precede older: {result}"
+        );
+        if let Some(idx_usr_local) = segments.iter().position(|s| *s == "/usr/local/bin") {
+            assert!(
+                idx_newest.unwrap() < idx_usr_local,
+                "nvm must precede /usr/local/bin so a stale system node is shadowed: {result}"
+            );
+        }
+    }
+
+    #[test]
+    fn compute_augmented_path_preserves_parent_entries_first() {
+        // Terminal-launched sessions already have nvm at the top of PATH;
+        // the helper must not reorder the parent's entries, only append
+        // fallbacks.
+        let home_dir = tempfile::tempdir().expect("tempdir");
+        let home = home_dir.path().as_os_str().to_owned();
+        let parent = std::ffi::OsString::from("/custom/user/bin:/usr/bin");
+        let result = compute_augmented_path(&parent, &home);
+
+        let segments: Vec<&str> = result.split(':').collect();
+        assert_eq!(
+            segments.first().copied(),
+            Some("/custom/user/bin"),
+            "parent PATH must lead the result: {result}"
+        );
+        assert_eq!(
+            segments.get(1).copied(),
+            Some("/usr/bin"),
+            "parent PATH order must be preserved: {result}"
+        );
+    }
+
+    #[test]
+    fn compute_augmented_path_deduplicates() {
+        // If /opt/homebrew/bin is already in the parent PATH, we must not
+        // append a second copy.
+        let home_dir = tempfile::tempdir().expect("tempdir");
+        let home = home_dir.path().as_os_str().to_owned();
+        let parent = std::ffi::OsString::from("/opt/homebrew/bin:/usr/bin");
+        let result = compute_augmented_path(&parent, &home);
+
+        let count = result.split(':').filter(|s| *s == "/opt/homebrew/bin").count();
+        assert_eq!(count, 1, "duplicate /opt/homebrew/bin in PATH: {result}");
     }
 
     // --- check_run_cli_allowed ---
