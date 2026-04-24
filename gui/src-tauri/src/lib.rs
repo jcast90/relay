@@ -1341,49 +1341,57 @@ fn start_chat(
     append_args.push(&message);
     let _ = cli_run(&append_args);
 
-    // Resolve MCP config and system prompt up-front (off the streaming thread is fine).
-    let mcp_path = {
-        let mut args: Vec<&str> = vec!["chat", "mcp-config"];
-        let cwd_ref = cwd.clone();
-        if let Some(ref dir) = cwd_ref {
-            args.push("--repo");
-            args.push(dir);
-        }
-        cli_json(&args)
-            .ok()
-            .and_then(|v| v.get("path").and_then(|p| p.as_str().map(String::from)))
-    };
-
-    let system_prompt = {
-        let mut args: Vec<String> = vec![
-            "chat".into(),
-            "system-prompt".into(),
-            "--channel".into(),
-            channel_id.clone(),
-        ];
-        if let Some(ref dir) = cwd {
-            args.push("--repo".into());
-            args.push(dir.clone());
-        }
-        if let Some(ref a) = alias {
-            args.push("--alias".into());
-            args.push(a.clone());
-        }
-        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        cli_json(&refs)
-            .ok()
-            .and_then(|v| v.get("prompt").and_then(|p| p.as_str().map(String::from)))
-    };
-
+    // Previously both `rly chat mcp-config` and `rly chat system-prompt`
+    // ran synchronously here, blocking `startChat`'s IPC return for ~0.5-1s
+    // before the composer unblocked. Move them into the spawned thread —
+    // the user's message is already persisted (above) so the renderer can
+    // render it immediately, and we emit `Started` first so the stream
+    // card surfaces right away.
     let app_handle = app.clone();
     let channel_id_thread = channel_id.clone();
     let session_id_thread = session_id.clone();
     let alias_thread = alias.clone();
     let cwd_thread = cwd.clone();
     let claude_sid_thread = claude_session_id.clone();
+    let alias_spawn = alias.clone();
 
     std::thread::spawn(move || {
         let _ = app_handle.emit("chat-event", ChatEvent::Started { stream_id });
+
+        // Resolve MCP config path and system prompt now that the stream
+        // card is up. Surfaced to the user as "session init" activity once
+        // claude emits its init event.
+        let mcp_path: Option<String> = {
+            let mut args: Vec<&str> = vec!["chat", "mcp-config"];
+            if let Some(ref dir) = cwd_thread {
+                args.push("--repo");
+                args.push(dir);
+            }
+            cli_json(&args)
+                .ok()
+                .and_then(|v| v.get("path").and_then(|p| p.as_str().map(String::from)))
+        };
+
+        let system_prompt: Option<String> = {
+            let mut args: Vec<String> = vec![
+                "chat".into(),
+                "system-prompt".into(),
+                "--channel".into(),
+                channel_id_thread.clone(),
+            ];
+            if let Some(ref dir) = cwd_thread {
+                args.push("--repo".into());
+                args.push(dir.clone());
+            }
+            if let Some(ref a) = alias_spawn {
+                args.push("--alias".into());
+                args.push(a.clone());
+            }
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            cli_json(&refs)
+                .ok()
+                .and_then(|v| v.get("prompt").and_then(|p| p.as_str().map(String::from)))
+        };
 
         let claude_bin = std::env::var("CLAUDE_BIN").unwrap_or_else(|_| "claude".to_string());
         let mut args: Vec<String> = vec![

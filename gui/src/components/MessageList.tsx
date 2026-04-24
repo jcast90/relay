@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import type { Channel, ChannelEntry, PersistedChatMessage } from "../types";
 import { renderMarkdown } from "../lib/mentions";
@@ -8,6 +8,20 @@ import { useAppearance } from "../lib/appearance";
 import type { ActiveStream } from "./Composer";
 
 const ACTIVITY_TOP_N = 3;
+
+/**
+ * Memoized markdown body. `renderMarkdown` runs react-markdown + remark-gfm
+ * over the full text on every call; during streaming, MessageList
+ * re-renders on every chunk and a naive call would re-parse the growing
+ * accum each time (O(n²) over the reply). Memoize on text + channel
+ * identity — channel is held stable by `useMemo` in parents.
+ */
+const MarkdownBody = memo(
+  function MarkdownBody({ text, channel }: { text: string; channel: MentionContext }) {
+    return <>{renderMarkdown(text, channel)}</>;
+  },
+  (prev, next) => prev.text === next.text && prev.channel === next.channel
+);
 
 type Props = {
   channel: Channel;
@@ -31,11 +45,29 @@ export function MessageList({
   onRewound,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const ui = mentionContext(toUiChannel(channel));
+  // Memoize mention context so `MarkdownBody` (which takes it as a prop)
+  // can compare by reference rather than re-rendering the markdown AST
+  // every time MessageList re-renders — the common case during streaming.
+  const ui = useMemo(() => mentionContext(toUiChannel(channel)), [channel]);
 
+  // Throttle scroll-to-bottom through requestAnimationFrame. The previous
+  // implementation forced a layout (scrollTop = scrollHeight) on every
+  // chunk; on a fast-streaming reply that fires ~30x/sec and each write
+  // triggers a synchronous layout, which the user perceives as jitter.
+  // rAF collapses bursts to one scroll per paint.
+  const pendingScroll = useRef(false);
   useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (pendingScroll.current) return;
+    pendingScroll.current = true;
+    const raf = requestAnimationFrame(() => {
+      pendingScroll.current = false;
+      const el = scrollRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+    return () => {
+      cancelAnimationFrame(raf);
+      pendingScroll.current = false;
+    };
   }, [sessionMessages.length, feed.length, sessionId, stream?.accum.length]);
 
   return (
@@ -97,7 +129,9 @@ function FeedView({ entries, channel }: { entries: ChannelEntry[]; channel: Ment
                   <span className="msg-time">{formatTime(e.createdAt)}</span>
                 </div>
               )}
-              <div className="msg-body">{renderMarkdown(e.content, channel)}</div>
+              <div className="msg-body">
+                <MarkdownBody text={e.content} channel={channel} />
+              </div>
             </div>
           </div>
         );
@@ -142,7 +176,7 @@ function SessionMessages({
   streamId: number | null;
   onRewound: () => void;
 }) {
-  const ui = mentionContext(toUiChannel(channel));
+  const ui = useMemo(() => mentionContext(toUiChannel(channel)), [channel]);
   const [rewindTarget, setRewindTarget] = useState<PersistedChatMessage | null>(null);
 
   if (messages.length === 0)
@@ -191,7 +225,9 @@ function SessionMessages({
                   </span>
                 </div>
               )}
-              <div className="msg-body">{renderMarkdown(m.content, ui)}</div>
+              <div className="msg-body">
+                <MarkdownBody text={m.content} channel={ui} />
+              </div>
             </div>
           </div>
         );
@@ -331,42 +367,61 @@ function StreamCard({
   const visible = total === 0 ? [] : stream.activity.slice(total - visibleCount);
   const hiddenCount = total - visibleCount;
 
+  const authorKey = stream.alias ?? "assistant";
+  const authorLabel = stream.alias ? `@${stream.alias}` : "assistant";
+  // Wrap the streaming content in the same .message / role-assistant
+  // layout used for persisted assistant messages so the transition at
+  // `done` is an in-place content swap, not a DOM-subtree replacement.
+  // The `closing` class drives a short fade-out; the amber pulse dot
+  // lives inside a status pill next to the author label, which stays
+  // stable across the thinking→writing transition (no card-color flip).
   return (
-    <div className="stream-card">
-      <div className="stream-card-head">
-        <span className="dot" />
-        <span className="author">{stream.alias ? `@${stream.alias}` : "assistant"}</span>
-        <span>
-          {stream.accum ? "writing response" : "thinking"}
-          {total > 0 ? ` · ${total} action${total === 1 ? "" : "s"}` : ""}
-        </span>
-      </div>
-      <div className={`stream-activity ${stream.expanded ? "expanded" : ""}`}>
-        {visible.map((entry, i) => {
-          const isNewest = i === visible.length - 1;
-          return (
-            <div
-              key={`${entry.ts}-${i}`}
-              className={`stream-activity-line ${isNewest ? "newest" : ""}`}
-              title={new Date(entry.ts).toLocaleTimeString()}
-            >
-              <span>⚙</span>
-              <span>{entry.text}</span>
-            </div>
-          );
-        })}
-        {hiddenCount > 0 && (
-          <button type="button" className="stream-activity-more" onClick={onToggleExpanded}>
-            +{hiddenCount} more
-          </button>
+    <div className={`message role-assistant stream-card ${stream.closing ? "closing" : ""}`}>
+      <MsgAvatar seed={authorKey} />
+      <div>
+        <div className="msg-head">
+          <span className="msg-author" style={{ color: authorColor(authorKey) }}>
+            {authorLabel}
+          </span>
+          <span className="stream-status">
+            <span className="dot" aria-hidden />
+            <span>
+              {stream.closing ? "done" : stream.accum ? "writing response" : "thinking"}
+              {total > 0 ? ` · ${total} action${total === 1 ? "" : "s"}` : ""}
+            </span>
+          </span>
+        </div>
+        <div className={`stream-activity ${stream.expanded ? "expanded" : ""}`}>
+          {visible.map((entry, i) => {
+            const isNewest = i === visible.length - 1;
+            return (
+              <div
+                key={`${entry.ts}-${i}`}
+                className={`stream-activity-line ${isNewest ? "newest" : ""}`}
+                title={new Date(entry.ts).toLocaleTimeString()}
+              >
+                <span>⚙</span>
+                <span>{entry.text}</span>
+              </div>
+            );
+          })}
+          {hiddenCount > 0 && (
+            <button type="button" className="stream-activity-more" onClick={onToggleExpanded}>
+              +{hiddenCount} more
+            </button>
+          )}
+          {stream.expanded && total > ACTIVITY_TOP_N && (
+            <button type="button" className="stream-activity-more" onClick={onToggleExpanded}>
+              collapse
+            </button>
+          )}
+        </div>
+        {stream.accum && (
+          <div className="msg-body">
+            <MarkdownBody text={stream.accum} channel={channel} />
+          </div>
         )}
-        {stream.expanded && total > ACTIVITY_TOP_N && (
-          <button type="button" className="stream-activity-more" onClick={onToggleExpanded}>
-            collapse
-          </button>
-        )}
       </div>
-      {stream.accum && <div className="stream-body">{renderMarkdown(stream.accum, channel)}</div>}
     </div>
   );
 }

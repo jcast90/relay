@@ -12,6 +12,11 @@ export type ActiveStream = {
   accum: string;
   activity: ActivityEntry[];
   expanded: boolean;
+  // `closing` is true from the moment `done`/`error` arrives until the
+  // persisted assistant message lands in the feed and we unmount the
+  // card. During this window StreamCard renders with a fade-out class so
+  // the transition to the real message row isn't an abrupt DOM swap.
+  closing?: boolean;
 };
 
 export type StreamDispatch = (s: ActiveStream | null) => void;

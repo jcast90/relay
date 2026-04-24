@@ -154,14 +154,31 @@ export function CenterPane({
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
+    const closingTimers = new Map<number, number>();
     subscribeChatEvents((event: ChatEvent) => {
       setStream((current) => {
         if (!current || event.streamId !== current.streamId) return current;
         return reduceStream(current, event);
       });
       if (event.kind === "done" || event.kind === "error") {
+        // Previously we set `stream` to null immediately on done; the
+        // stream card's amber-bordered container vanished and the
+        // persisted assistant message appeared in its place as a plain
+        // message row, producing a visible "pop". Keep the card mounted
+        // under a `closing` flag for one frame so StreamCard can fade
+        // out while the refreshed sessionMessages render underneath.
+        const { streamId } = event;
+        setStream((current) =>
+          current && current.streamId === streamId ? { ...current, closing: true } : current
+        );
         onRefresh();
-        setStream((current) => (current && current.streamId === event.streamId ? null : current));
+        const prev = closingTimers.get(streamId);
+        if (prev !== undefined) window.clearTimeout(prev);
+        const tid = window.setTimeout(() => {
+          closingTimers.delete(streamId);
+          setStream((current) => (current && current.streamId === streamId ? null : current));
+        }, 180);
+        closingTimers.set(streamId, tid);
       }
     }).then((u) => {
       if (cancelled) u();
@@ -170,6 +187,8 @@ export function CenterPane({
     return () => {
       cancelled = true;
       if (unlisten) unlisten();
+      for (const tid of closingTimers.values()) window.clearTimeout(tid);
+      closingTimers.clear();
     };
   }, [onRefresh]);
 

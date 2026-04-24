@@ -1302,29 +1302,38 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   text-align: center;
 }
 
+/* StreamCard now renders inside the same .message / role-assistant
+   layout as persisted assistant turns, so the DOM swap at `done` is
+   invisible. The only in-flight affordance is a small status pill
+   (pulsing amber dot + "thinking/writing" label) next to the author.
+   Closing the card fades out over 180ms; a matching setTimeout on the
+   JS side unmounts after the transition. */
 .stream-card {
-  background: var(--color-paper-alt);
-  border: 1px solid var(--color-paper-line);
-  border-left: 3px solid var(--color-accent-amber);
-  border-radius: var(--radius-card);
-  padding: var(--space-4) var(--space-5);
-  margin-bottom: var(--space-6);
+  transition: opacity 180ms ease;
 }
-.stream-card-head {
-  display: flex;
+.stream-card.closing {
+  opacity: 0;
+}
+.stream-status {
+  display: inline-flex;
   align-items: center;
-  gap: var(--space-3);
-  font-size: var(--font-size-base);
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
   color: var(--color-text-muted);
-  margin-bottom: var(--space-3);
+  margin-left: var(--space-3);
 }
-.stream-card-head .dot {
-  width: 8px; height: 8px;
+.stream-status .dot {
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--color-accent-amber);
   animation: var(--anim-pulse);
 }
-.stream-card-head .author { color: var(--color-accent-coral); font-weight: var(--font-weight-semibold); }
+.stream-card.closing .stream-status .dot {
+  /* Stop pulsing while fading out — the motion competes with the fade. */
+  animation: none;
+  background: var(--color-paper-line);
+}
 .stream-activity {
   font-size: var(--font-size-sm);
   color: var(--color-text-muted);
