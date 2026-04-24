@@ -1369,29 +1369,42 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   text-align: center;
 }
 
-.stream-card {
-  background: var(--color-paper-alt);
-  border: 1px solid var(--color-paper-line);
-  border-left: 3px solid var(--color-accent-amber);
-  border-radius: var(--radius-card);
-  padding: var(--space-4) var(--space-5);
-  margin-bottom: var(--space-6);
-}
-.stream-card-head {
-  display: flex;
+/* StreamCard now renders inside the same .message / role-assistant
+   layout as persisted assistant turns, so the DOM swap at `done` is
+   invisible. The only in-flight affordance is a small status pill
+   (pulsing amber dot + "thinking/writing" label) next to the author.
+   Closing the card fades out over 180ms; a matching setTimeout on the
+   JS side unmounts after the transition. */
+/* `.stream-card` stays mounted from first event through the end of the
+   turn. On done (`.closed`) the pulse stops and the status label flips
+   to "done" — everything else (activity log, response text, author
+   header) remains visible so the user can review what was run. */
+.stream-status {
+  display: inline-flex;
   align-items: center;
-  gap: var(--space-3);
-  font-size: var(--font-size-base);
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
   color: var(--color-text-muted);
-  margin-bottom: var(--space-3);
+  margin-left: var(--space-3);
 }
-.stream-card-head .dot {
-  width: 8px; height: 8px;
+.stream-status .dot {
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--color-accent-amber);
   animation: var(--anim-pulse);
+  transition:
+    background 180ms ease,
+    opacity 180ms ease;
 }
-.stream-card-head .author { color: var(--color-accent-coral); font-weight: var(--font-weight-semibold); }
+.stream-card.closed .stream-status .dot {
+  animation: none;
+  background: var(--color-text-dim);
+  opacity: 0.6;
+}
+.stream-card.closed .stream-status {
+  color: var(--color-text-dim);
+}
 .stream-activity {
   font-size: var(--font-size-sm);
   color: var(--color-text-muted);

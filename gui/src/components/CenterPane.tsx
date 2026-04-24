@@ -160,8 +160,22 @@ export function CenterPane({
         return reduceStream(current, event);
       });
       if (event.kind === "done" || event.kind === "error") {
+        // Previously the card faded out and was torn down on done. The
+        // user asked for the activity history to stick around so they
+        // can see what the agent actually did — keep the card mounted,
+        // auto-expand the activity stack, and mark the turn as closed.
+        // The card unmounts on the NEXT user submit (optimistic handler
+        // above calls setStream(null)) or on channel switch. We still
+        // onRefresh so the persisted assistant message + user message
+        // are loaded — SessionMessages dedupes the duplicate assistant
+        // content when a closed stream is present.
+        const { streamId } = event;
+        setStream((current) =>
+          current && current.streamId === streamId
+            ? { ...current, closed: true, expanded: true }
+            : current
+        );
         onRefresh();
-        setStream((current) => (current && current.streamId === event.streamId ? null : current));
       }
     }).then((u) => {
       if (cancelled) u();
@@ -252,6 +266,25 @@ export function CenterPane({
             onStartStream={setStream}
             onSessionCreated={onSessionCreated}
             onSlashNew={isDm ? () => setPromoteOpen(true) : undefined}
+            onOptimisticUserMessage={(content, alias) => {
+              // The real user message gets persisted server-side and
+              // shows up via onRefresh when `done` fires; the optimistic
+              // insert just bridges the perceptual gap between click and
+              // round-trip. `loadSession` is the authority — its re-
+              // render replaces this stub.
+              setSessionMessages((prev) => [
+                ...prev,
+                {
+                  role: "user",
+                  content,
+                  timestamp: new Date().toISOString(),
+                  agentAlias: alias ?? undefined,
+                },
+              ]);
+              // Also clear any previously settled stream so the new
+              // optimistic turn isn't stacked against a stale card.
+              setStream(null);
+            }}
           />
         </>
       )}

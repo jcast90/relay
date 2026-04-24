@@ -12,6 +12,13 @@ export type ActiveStream = {
   accum: string;
   activity: ActivityEntry[];
   expanded: boolean;
+  // `closed` is set when `done`/`error` arrives. The card stays mounted
+  // afterwards — activity log + response text preserved — so the user
+  // can review what was run. It only unmounts when the next user turn
+  // starts (composer's optimistic-message handler sets stream=null) or
+  // when the user switches channels. `closed` drives the pulse-dot
+  // going static and the status label flipping to "done".
+  closed?: boolean;
 };
 
 export type StreamDispatch = (s: ActiveStream | null) => void;
@@ -26,6 +33,11 @@ type Props = {
   // DM-only: invoked when the user types `/new` at the start of the
   // composer and hits Enter. If omitted, `/new` is sent as a normal message.
   onSlashNew?: () => void;
+  // Fires synchronously on click, before any backend round-trips. Lets
+  // the parent append an optimistic user-role message to the session
+  // view so the user sees their own turn immediately instead of waiting
+  // on create-session / rewind-snapshot / start-chat IPC to round-trip.
+  onOptimisticUserMessage?: (content: string, alias: string | null) => void;
 };
 
 export function Composer({
@@ -36,6 +48,7 @@ export function Composer({
   onStartStream,
   onSessionCreated,
   onSlashNew,
+  onOptimisticUserMessage,
 }: Props) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -157,11 +170,20 @@ export function Composer({
       onSlashNew();
       return;
     }
+    // Clear the composer + drop optimistic user message IMMEDIATELY so the
+    // send feels instant. Previously we awaited three round-trips
+    // (maybe-createSession, rewindSnapshot, startChat) before clearing —
+    // the user typed, hit send, and watched their own text sit in the
+    // field for ~300ms. Now the visual acknowledgement is synchronous
+    // with the click; the backend catches up asynchronously below.
+    const { alias, body } = parseAliasPrefix(raw, aliases);
+    const target = alias ?? primaryAlias;
+    setText("");
+    onOptimisticUserMessage?.(body, target || null);
+
     setBusy(true);
     setError(null);
     try {
-      const { alias, body } = parseAliasPrefix(raw, aliases);
-      const target = alias ?? primaryAlias;
       const repo = target ? channel.repoAssignments.find((r) => r.alias === target) : null;
       const cwd = repo?.repoPath;
       const aliasKey = target || "general";
@@ -201,7 +223,6 @@ export function Composer({
         activity: [],
         expanded: false,
       });
-      setText("");
     } catch (err) {
       setError(String(err));
     } finally {
@@ -552,8 +573,12 @@ function parseAliasPrefix(
   return { alias: candidate, body: match[2] };
 }
 
+// Ring buffer cap on activity entries. Big enough to cover a long
+// multi-tool turn (init events + many tool uses), small enough to keep
+// the DOM trivial when the card stays mounted post-done for review.
+const ACTIVITY_STACK_MAX = 80;
+
 export function reduceStream(current: ActiveStream, event: ChatEvent): ActiveStream {
-  const ACTIVITY_STACK_MAX = 20;
   switch (event.kind) {
     case "chunk":
       return { ...current, accum: current.accum + event.text };
