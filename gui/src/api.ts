@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AgentBinaryTestResult,
   AgentNameEntry,
   ApprovalQueueRecord,
   AutonomousSessionState,
@@ -115,6 +116,9 @@ export const api = {
     invoke<void>("set_primary_repo", { channelId, workspaceId }),
   getSettings: () => invoke<GuiSettings>("get_settings"),
   updateSettings: (settings: GuiSettings) => invoke<void>("update_settings", { settings }),
+  autoDetectAgentBinary: (kind: "rly" | "claude") =>
+    invoke<string | null>("auto_detect_agent_binary", { kind }),
+  testAgentBinary: (path: string) => invoke<AgentBinaryTestResult>("test_agent_binary", { path }),
   postToChannel: (channelId: string, content: string, from?: string, entryType?: string) =>
     invoke<unknown>("post_to_channel", {
       channelId,
