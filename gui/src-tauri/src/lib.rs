@@ -392,6 +392,159 @@ fn find_on_path(name: &str) -> Option<String> {
     None
 }
 
+/// Resolve an absolute path to a working `node` binary.
+///
+/// The pnpm-generated `rly` shim ends in `exec node …`. That inner
+/// lookup reads the child's PATH at the shell-builtin level, and even
+/// with `augmented_child_path()` it keeps tripping users (ENV differs
+/// under launchd, nvm versions shift on upgrade, pnpm reinstall
+/// regenerates the shim). Rather than keep patching that indirection,
+/// we resolve node here and spawn it directly (see [`resolve_rly_invocation`]).
+///
+/// Order: `$RELAY_NODE` override → PATH lookup against the augmented
+/// PATH → newest nvm install → homebrew → `/usr/local/bin/node`.
+/// Cached once per process; node doesn't move around under us.
+fn resolve_node_bin() -> Option<String> {
+    static RESOLVED: OnceLock<Option<String>> = OnceLock::new();
+    RESOLVED
+        .get_or_init(|| {
+            if let Ok(v) = std::env::var("RELAY_NODE") {
+                if !v.is_empty() && PathBuf::from(&v).is_file() {
+                    return Some(v);
+                }
+            }
+            // Walk augmented PATH first so terminal-launched sessions
+            // still honor the user's own node choice when it's on PATH.
+            let augmented = augmented_child_path();
+            for dir in std::env::split_paths(&augmented) {
+                let c = dir.join("node");
+                if c.is_file() {
+                    return Some(c.to_string_lossy().into_owned());
+                }
+            }
+            // Last-resort absolute probes for the Finder-launch case
+            // where `augmented_child_path` somehow still doesn't land on
+            // node (unusual HOME, stripped env, etc.).
+            let home = std::env::var("HOME").unwrap_or_default();
+            let nvm_root = PathBuf::from(&home).join(".nvm/versions/node");
+            if let Ok(entries) = std::fs::read_dir(&nvm_root) {
+                let mut versions: Vec<PathBuf> = entries
+                    .filter_map(|e| e.ok().map(|e| e.path()))
+                    .filter(|p| p.is_dir())
+                    .collect();
+                versions.sort_by(|a, b| b.cmp(a));
+                for v in versions {
+                    let c = v.join("bin/node");
+                    if c.is_file() {
+                        return Some(c.to_string_lossy().into_owned());
+                    }
+                }
+            }
+            for p in ["/opt/homebrew/bin/node", "/usr/local/bin/node"] {
+                if PathBuf::from(p).is_file() {
+                    return Some(p.to_string());
+                }
+            }
+            None
+        })
+        .clone()
+}
+
+/// Given an installed pnpm/npm shim at `shim_path`, pull the absolute
+/// path to the `.mjs` entrypoint out of its `exec` line.
+///
+/// pnpm's generated shim looks like:
+///   `exec "$basedir/node"  "$basedir/../../…/bin/rly.mjs" "$@"`
+/// We grep for the first `.mjs` token on an `exec` line and resolve it
+/// relative to the shim's parent dir. Returns `None` if the shim's not a
+/// pnpm/npm style shim (e.g. user pointed `$RELAY_BIN` at a native
+/// binary), in which case we fall back to running the shim as-is.
+fn extract_rly_mjs_from_shim(shim_path: &str) -> Option<String> {
+    let contents = fs::read_to_string(shim_path).ok()?;
+    let basedir = PathBuf::from(shim_path).parent()?.to_path_buf();
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("exec ") || !trimmed.contains(".mjs") {
+            continue;
+        }
+        // Pull the first whitespace/quote-delimited token containing `.mjs`.
+        // Handles both quoted (`"$basedir/..../rly.mjs"`) and bare forms.
+        for raw in trimmed.split_whitespace() {
+            let token = raw.trim_matches(|c: char| c == '"' || c == '\'');
+            // Use `ends_with` rather than `contains` so pathological
+            // tokens like `foo.mjs.bak` don't match.
+            if !token.ends_with(".mjs") {
+                continue;
+            }
+            // Substitute `$basedir` / `${basedir}` the shell would have
+            // computed. pnpm's shim has historically emitted both forms
+            // across versions.
+            let basedir_str = basedir.to_string_lossy();
+            let substituted = token
+                .replace("${basedir}", &basedir_str)
+                .replace("$basedir", &basedir_str);
+            let resolved = if substituted.starts_with('/') {
+                PathBuf::from(substituted)
+            } else {
+                basedir.join(substituted)
+            };
+            if let Ok(canon) = resolved.canonicalize() {
+                if canon.is_file() {
+                    return Some(canon.to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// How to invoke `rly` for this process. `Direct` bypasses the shim and
+/// spawns node against the resolved `.mjs`, making the invocation
+/// immune to PATH / shim regeneration / pnpm reinstalls. `Shim` is the
+/// legacy path — kept only as a fallback when we can't resolve node or
+/// can't find an mjs entrypoint (e.g. user overrode `$RELAY_BIN` with a
+/// non-shim binary).
+#[derive(Clone)]
+enum RlyInvocation {
+    Direct { node: String, mjs: String },
+    Shim(String),
+}
+
+fn resolve_rly_invocation() -> RlyInvocation {
+    static RESOLVED: OnceLock<RlyInvocation> = OnceLock::new();
+    RESOLVED
+        .get_or_init(|| {
+            let shim = resolve_rly_bin();
+            if let Some(mjs) = extract_rly_mjs_from_shim(&shim) {
+                if let Some(node) = resolve_node_bin() {
+                    return RlyInvocation::Direct { node, mjs };
+                }
+            }
+            RlyInvocation::Shim(shim)
+        })
+        .clone()
+}
+
+fn rly_command() -> Command {
+    match resolve_rly_invocation() {
+        RlyInvocation::Direct { node, mjs } => {
+            let mut cmd = Command::new(node);
+            cmd.arg(mjs);
+            cmd
+        }
+        RlyInvocation::Shim(path) => Command::new(path),
+    }
+}
+
+/// Human-readable description of the current invocation. Used only in
+/// error messages so the user can tell which resolution branch we took.
+fn rly_invocation_debug() -> String {
+    match resolve_rly_invocation() {
+        RlyInvocation::Direct { node, mjs } => format!("direct: {node} {mjs}"),
+        RlyInvocation::Shim(p) => format!("shim: {p}"),
+    }
+}
+
 /// Build a PATH for child processes that augments the inherited PATH
 /// with well-known node / user-bin install dirs.
 ///
@@ -419,8 +572,75 @@ fn find_on_path(name: &str) -> Option<String> {
 /// poisoned by early test env would leak into later tests.
 fn augmented_child_path() -> String {
     let home = std::env::var_os("HOME").unwrap_or_default();
-    let parent = std::env::var_os("PATH").unwrap_or_default();
+    // Prefer the user's login-shell PATH over the process's inherited
+    // PATH when available. macOS Finder launches inherit launchd's
+    // stripped `/usr/bin:/bin:/usr/sbin:/sbin` — the user's `.zprofile`
+    // / `.profile` / brew/pnpm/nvm init never runs, so even the
+    // explicit candidate dirs we add below can miss unusual install
+    // layouts (mise, volta with custom root, brew on a non-default
+    // prefix, corporate /opt installs). Sourcing the shell once gives
+    // us the same environment the user sees in their terminal.
+    let parent: std::ffi::OsString = match resolve_shell_path() {
+        Some(s) => s.into(),
+        None => std::env::var_os("PATH").unwrap_or_default(),
+    };
     compute_augmented_path(&parent, &home)
+}
+
+/// Capture the PATH the user's login shell would set.
+///
+/// On macOS, GUI apps launched from Finder inherit launchd's stripped
+/// PATH. iTerm / Warp / VS Code all work around this by running the
+/// user's `$SHELL` once to source their dotfiles and harvest the
+/// resulting PATH; we do the same.
+///
+/// Intentionally `-l -c` (login, non-interactive). `-i` would also
+/// source `.zshrc` and friends, but interactive rc files commonly
+/// print prompts, read from stdin, or take seconds — unacceptable on
+/// the GUI startup path. Any PATH set only in `.zshrc` (not
+/// `.zprofile`) still gets caught by the per-tool candidate probes in
+/// [`compute_augmented_path`].
+///
+/// Bounded by a 2-second wall clock. If the shell hangs (broken rc,
+/// unusual login dance) the spawned thread leaks harmlessly and we
+/// fall back to the process PATH so the app still boots.
+fn resolve_shell_path() -> Option<String> {
+    static RESOLVED: OnceLock<Option<String>> = OnceLock::new();
+    RESOLVED
+        .get_or_init(|| {
+            let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty())?;
+            use std::sync::mpsc;
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let out = Command::new(&shell)
+                    .args(["-l", "-c", "printenv PATH"])
+                    .stdin(Stdio::null())
+                    .stderr(Stdio::null())
+                    .output();
+                let _ = tx.send(out);
+            });
+            let out = match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+                Ok(Ok(o)) => o,
+                Ok(Err(e)) => {
+                    eprintln!("[path] $SHELL -l -c 'printenv PATH' failed: {e}");
+                    return None;
+                }
+                Err(_) => {
+                    eprintln!("[path] $SHELL -l -c 'printenv PATH' timed out after 2s; falling back to inherited PATH");
+                    return None;
+                }
+            };
+            if !out.status.success() {
+                return None;
+            }
+            let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if path.is_empty() {
+                None
+            } else {
+                Some(path)
+            }
+        })
+        .clone()
 }
 
 /// Pure helper — `augmented_child_path` reads from process env, this
@@ -473,8 +693,13 @@ fn compute_augmented_path(parent_path: &std::ffi::OsStr, home: &std::ffi::OsStr)
 }
 
 fn cli_run(args: &[&str]) -> CliResult {
-    let bin = resolve_rly_bin();
-    match Command::new(&bin)
+    // `rly_command()` prefers `Direct { node, mjs }` so we bypass the
+    // pnpm/npm shim's `exec node` hop — that indirection keeps breaking
+    // on macOS Finder launches, nvm upgrades, and pnpm reinstalls. The
+    // augmented PATH is still set for the direct path as defense in
+    // depth: any child the mjs spawns (git, for instance) should see
+    // the same sensible PATH a terminal would give it.
+    match rly_command()
         .args(args)
         .env("PATH", augmented_child_path())
         .stdout(Stdio::piped())
@@ -504,11 +729,11 @@ fn cli_json(args: &[&str]) -> Result<serde_json::Value, String> {
         // RELAY_BIN override so the user has an actionable message.
         if result.code.is_none() {
             return Err(format!(
-                "rly {} failed to launch: {} (resolved binary: {}). \
-                 Set RELAY_BIN or install rly on PATH.",
+                "rly {} failed to launch: {} ({}). \
+                 Set RELAY_BIN / RELAY_NODE or install rly on PATH.",
                 args.join(" "),
                 result.stderr.trim(),
-                resolve_rly_bin()
+                rly_invocation_debug()
             ));
         }
         return Err(format!(
