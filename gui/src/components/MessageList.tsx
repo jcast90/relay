@@ -78,6 +78,33 @@ function FeedView({ entries, channel }: { entries: ChannelEntry[]; channel: Ment
             </div>
           );
         }
+        if (e.type === "pr_link") {
+          const prUrl = e.metadata?.prUrl;
+          const prState = e.metadata?.prState;
+          const dmChannelId = e.metadata?.dmChannelId;
+          return (
+            <div
+              key={e.entryId}
+              className={`message-pr-link ${prState ? `pr-state-${prState}` : ""}`}
+            >
+              <span className="msg-pr-icon" aria-hidden>
+                ⎔
+              </span>
+              <span className="msg-pr-text">{e.content}</span>
+              {prUrl && (
+                <a className="msg-pr-open" href={prUrl} target="_blank" rel="noreferrer noopener">
+                  Open PR →
+                </a>
+              )}
+              {dmChannelId && (
+                <span className="msg-pr-dm" title={dmChannelId}>
+                  review thread
+                </span>
+              )}
+              <span className="msg-pr-time">{formatTime(e.createdAt)}</span>
+            </div>
+          );
+        }
         return (
           <div key={e.entryId} className={`message role-${e.type} ${compact ? "compact" : ""}`}>
             {compact ? (

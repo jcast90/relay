@@ -513,8 +513,7 @@ async function postReviewFeedEntry(
   options: ReviewPullRequestOptions
 ): Promise<void> {
   const store = options.channelStore;
-  const channelId = options.channelId ?? entry.channelId;
-  if (!store || !channelId) return;
+  if (!store) return;
 
   const label = `${entry.repo.owner}/${entry.repo.name}#${entry.pr.number}`;
   const content =
@@ -524,7 +523,36 @@ async function postReviewFeedEntry(
         ? `PR review for ${label} inconclusive — ${findings.summary}`
         : `PR review for ${label}: ${findings.blocking} blocking, ${findings.nits} nit${findings.nits === 1 ? "" : "s"}. ${findings.summary}`;
 
-  await store.postEntry(channelId, {
+  // PR-review DM routing (phase 4):
+  //   - The review lands in a PR-bound DM so findings accumulate against the
+  //     PR itself, not the parent channel that happened to spawn the ticket.
+  //   - When the tracked row's `entry.channelId` is already a DM (i.e. the
+  //     caller was `pr_review_start`), we reuse it; no cross-link needed.
+  //   - Otherwise we find-or-mint a DM keyed on the PR URL and post the
+  //     findings there, then drop a `pr_link` cross-link in the tracked row's
+  //     channel so the parent thread still sees "review complete" without
+  //     the full blob. Idempotent via `findOrCreatePrDm`.
+  const trackedChannelId = options.channelId ?? entry.channelId;
+  const trackedChannel = trackedChannelId ? await store.getChannel(trackedChannelId) : null;
+  const trackedIsDm = trackedChannel?.pr !== undefined;
+
+  let dmChannelId: string;
+  if (trackedIsDm && trackedChannelId) {
+    dmChannelId = trackedChannelId;
+  } else {
+    const { channel: dm } = await store.findOrCreatePrDm({
+      pr: {
+        url: entry.pr.url,
+        number: entry.pr.number,
+        repo: entry.repo,
+        state: "open",
+        parentChannelId: trackedChannelId ?? undefined,
+      },
+    });
+    dmChannelId = dm.channelId;
+  }
+
+  await store.postEntry(dmChannelId, {
     type: "status_update",
     fromAgentId: null,
     fromDisplayName: "pr-reviewer",
@@ -538,6 +566,23 @@ async function postReviewFeedEntry(
       trackedPrStatus,
     },
   });
+
+  if (trackedChannelId && trackedChannelId !== dmChannelId) {
+    await store.postEntry(trackedChannelId, {
+      type: "pr_link",
+      fromAgentId: null,
+      fromDisplayName: "pr-reviewer",
+      content: `PR review for ${label}: ${findings.summary}`,
+      metadata: {
+        ticketId: entry.ticketId,
+        prUrl: entry.pr.url,
+        dmChannelId,
+        reviewStatus: findings.status,
+        blocking: findings.blocking,
+        nits: findings.nits,
+      },
+    });
+  }
 }
 
 /**

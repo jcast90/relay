@@ -65,6 +65,19 @@ export function ChannelHeader({
               {TIER_LABELS[channel.tier]}
             </span>
           )}
+          {channel.pr && (
+            <a
+              className={`channel-header-pr pr-state-${channel.pr.state}`}
+              href={channel.pr.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              title={`Open PR on GitHub — ${channel.pr.state}`}
+            >
+              {channel.pr.repo.owner}/{channel.pr.repo.name}#{channel.pr.number}
+              <span className="pr-state-dot" aria-hidden />
+              <span className="pr-state-label">{channel.pr.state}</span>
+            </a>
+          )}
           <button
             className={`channel-header-star ${channel.starred ? "starred" : ""}`}
             onClick={toggleStar}
