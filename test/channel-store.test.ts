@@ -728,4 +728,156 @@ describe("channel store", () => {
       }
     });
   });
+
+  describe("pr review dms", () => {
+    const sampleRepo = { owner: "acme", name: "widgets" };
+    const sampleUrl = "https://github.com/acme/widgets/pull/42";
+
+    it("createPrDm stamps kind=dm, the pr block, and the repo assignment", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      try {
+        const dm = await store.createPrDm({
+          pr: {
+            url: sampleUrl,
+            number: 42,
+            repo: sampleRepo,
+            state: "open",
+            title: "Add dark-mode toggle",
+          },
+          repoAssignment: {
+            alias: "widgets",
+            workspaceId: "widgets-abc",
+            repoPath: "/tmp/widgets",
+          },
+          workspaceId: "widgets-abc",
+        });
+
+        expect(dm.kind).toBe("dm");
+        expect(dm.pr?.url).toBe(sampleUrl);
+        expect(dm.pr?.state).toBe("open");
+        expect(dm.repoAssignments).toHaveLength(1);
+        expect(dm.primaryWorkspaceId).toBe("widgets-abc");
+        expect(dm.name).toContain("#42");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("findChannelByPrUrl returns the active DM and ignores archived matches", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      try {
+        const pr = { url: sampleUrl, number: 42, repo: sampleRepo, state: "open" as const };
+        const dm = await store.createPrDm({ pr });
+
+        const hit = await store.findChannelByPrUrl(sampleUrl);
+        expect(hit?.channelId).toBe(dm.channelId);
+
+        await store.archiveChannel(dm.channelId);
+        const missAfterArchive = await store.findChannelByPrUrl(sampleUrl);
+        expect(missAfterArchive).toBeNull();
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("findChannelByPrUrl returns null when no channel has that pr", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      try {
+        await store.createChannel({ name: "#general", description: "plain" });
+        const miss = await store.findChannelByPrUrl(sampleUrl);
+        expect(miss).toBeNull();
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("updatePrState flips pr.state and archives on merged / closed", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      try {
+        const pr = { url: sampleUrl, number: 42, repo: sampleRepo, state: "open" as const };
+        const dm = await store.createPrDm({ pr });
+
+        const merged = await store.updatePrState(dm.channelId, "merged");
+        expect(merged?.pr?.state).toBe("merged");
+        expect(merged?.status).toBe("archived");
+
+        const fresh = await store.createPrDm({
+          pr: {
+            url: "https://github.com/acme/widgets/pull/43",
+            number: 43,
+            repo: sampleRepo,
+            state: "open",
+          },
+        });
+        const closed = await store.updatePrState(fresh.channelId, "closed");
+        expect(closed?.pr?.state).toBe("closed");
+        expect(closed?.status).toBe("archived");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("updatePrState is a no-op on a plain channel without a pr block", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      try {
+        const plain = await store.createChannel({ name: "#general", description: "plain" });
+        const result = await store.updatePrState(plain.channelId, "merged");
+        expect(result).toBeNull();
+
+        const refetch = await store.getChannel(plain.channelId);
+        expect(refetch?.status).toBe("active");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("findChannelByPrUrl skips a DM that updatePrState archived on merge", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      try {
+        const pr = { url: sampleUrl, number: 42, repo: sampleRepo, state: "open" as const };
+        const dm = await store.createPrDm({ pr });
+
+        await store.updatePrState(dm.channelId, "merged");
+
+        const miss = await store.findChannelByPrUrl(sampleUrl);
+        expect(miss).toBeNull();
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("findOrCreatePrDm is atomic under concurrent callers — exactly one DM wins", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      try {
+        const pr = {
+          url: sampleUrl,
+          number: 42,
+          repo: sampleRepo,
+          state: "open" as const,
+        };
+
+        const results = await Promise.all(
+          Array.from({ length: 5 }, () => store.findOrCreatePrDm({ pr }))
+        );
+
+        const created = results.filter((r) => r.created);
+        expect(created).toHaveLength(1);
+
+        const ids = new Set(results.map((r) => r.channel.channelId));
+        expect(ids.size).toBe(1);
+
+        const listed = (await store.listChannels("active")).filter((c) => c.pr?.url === sampleUrl);
+        expect(listed).toHaveLength(1);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  });
 });

@@ -184,6 +184,37 @@ pub struct Channel {
     /// Optional + `#[serde(default)]` for back-compat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_profile_id: Option<String>,
+    /// PR-review DM metadata. Present on channels minted by the
+    /// `pr_review_start` MCP tool, absent on every other channel. The Rust
+    /// dashboards round-trip the field so on-disk writes remain lossless
+    /// even when the TUI/GUI edit the channel file (phase-5 work adds the
+    /// actual PR pill UI). Optional + `#[serde(default)]` for back-compat
+    /// with channel files written before the PR-review DM feature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr: Option<ChannelPr>,
+}
+
+/// PR-review metadata mirrored from `src/domain/channel.ts::ChannelPr`. The
+/// Rust dashboards never mint these themselves — they only deserialize and
+/// round-trip whatever the TypeScript side wrote.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelPr {
+    pub url: String,
+    pub number: u64,
+    pub repo: ChannelPrRepo,
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_channel_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelPrRepo {
+    pub owner: String,
+    pub name: String,
 }
 
 /// A sidebar grouping ("section") for channels — maps to Slack's
@@ -1773,6 +1804,7 @@ mod tests {
             kind: None,
             section_id: None,
             provider_profile_id: None,
+            pr: None,
             created_at: Some("2026-01-01T00:00:00Z".to_string()),
             updated_at: Some("2026-01-01T00:00:00Z".to_string()),
         }
@@ -1951,6 +1983,7 @@ mod tests {
             kind: None,
             section_id: None,
             provider_profile_id: None,
+            pr: None,
             created_at: None,
             updated_at: None,
         }

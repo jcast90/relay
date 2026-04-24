@@ -8,6 +8,7 @@ import { getHarnessWorkspacePaths, readWorkspaceSummary } from "../cli/workspace
 import { buildWorkspaceId } from "../cli/workspace-registry.js";
 import { CrosslinkStore } from "../crosslink/store.js";
 import { ChannelStore } from "../channels/channel-store.js";
+import { startPrReviewDm } from "./pr-review-tool.js";
 import { getHarnessStore } from "../storage/factory.js";
 import {
   callChannelTool,
@@ -385,6 +386,29 @@ async function handleMessage(
           },
         },
         {
+          name: "pr_review_start",
+          description:
+            "Open (or reuse) a DM-style review thread for a GitHub pull request. " +
+            "The DM is bound to the PR's URL — subsequent calls with the same URL return the existing thread. " +
+            "When the repo has a Relay 'general' channel, a cross-link is posted there pointing at the DM. " +
+            "The DM auto-archives when the PR transitions to merged or closed.",
+          inputSchema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["prUrl"],
+            properties: {
+              prUrl: {
+                type: "string",
+                description: "Full GitHub PR URL, e.g. https://github.com/owner/repo/pull/42",
+              },
+              title: {
+                type: "string",
+                description: "Optional PR title — used in the DM's display name when present.",
+              },
+            },
+          },
+        },
+        {
           // AL-11 declares the name; AL-14 fills in the handler. Advertised
           // here so the repo-admin capability report is stable from day one.
           name: "spawn_worker",
@@ -620,6 +644,11 @@ async function callTool(
         channelId,
       });
       return result;
+    }
+    case "pr_review_start": {
+      const prUrl = String(args.prUrl ?? "");
+      const title = args.title ? String(args.title) : undefined;
+      return startPrReviewDm({ prUrl, title });
     }
     default:
       throw new Error(`Unknown tool: ${name}`);

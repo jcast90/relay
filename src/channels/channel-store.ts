@@ -10,6 +10,8 @@ import {
   type ChannelEntry,
   type ChannelEntryType,
   type ChannelMember,
+  type ChannelPr,
+  type ChannelPrState,
   type ChannelRef,
   type ChannelRunLink,
   type ChannelStatus,
@@ -31,6 +33,13 @@ import type { HarnessStore } from "../storage/store.js";
 // HarnessStore in T-402 — the per-upsert coordination record written through
 // `this.store.mutate` below is the hook that enables it.
 const channelTicketLocks: Map<string, Promise<void>> = new Map();
+
+// Per-PR-URL serialization so concurrent `findOrCreatePrDm` callers (e.g. two
+// `pr_review_start` invocations against the same URL firing at the same time)
+// don't both pass the "does this DM exist" check and both mint a duplicate.
+// Same self-cleaning-tail shape as `channelTicketLocks`. Process-local —
+// cross-process safety arrives alongside the Postgres-backed store.
+const prUrlLocks: Map<string, Promise<void>> = new Map();
 
 // Monotonic suffix so two concurrent writers in the same process never
 // collide on the tmp file used by writeChannelTickets.
@@ -193,6 +202,7 @@ export class ChannelStore {
         | "kind"
         | "sectionId"
         | "providerProfileId"
+        | "pr"
       >
     >
   ): Promise<Channel | null> {
@@ -268,6 +278,116 @@ export class ChannelStore {
   async unarchiveChannel(channelId: string): Promise<Channel | null> {
     assertSafeSegment(channelId, "channelId");
     return this.updateChannel(channelId, { status: "active" });
+  }
+
+  // --- PR review DMs ---
+
+  /**
+   * Find the first non-archived channel whose `pr.url` exactly matches the
+   * supplied URL. Used by `pr_review_start` for idempotency: a second
+   * invocation on the same PR returns the existing DM instead of minting
+   * another. Exact-match dedup (rather than owner+number) survives repo
+   * rename / transfer because the URL itself moves with the PR.
+   */
+  async findChannelByPrUrl(prUrl: string): Promise<Channel | null> {
+    const channels = await this.listChannels();
+    for (const c of channels) {
+      if (c.status === "archived") continue;
+      if (c.pr?.url === prUrl) return c;
+    }
+    return null;
+  }
+
+  /**
+   * Mint a DM channel bound to a pull request. The DM is `kind: "dm"` so the
+   * sidebar segregates it from project channels; lifecycle is driven by the
+   * PR's state (see {@link PrPoller.onPrStateChange} — archives on
+   * merged/closed). Not idempotent on its own — callers must first check
+   * {@link findChannelByPrUrl}. Keeping the two steps separate lets callers
+   * decide how to handle "already exists" (reuse vs. post a 'resumed' entry
+   * vs. error) without baking a policy into the store.
+   */
+  async createPrDm(input: {
+    pr: ChannelPr;
+    repoAssignment?: RepoAssignment;
+    workspaceId?: string;
+  }): Promise<Channel> {
+    await mkdir(this.channelsDir, { recursive: true });
+
+    const now = new Date().toISOString();
+    const assignments = input.repoAssignment ? [input.repoAssignment] : undefined;
+    const primaryWorkspaceId = input.repoAssignment?.workspaceId;
+    // Slice by code points rather than UTF-16 code units so a title ending in
+    // an emoji at the 80-char boundary doesn't split a surrogate pair into a
+    // lone surrogate (which some JSON readers reject).
+    const name = input.pr.title
+      ? [...`${input.pr.repo.name}#${input.pr.number}: ${input.pr.title}`].slice(0, 80).join("")
+      : `${input.pr.repo.owner}/${input.pr.repo.name}#${input.pr.number}`;
+
+    const channel: Channel = {
+      channelId: buildChannelId(),
+      name,
+      description: input.pr.url,
+      status: "active",
+      workspaceIds: input.workspaceId ? [input.workspaceId] : [],
+      members: [],
+      pinnedRefs: [],
+      repoAssignments: assignments,
+      primaryWorkspaceId,
+      kind: "dm",
+      pr: input.pr,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await this.writeChannel(channel);
+    await mkdir(join(this.channelsDir, channel.channelId), { recursive: true });
+
+    return channel;
+  }
+
+  /**
+   * Atomic "find-or-create" for PR-review DMs. Serializes concurrent callers
+   * keyed on `pr.url` so two simultaneous `pr_review_start` invocations for
+   * the same PR can't both pass the find check and both mint a duplicate.
+   * Returns `{ channel, created }` so callers know whether kickoff side
+   * effects (posting the initial entry, cross-linking to the parent) still
+   * need to fire.
+   *
+   * Lock is process-local (same shape as `channelTicketLocks`). Cross-process
+   * correctness arrives alongside the Postgres-backed store — by then the
+   * invariant moves to a DB-level unique index.
+   */
+  async findOrCreatePrDm(input: {
+    pr: ChannelPr;
+    repoAssignment?: RepoAssignment;
+    workspaceId?: string;
+  }): Promise<{ channel: Channel; created: boolean }> {
+    const key = input.pr.url;
+    return withKeyedLock(prUrlLocks, key, async () => {
+      const existing = await this.findChannelByPrUrl(key);
+      if (existing) return { channel: existing, created: false };
+      const created = await this.createPrDm(input);
+      return { channel: created, created: true };
+    });
+  }
+
+  /**
+   * Update the PR state on a PR-bound DM. When the new state is `merged` or
+   * `closed`, the channel is archived in the same write — the DM's purpose
+   * ends with the PR. No-op (returns `null`) if the channel has no `pr`
+   * block; callers can rely on this to reject mistargeted updates.
+   */
+  async updatePrState(channelId: string, state: ChannelPrState): Promise<Channel | null> {
+    assertSafeSegment(channelId, "channelId");
+    const channel = await this.getChannel(channelId);
+    if (!channel?.pr) return null;
+
+    const nextPr: ChannelPr = { ...channel.pr, state };
+    const nextStatus: ChannelStatus =
+      state === "merged" || state === "closed" ? "archived" : channel.status;
+
+    return this.updateChannel(channelId, { pr: nextPr, status: nextStatus });
   }
 
   /**
@@ -817,25 +937,8 @@ export class ChannelStore {
     return merged;
   }
 
-  private async withChannelLock<T>(channelId: string, fn: () => Promise<T>): Promise<T> {
-    const prev = channelTicketLocks.get(channelId) ?? Promise.resolve();
-    let resolveCurrent!: () => void;
-    const current = new Promise<void>((resolve) => {
-      resolveCurrent = resolve;
-    });
-    const next = prev.then(() => current);
-    channelTicketLocks.set(channelId, next);
-
-    try {
-      await prev;
-      return await fn();
-    } finally {
-      resolveCurrent();
-      // If nobody queued behind us, clean up so the map doesn't grow unbounded.
-      if (channelTicketLocks.get(channelId) === next) {
-        channelTicketLocks.delete(channelId);
-      }
-    }
+  private withChannelLock<T>(channelId: string, fn: () => Promise<T>): Promise<T> {
+    return withKeyedLock(channelTicketLocks, channelId, fn);
   }
 
   // --- Decisions ---
@@ -1024,4 +1127,35 @@ function denormalizeMetadata(
     }
   }
   return out;
+}
+
+/**
+ * Process-local per-key serialization. Callers supplied the map so the lock
+ * domain is explicit — `channelTicketLocks` protects per-channel writes,
+ * `prUrlLocks` protects per-PR find-or-create atomicity. The tail self-cleans
+ * when no one is queued behind the current holder so the map doesn't grow
+ * unbounded across long-lived processes.
+ */
+async function withKeyedLock<T>(
+  locks: Map<string, Promise<void>>,
+  key: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  const prev = locks.get(key) ?? Promise.resolve();
+  let resolveCurrent!: () => void;
+  const current = new Promise<void>((resolve) => {
+    resolveCurrent = resolve;
+  });
+  const next = prev.then(() => current);
+  locks.set(key, next);
+
+  try {
+    await prev;
+    return await fn();
+  } finally {
+    resolveCurrent();
+    if (locks.get(key) === next) {
+      locks.delete(key);
+    }
+  }
 }
