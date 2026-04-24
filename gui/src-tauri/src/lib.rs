@@ -689,6 +689,7 @@ fn create_dm(
         kind: Some("dm".to_string()),
         section_id: None,
         provider_profile_id: None,
+        pr: None,
         created_at: Some(now.to_rfc3339()),
         updated_at: Some(now.to_rfc3339()),
     };
