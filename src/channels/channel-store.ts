@@ -34,6 +34,13 @@ import type { HarnessStore } from "../storage/store.js";
 // `this.store.mutate` below is the hook that enables it.
 const channelTicketLocks: Map<string, Promise<void>> = new Map();
 
+// Per-PR-URL serialization so concurrent `findOrCreatePrDm` callers (e.g. two
+// `pr_review_start` invocations against the same URL firing at the same time)
+// don't both pass the "does this DM exist" check and both mint a duplicate.
+// Same self-cleaning-tail shape as `channelTicketLocks`. Process-local —
+// cross-process safety arrives alongside the Postgres-backed store.
+const prUrlLocks: Map<string, Promise<void>> = new Map();
+
 // Monotonic suffix so two concurrent writers in the same process never
 // collide on the tmp file used by writeChannelTickets.
 let channelTicketsTmpCounter = 0;
@@ -310,8 +317,11 @@ export class ChannelStore {
     const now = new Date().toISOString();
     const assignments = input.repoAssignment ? [input.repoAssignment] : undefined;
     const primaryWorkspaceId = input.repoAssignment?.workspaceId;
+    // Slice by code points rather than UTF-16 code units so a title ending in
+    // an emoji at the 80-char boundary doesn't split a surrogate pair into a
+    // lone surrogate (which some JSON readers reject).
     const name = input.pr.title
-      ? `${input.pr.repo.name}#${input.pr.number}: ${input.pr.title}`.slice(0, 80)
+      ? [...`${input.pr.repo.name}#${input.pr.number}: ${input.pr.title}`].slice(0, 80).join("")
       : `${input.pr.repo.owner}/${input.pr.repo.name}#${input.pr.number}`;
 
     const channel: Channel = {
@@ -334,6 +344,32 @@ export class ChannelStore {
     await mkdir(join(this.channelsDir, channel.channelId), { recursive: true });
 
     return channel;
+  }
+
+  /**
+   * Atomic "find-or-create" for PR-review DMs. Serializes concurrent callers
+   * keyed on `pr.url` so two simultaneous `pr_review_start` invocations for
+   * the same PR can't both pass the find check and both mint a duplicate.
+   * Returns `{ channel, created }` so callers know whether kickoff side
+   * effects (posting the initial entry, cross-linking to the parent) still
+   * need to fire.
+   *
+   * Lock is process-local (same shape as `channelTicketLocks`). Cross-process
+   * correctness arrives alongside the Postgres-backed store — by then the
+   * invariant moves to a DB-level unique index.
+   */
+  async findOrCreatePrDm(input: {
+    pr: ChannelPr;
+    repoAssignment?: RepoAssignment;
+    workspaceId?: string;
+  }): Promise<{ channel: Channel; created: boolean }> {
+    const key = input.pr.url;
+    return withKeyedLock(prUrlLocks, key, async () => {
+      const existing = await this.findChannelByPrUrl(key);
+      if (existing) return { channel: existing, created: false };
+      const created = await this.createPrDm(input);
+      return { channel: created, created: true };
+    });
   }
 
   /**
@@ -901,25 +937,8 @@ export class ChannelStore {
     return merged;
   }
 
-  private async withChannelLock<T>(channelId: string, fn: () => Promise<T>): Promise<T> {
-    const prev = channelTicketLocks.get(channelId) ?? Promise.resolve();
-    let resolveCurrent!: () => void;
-    const current = new Promise<void>((resolve) => {
-      resolveCurrent = resolve;
-    });
-    const next = prev.then(() => current);
-    channelTicketLocks.set(channelId, next);
-
-    try {
-      await prev;
-      return await fn();
-    } finally {
-      resolveCurrent();
-      // If nobody queued behind us, clean up so the map doesn't grow unbounded.
-      if (channelTicketLocks.get(channelId) === next) {
-        channelTicketLocks.delete(channelId);
-      }
-    }
+  private withChannelLock<T>(channelId: string, fn: () => Promise<T>): Promise<T> {
+    return withKeyedLock(channelTicketLocks, channelId, fn);
   }
 
   // --- Decisions ---
@@ -1108,4 +1127,35 @@ function denormalizeMetadata(
     }
   }
   return out;
+}
+
+/**
+ * Process-local per-key serialization. Callers supplied the map so the lock
+ * domain is explicit — `channelTicketLocks` protects per-channel writes,
+ * `prUrlLocks` protects per-PR find-or-create atomicity. The tail self-cleans
+ * when no one is queued behind the current holder so the map doesn't grow
+ * unbounded across long-lived processes.
+ */
+async function withKeyedLock<T>(
+  locks: Map<string, Promise<void>>,
+  key: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  const prev = locks.get(key) ?? Promise.resolve();
+  let resolveCurrent!: () => void;
+  const current = new Promise<void>((resolve) => {
+    resolveCurrent = resolve;
+  });
+  const next = prev.then(() => current);
+  locks.set(key, next);
+
+  try {
+    await prev;
+    return await fn();
+  } finally {
+    resolveCurrent();
+    if (locks.get(key) === next) {
+      locks.delete(key);
+    }
+  }
 }

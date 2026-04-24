@@ -89,19 +89,13 @@ export async function startPrReviewDm(input: StartPrReviewDmInput): Promise<Star
 
   const store = input.store ?? new ChannelStore(undefined, getHarnessStore());
 
-  const existing = await store.findChannelByPrUrl(parsed.canonicalUrl);
-  if (existing) {
-    return {
-      channelId: existing.channelId,
-      parentChannelId: existing.pr?.parentChannelId ?? null,
-      prUrl: parsed.canonicalUrl,
-      reused: true,
-    };
-  }
-
+  // Resolve parent up-front (cheap, idempotent) so `findOrCreatePrDm` has
+  // everything it needs when it wins the lock and mints. On the loser side
+  // of the race `findOrCreatePrDm` returns the existing DM and we drop the
+  // prepared input on the floor.
   const parent = await findGeneralChannelForRepo(store, parsed.name);
 
-  const dm = await store.createPrDm({
+  const { channel: dm, created } = await store.findOrCreatePrDm({
     pr: {
       url: parsed.canonicalUrl,
       number: parsed.number,
@@ -113,6 +107,15 @@ export async function startPrReviewDm(input: StartPrReviewDmInput): Promise<Star
     repoAssignment: parent?.repoAssignment,
     workspaceId: parent?.repoAssignment?.workspaceId,
   });
+
+  if (!created) {
+    return {
+      channelId: dm.channelId,
+      parentChannelId: dm.pr?.parentChannelId ?? null,
+      prUrl: parsed.canonicalUrl,
+      reused: true,
+    };
+  }
 
   await store.postEntry(dm.channelId, {
     type: "status_update",

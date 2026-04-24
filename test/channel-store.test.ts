@@ -835,5 +835,49 @@ describe("channel store", () => {
         await rm(dir, { recursive: true, force: true });
       }
     });
+
+    it("findChannelByPrUrl skips a DM that updatePrState archived on merge", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      try {
+        const pr = { url: sampleUrl, number: 42, repo: sampleRepo, state: "open" as const };
+        const dm = await store.createPrDm({ pr });
+
+        await store.updatePrState(dm.channelId, "merged");
+
+        const miss = await store.findChannelByPrUrl(sampleUrl);
+        expect(miss).toBeNull();
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("findOrCreatePrDm is atomic under concurrent callers — exactly one DM wins", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "ch-test-"));
+      const store = new ChannelStore(dir);
+      try {
+        const pr = {
+          url: sampleUrl,
+          number: 42,
+          repo: sampleRepo,
+          state: "open" as const,
+        };
+
+        const results = await Promise.all(
+          Array.from({ length: 5 }, () => store.findOrCreatePrDm({ pr }))
+        );
+
+        const created = results.filter((r) => r.created);
+        expect(created).toHaveLength(1);
+
+        const ids = new Set(results.map((r) => r.channel.channelId));
+        expect(ids.size).toBe(1);
+
+        const listed = (await store.listChannels("active")).filter((c) => c.pr?.url === sampleUrl);
+        expect(listed).toHaveLength(1);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
   });
 });
