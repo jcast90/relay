@@ -471,11 +471,18 @@ fn extract_rly_mjs_from_shim(shim_path: &str) -> Option<String> {
         // Handles both quoted (`"$basedir/..../rly.mjs"`) and bare forms.
         for raw in trimmed.split_whitespace() {
             let token = raw.trim_matches(|c: char| c == '"' || c == '\'');
-            if !token.contains(".mjs") {
+            // Use `ends_with` rather than `contains` so pathological
+            // tokens like `foo.mjs.bak` don't match.
+            if !token.ends_with(".mjs") {
                 continue;
             }
-            // Substitute `$basedir` the shell would have computed.
-            let substituted = token.replace("$basedir", &basedir.to_string_lossy());
+            // Substitute `$basedir` / `${basedir}` the shell would have
+            // computed. pnpm's shim has historically emitted both forms
+            // across versions.
+            let basedir_str = basedir.to_string_lossy();
+            let substituted = token
+                .replace("${basedir}", &basedir_str)
+                .replace("$basedir", &basedir_str);
             let resolved = if substituted.starts_with('/') {
                 PathBuf::from(substituted)
             } else {
@@ -612,10 +619,17 @@ fn resolve_shell_path() -> Option<String> {
                     .output();
                 let _ = tx.send(out);
             });
-            let out = rx
-                .recv_timeout(std::time::Duration::from_secs(2))
-                .ok()?
-                .ok()?;
+            let out = match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+                Ok(Ok(o)) => o,
+                Ok(Err(e)) => {
+                    eprintln!("[path] $SHELL -l -c 'printenv PATH' failed: {e}");
+                    return None;
+                }
+                Err(_) => {
+                    eprintln!("[path] $SHELL -l -c 'printenv PATH' timed out after 2s; falling back to inherited PATH");
+                    return None;
+                }
+            };
             if !out.status.success() {
                 return None;
             }
