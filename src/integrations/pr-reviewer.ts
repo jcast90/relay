@@ -30,6 +30,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { ChannelStore } from "../channels/channel-store.js";
+import type { ChannelPrState } from "../domain/channel.js";
 import type { PrReviewFindings } from "../domain/pr-row.js";
 import { NodeCommandInvoker, type CommandInvoker } from "../agents/command-invoker.js";
 import type { SandboxProvider } from "../execution/sandbox.js";
@@ -149,6 +150,15 @@ export interface ReviewPullRequestOptions {
   channelStore?: ChannelStore;
   /** Channel to post the review summary to. Required when `channelStore` is set. */
   channelId?: string;
+  /**
+   * Live GitHub PR state, when the caller knows it. Phase-4 routing uses
+   * this to decide whether to mint a PR-review DM: open → mint, merged /
+   * closed → skip mint and post to an existing DM if one's there, else
+   * fall back to the tracked channel. Defaults to `"open"` — the poller
+   * only fires the reviewer on newly-tracked PRs, so "open" is the
+   * correct assumption in the current call sites.
+   */
+  prState?: ChannelPrState;
 }
 
 /**
@@ -524,35 +534,59 @@ async function postReviewFeedEntry(
         : `PR review for ${label}: ${findings.blocking} blocking, ${findings.nits} nit${findings.nits === 1 ? "" : "s"}. ${findings.summary}`;
 
   // PR-review DM routing (phase 4):
-  //   - The review lands in a PR-bound DM so findings accumulate against the
-  //     PR itself, not the parent channel that happened to spawn the ticket.
-  //   - When the tracked row's `entry.channelId` is already a DM (i.e. the
-  //     caller was `pr_review_start`), we reuse it; no cross-link needed.
-  //   - Otherwise we find-or-mint a DM keyed on the PR URL and post the
-  //     findings there, then drop a `pr_link` cross-link in the tracked row's
-  //     channel so the parent thread still sees "review complete" without
-  //     the full blob. Idempotent via `findOrCreatePrDm`.
+  //   - When the tracked row's `entry.channelId` is already a PR DM (e.g.
+  //     the `pr_review_start` MCP flow), findings post directly there —
+  //     no mint, no cross-link.
+  //   - When the tracked channel is NOT a DM and the PR is live (`open`),
+  //     we find-or-mint a PR DM keyed on the PR URL and post the full
+  //     findings there, plus a compact `pr_link` cross-link in the parent
+  //     so the feature thread still sees "review complete".
+  //   - When the tracked channel is NOT a DM and the PR is merged / closed
+  //     or the review itself errored, we skip minting a new DM (no sense
+  //     standing up a review thread for a PR that's already closed or a
+  //     run we couldn't fetch) and fall back to posting directly in the
+  //     tracked channel — preserving the pre-phase-4 observability shape
+  //     for that edge case.
+  //   - Cross-link metadata carries the DM's `pr.state` so the GUI pill
+  //     renders with the right open/merged/closed variant without a second
+  //     round-trip.
   const trackedChannelId = options.channelId ?? entry.channelId;
   const trackedChannel = trackedChannelId ? await store.getChannel(trackedChannelId) : null;
   const trackedIsDm = trackedChannel?.pr !== undefined;
+  const liveState: ChannelPrState = options.prState ?? "open";
+  const prHealthy = liveState === "open" && findings.status !== "error";
 
-  let dmChannelId: string;
+  let dmChannelId: string | null;
+  let dmState: ChannelPrState = liveState;
   if (trackedIsDm && trackedChannelId) {
     dmChannelId = trackedChannelId;
+    dmState = trackedChannel?.pr?.state ?? liveState;
+  } else if (!prHealthy) {
+    // Don't mint a DM for a merged/closed PR or for a review that errored
+    // before the subagent even ran. Use an existing DM if one is already
+    // there (e.g. from a prior pr_review_start), otherwise fall back to
+    // posting in the tracked channel directly.
+    const existing = await store.findChannelByPrUrl(entry.pr.url);
+    dmChannelId = existing?.channelId ?? null;
+    dmState = existing?.pr?.state ?? liveState;
   } else {
     const { channel: dm } = await store.findOrCreatePrDm({
       pr: {
         url: entry.pr.url,
         number: entry.pr.number,
         repo: entry.repo,
-        state: "open",
+        state: liveState,
         parentChannelId: trackedChannelId ?? undefined,
       },
     });
     dmChannelId = dm.channelId;
+    dmState = dm.pr?.state ?? liveState;
   }
 
-  await store.postEntry(dmChannelId, {
+  const primaryChannelId = dmChannelId ?? trackedChannelId;
+  if (!primaryChannelId) return;
+
+  await store.postEntry(primaryChannelId, {
     type: "status_update",
     fromAgentId: null,
     fromDisplayName: "pr-reviewer",
@@ -567,7 +601,7 @@ async function postReviewFeedEntry(
     },
   });
 
-  if (trackedChannelId && trackedChannelId !== dmChannelId) {
+  if (dmChannelId && trackedChannelId && trackedChannelId !== dmChannelId) {
     await store.postEntry(trackedChannelId, {
       type: "pr_link",
       fromAgentId: null,
@@ -576,6 +610,7 @@ async function postReviewFeedEntry(
       metadata: {
         ticketId: entry.ticketId,
         prUrl: entry.pr.url,
+        prState: dmState,
         dmChannelId,
         reviewStatus: findings.status,
         blocking: findings.blocking,
