@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { Channel, ChannelEntry, PersistedChatMessage } from "../types";
-import { renderWithMentions } from "../lib/mentions";
+import { renderMarkdown } from "../lib/mentions";
 import { mentionContext, toUiChannel, type MentionContext } from "../lib/channel";
 import { agentAvatar } from "../lib/agents";
 import { useAppearance } from "../lib/appearance";
@@ -97,7 +97,7 @@ function FeedView({ entries, channel }: { entries: ChannelEntry[]; channel: Ment
                   <span className="msg-time">{formatTime(e.createdAt)}</span>
                 </div>
               )}
-              <div className="msg-body">{renderWithMentions(e.content, channel)}</div>
+              <div className="msg-body">{renderMarkdown(e.content, channel)}</div>
             </div>
           </div>
         );
@@ -191,7 +191,7 @@ function SessionMessages({
                   </span>
                 </div>
               )}
-              <div className="msg-body">{renderWithMentions(m.content, ui)}</div>
+              <div className="msg-body">{renderMarkdown(m.content, ui)}</div>
             </div>
           </div>
         );
@@ -366,9 +366,7 @@ function StreamCard({
           </button>
         )}
       </div>
-      {stream.accum && (
-        <div className="stream-body">{renderWithMentions(stream.accum, channel)}</div>
-      )}
+      {stream.accum && <div className="stream-body">{renderMarkdown(stream.accum, channel)}</div>}
     </div>
   );
 }
