@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import { cp, rm, stat } from "node:fs/promises";
+import { platform } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
@@ -27,6 +30,15 @@ export interface RebuildOptions {
   gui: boolean;
   /** Skip the up-front `pnpm install`. */
   skipInstall: boolean;
+  /**
+   * After a successful GUI build on macOS, copy the produced `.app`
+   * over `/Applications/Relay.app` so the user's Finder/Dock launch
+   * points at the fresh build. Without this, users rebuild happily and
+   * then re-launch the stale installed app — the single most common
+   * "I updated but nothing changed" footgun. Off on non-darwin
+   * platforms and for `--gui`-excluded runs.
+   */
+  installApp: boolean;
 }
 
 export function parseRebuildFlags(args: string[]): RebuildOptions {
@@ -36,11 +48,18 @@ export function parseRebuildFlags(args: string[]): RebuildOptions {
   const explicitDist = args.includes("--dist");
   const anyExplicit = explicitTui || explicitGui || explicitDist;
 
-  const known = new Set(["--all", "--tui", "--gui", "--dist", "--skip-install"]);
+  const known = new Set([
+    "--all",
+    "--tui",
+    "--gui",
+    "--dist",
+    "--skip-install",
+    "--no-install-app",
+  ]);
   for (const arg of args) {
     if (arg.startsWith("--") && !known.has(arg)) {
       console.warn(
-        `[rly rebuild] ignoring unknown flag ${arg}. Supported: --all, --dist, --tui, --gui, --skip-install.`
+        `[rly rebuild] ignoring unknown flag ${arg}. Supported: --all, --dist, --tui, --gui, --skip-install, --no-install-app.`
       );
     }
   }
@@ -50,7 +69,84 @@ export function parseRebuildFlags(args: string[]): RebuildOptions {
     tui: all || explicitTui,
     gui: all || explicitGui,
     skipInstall: args.includes("--skip-install"),
+    installApp: !args.includes("--no-install-app"),
   };
+}
+
+/**
+ * Best-effort request for the running Relay GUI to quit, so we can
+ * replace `/Applications/Relay.app` without fighting a mapped binary
+ * or an open Finder window. Succeeds silently if Relay isn't running.
+ *
+ * Uses AppleScript because it also flushes window state / lets the
+ * app's own graceful-shutdown hooks fire; a raw `pkill` would leave
+ * unsaved state behind.
+ */
+async function quitRunningRelayApp(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const child = spawn("osascript", ["-e", 'tell application "Relay" to quit'], {
+      stdio: "ignore",
+    });
+    // Whether osascript succeeds (quit delivered), fails (not running),
+    // or errors (no osascript — unlikely on macOS), we proceed with the
+    // copy. The copy itself is the source of truth for failure.
+    child.on("close", () => resolve());
+    child.on("error", () => resolve());
+  });
+}
+
+/**
+ * Copy the freshly built `.app` bundle over `/Applications/Relay.app`
+ * so Finder / Dock / Launchpad point at the new binary. macOS only —
+ * Linux and Windows don't have a canonical install location, so the
+ * user runs from `target/release/bundle/…` themselves.
+ *
+ * Returns 0 on success (or when the build didn't produce a bundle we
+ * can find — we print a warning but don't fail the rebuild). Non-zero
+ * only when the copy itself errors (permissions, disk full).
+ */
+async function installGuiAppOnMac(repoRoot: string): Promise<number> {
+  const builtAppPath = join(repoRoot, "target", "release", "bundle", "macos", "Relay.app");
+  try {
+    const st = await stat(builtAppPath);
+    if (!st.isDirectory()) {
+      console.warn(
+        `[rly rebuild] expected .app bundle at ${builtAppPath} — skipping install step.`
+      );
+      return 0;
+    }
+  } catch {
+    console.warn(
+      `[rly rebuild] no .app bundle at ${builtAppPath} — skipping install step. The Tauri build may have produced the bundle elsewhere (check tauri.conf.json bundle targets).`
+    );
+    return 0;
+  }
+
+  const installedPath = "/Applications/Relay.app";
+  console.log(`[rly rebuild] installing to ${installedPath}`);
+
+  // Ask the running app to quit first — replacing an .app whose
+  // binary is currently mapped into a live process "works" on APFS
+  // (directory entries get relinked) but the running process keeps
+  // executing the old code and any future relaunch from Dock could
+  // race the copy. Quitting cleanly avoids both issues.
+  await quitRunningRelayApp();
+
+  try {
+    await rm(installedPath, { recursive: true, force: true });
+    await cp(builtAppPath, installedPath, { recursive: true });
+  } catch (err) {
+    console.error(
+      `[rly rebuild] failed to install ${installedPath}: ${err instanceof Error ? err.message : String(err)}`
+    );
+    console.error(`[rly rebuild] you can install manually: cp -R "${builtAppPath}" /Applications/`);
+    return 1;
+  }
+
+  console.log(
+    `[rly rebuild] installed. Open /Applications/Relay.app (or Spotlight "Relay") to launch the updated build.`
+  );
+  return 0;
 }
 
 /**
@@ -114,6 +210,20 @@ export async function runRebuild(options: RebuildOptions): Promise<number> {
     if (exit !== 0) {
       console.error("[rly rebuild] GUI build failed — stopping.");
       return exit;
+    }
+
+    // Install the freshly built bundle over /Applications/Relay.app on
+    // macOS so Finder/Dock/Spotlight land on the new binary. The old
+    // behavior left the built .app in `target/release/bundle/…` and
+    // the user re-launched the stale installed app — silently running
+    // pre-update code.
+    if (options.installApp && platform() === "darwin") {
+      const installExit = await installGuiAppOnMac(repoRoot);
+      if (installExit !== 0) {
+        // Install failure doesn't undo the successful build — tell
+        // the user we're done but the copy step needs attention.
+        return installExit;
+      }
     }
   }
 
