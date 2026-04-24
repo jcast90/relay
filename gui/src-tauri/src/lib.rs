@@ -1195,16 +1195,111 @@ fn build_rewind_metadata_json(rewind_key: &str) -> String {
 #[derive(Serialize, Clone)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 enum ChatEvent {
-    Started { stream_id: u64 },
-    Chunk { stream_id: u64, text: String },
-    Activity { stream_id: u64, text: String },
-    SessionId { stream_id: u64, claude_session_id: String },
-    Done { stream_id: u64, final_text: String },
-    Error { stream_id: u64, message: String },
+    // Explicit camelCase renames on every field. The enum-level
+    // `rename_all = "camelCase"` only applies to variant NAMES (Started ->
+    // "started") — it does NOT recurse into variant struct fields, so
+    // `stream_id` was serializing as the snake_case `stream_id` on the
+    // wire. The renderer reads `event.streamId`, so every event evaluated
+    // to `undefined` and got filtered out as a streamId mismatch; the
+    // stream card was effectively deaf to the backend.
+    Started {
+        #[serde(rename = "streamId")]
+        stream_id: u64,
+    },
+    Chunk {
+        #[serde(rename = "streamId")]
+        stream_id: u64,
+        text: String,
+    },
+    Activity {
+        #[serde(rename = "streamId")]
+        stream_id: u64,
+        text: String,
+    },
+    SessionId {
+        #[serde(rename = "streamId")]
+        stream_id: u64,
+        #[serde(rename = "claudeSessionId")]
+        claude_session_id: String,
+    },
+    Done {
+        #[serde(rename = "streamId")]
+        stream_id: u64,
+        #[serde(rename = "finalText")]
+        final_text: String,
+    },
+    Error {
+        #[serde(rename = "streamId")]
+        stream_id: u64,
+        message: String,
+    },
 }
 
 // `describe_tool_use` lives in the shared `harness_data::tool_activity`
 // module so the GUI, TUI, and CLI render identical one-liners. See OSS-06.
+
+/// Render a `system`-type stream-json line from claude CLI as a short
+/// activity string, or return None for events we don't want to surface.
+///
+/// claude CLI v2.1.119 emits a flurry of `system` events during startup
+/// (init + one pair of hook_started/hook_response per SessionStart hook)
+/// before any assistant content arrives. Without surfacing them the
+/// activity stack stays empty and the user watches "thinking…" with no
+/// signal that anything is alive — the symptom that originally looked like
+/// the chat was broken. We turn each into one short line; the stack has
+/// its own cap so volume is fine.
+fn describe_system_event(json: &serde_json::Value) -> Option<String> {
+    let subtype = json.get("subtype").and_then(|v| v.as_str())?;
+    match subtype {
+        "init" => {
+            let model = json
+                .get("model")
+                .and_then(|v| v.as_str())
+                .unwrap_or("claude");
+            Some(format!("session init · {}", model))
+        }
+        "hook_started" => {
+            let name = json
+                .get("hook_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("hook");
+            Some(format!("hook {} running", name))
+        }
+        "hook_response" => {
+            let name = json
+                .get("hook_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("hook");
+            let outcome = json
+                .get("outcome")
+                .and_then(|v| v.as_str())
+                .unwrap_or("done");
+            if outcome == "success" {
+                // Success already implied by subsequent events; skip to
+                // keep the stack uncluttered. Errors still surface below.
+                None
+            } else {
+                Some(format!("hook {} {}", name, outcome))
+            }
+        }
+        other => Some(format!("system: {}", other)),
+    }
+}
+
+/// Render a `rate_limit_event` stream-json line as activity, skipping the
+/// allowed-status noise that would otherwise fire on every turn.
+fn describe_rate_limit_event(json: &serde_json::Value) -> Option<String> {
+    let info = json.get("rate_limit_info")?;
+    let status = info.get("status").and_then(|v| v.as_str()).unwrap_or("");
+    if status == "allowed" {
+        return None;
+    }
+    let kind = info
+        .get("rateLimitType")
+        .and_then(|v| v.as_str())
+        .unwrap_or("rate_limit");
+    Some(format!("rate limit · {} · {}", kind, status))
+}
 
 #[tauri::command]
 fn start_chat(
@@ -1498,6 +1593,31 @@ fn start_chat(
                                 );
                             }
                         }
+                    }
+                }
+                Some("system") => {
+                    // claude CLI v2.1.119 emits many `system` lines before any
+                    // `assistant` content — init, hook_started, hook_response,
+                    // etc. Without surfacing these, the activity stack sits
+                    // empty and the user sees nothing but "thinking…" while
+                    // hooks run and the session warms up. Emit them as
+                    // Activity lines so the stream card actually shows progress.
+                    if let Some(text) = describe_system_event(&json) {
+                        let _ = app_handle.emit(
+                            "chat-event",
+                            ChatEvent::Activity { stream_id, text },
+                        );
+                    }
+                }
+                Some("rate_limit_event") => {
+                    // Only surface rate-limit events when they would gate the
+                    // run; "allowed" is noise. This keeps the activity stack
+                    // useful on long responses that hit soft limits.
+                    if let Some(text) = describe_rate_limit_event(&json) {
+                        let _ = app_handle.emit(
+                            "chat-event",
+                            ChatEvent::Activity { stream_id, text },
+                        );
                     }
                 }
                 _ => {}
@@ -3156,6 +3276,146 @@ mod tests {
     // AL-8's queue surfaces carry their own test coverage via
     // `test/approvals/queue.test.ts` and the harness-data crate's
     // `ApprovalQueueRecord` parser tests.
+
+    // --- describe_system_event / describe_rate_limit_event ---
+    // Regression guards for the activity-liveness fix: claude CLI v2.1.119
+    // emits `system` and `rate_limit_event` lines before any assistant
+    // content, so if we stop surfacing them the user is back to staring at
+    // "thinking…" with no progress signal.
+
+    #[test]
+    fn describe_system_event_renders_init_with_model() {
+        let json = serde_json::json!({
+            "type": "system",
+            "subtype": "init",
+            "model": "claude-opus-4-7",
+        });
+        assert_eq!(
+            describe_system_event(&json).as_deref(),
+            Some("session init · claude-opus-4-7"),
+        );
+    }
+
+    #[test]
+    fn describe_system_event_renders_hook_started_with_name() {
+        let json = serde_json::json!({
+            "type": "system",
+            "subtype": "hook_started",
+            "hook_name": "SessionStart:startup",
+        });
+        assert_eq!(
+            describe_system_event(&json).as_deref(),
+            Some("hook SessionStart:startup running"),
+        );
+    }
+
+    #[test]
+    fn describe_system_event_suppresses_hook_response_success() {
+        let json = serde_json::json!({
+            "type": "system",
+            "subtype": "hook_response",
+            "hook_name": "SessionStart:startup",
+            "outcome": "success",
+        });
+        // Success adds no information beyond the matching hook_started —
+        // suppress to keep the activity stack tight.
+        assert!(describe_system_event(&json).is_none());
+    }
+
+    #[test]
+    fn describe_system_event_surfaces_hook_response_error() {
+        let json = serde_json::json!({
+            "type": "system",
+            "subtype": "hook_response",
+            "hook_name": "SessionStart:startup",
+            "outcome": "error",
+        });
+        assert_eq!(
+            describe_system_event(&json).as_deref(),
+            Some("hook SessionStart:startup error"),
+        );
+    }
+
+    #[test]
+    fn describe_system_event_falls_back_on_unknown_subtype() {
+        let json = serde_json::json!({
+            "type": "system",
+            "subtype": "some_future_event",
+        });
+        // Forward-compat: a new subtype should still produce a line so the
+        // user never lands back in silent-thinking territory.
+        assert_eq!(
+            describe_system_event(&json).as_deref(),
+            Some("system: some_future_event"),
+        );
+    }
+
+    #[test]
+    fn describe_rate_limit_event_skips_allowed_status() {
+        let json = serde_json::json!({
+            "type": "rate_limit_event",
+            "rate_limit_info": { "status": "allowed", "rateLimitType": "five_hour" },
+        });
+        assert!(describe_rate_limit_event(&json).is_none());
+    }
+
+    // Lock the wire shape: the renderer reads `event.streamId`, not
+    // `event.stream_id`. Serde's enum-level `rename_all = "camelCase"` only
+    // renames variant names — it does not recurse into variant struct
+    // fields, so without explicit `#[serde(rename = "streamId")]` every
+    // event would serialize as `stream_id` and every streamId comparison
+    // in CenterPane.tsx would evaluate to undefined !== n, silently
+    // dropping every chunk, activity, done, and error event. That exact
+    // bug left the stream card frozen on "thinking…". Guard it here.
+    #[test]
+    fn chat_event_wire_shape_uses_camel_case_fields() {
+        let started = serde_json::to_value(ChatEvent::Started { stream_id: 7 }).unwrap();
+        assert_eq!(started["kind"], "started");
+        assert_eq!(started["streamId"], 7);
+        assert!(
+            started.get("stream_id").is_none(),
+            "snake_case field leaked to the wire: {}",
+            started
+        );
+
+        let activity = serde_json::to_value(ChatEvent::Activity {
+            stream_id: 3,
+            text: "hi".into(),
+        })
+        .unwrap();
+        assert_eq!(activity["kind"], "activity");
+        assert_eq!(activity["streamId"], 3);
+        assert_eq!(activity["text"], "hi");
+
+        let done = serde_json::to_value(ChatEvent::Done {
+            stream_id: 5,
+            final_text: "ok".into(),
+        })
+        .unwrap();
+        assert_eq!(done["streamId"], 5);
+        assert_eq!(done["finalText"], "ok");
+        assert!(done.get("final_text").is_none());
+
+        let sid = serde_json::to_value(ChatEvent::SessionId {
+            stream_id: 1,
+            claude_session_id: "c".into(),
+        })
+        .unwrap();
+        assert_eq!(sid["claudeSessionId"], "c");
+        assert!(sid.get("claude_session_id").is_none());
+    }
+
+    #[test]
+    fn describe_rate_limit_event_surfaces_non_allowed_status() {
+        let json = serde_json::json!({
+            "type": "rate_limit_event",
+            "rate_limit_info": { "status": "throttled", "rateLimitType": "five_hour" },
+        });
+        assert_eq!(
+            describe_rate_limit_event(&json).as_deref(),
+            Some("rate limit · five_hour · throttled"),
+        );
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

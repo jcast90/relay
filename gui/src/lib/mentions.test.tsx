@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isValidElement, type ReactElement } from "react";
-import { renderWithMentions, extractMentions } from "./mentions";
+import { render } from "@testing-library/react";
+import { renderWithMentions, renderMarkdown, extractMentions } from "./mentions";
 
 const channel = {
   repos: ["ui", "be"],
@@ -82,6 +83,51 @@ describe("renderWithMentions", () => {
     );
     expect(asElement(nodes[3]).type).toBe("strong");
     expect(asElement(nodes[5]).type).toBe("code");
+  });
+});
+
+describe("renderMarkdown", () => {
+  it("renders null for empty input", () => {
+    expect(renderMarkdown("", channel)).toBeNull();
+  });
+
+  it("renders headings, bullet lists, and paragraphs as real block elements", () => {
+    const { container } = render(
+      <>{renderMarkdown("## Top picks\n\n- one\n- two\n\nEnjoy.", channel)}</>,
+    );
+    expect(container.querySelector("h2")?.textContent).toBe("Top picks");
+    const items = container.querySelectorAll("li");
+    expect(items).toHaveLength(2);
+    expect(items[0].textContent).toBe("one");
+    expect(container.querySelector("p")?.textContent).toBe("Enjoy.");
+  });
+
+  it("preserves @mention chips inside paragraphs", () => {
+    const { container } = render(<>{renderMarkdown("ping @ui now", channel)}</>);
+    const chip = container.querySelector(".mention");
+    expect(chip?.textContent).toBe("@ui");
+    expect(chip?.className).toBe("mention mention-repo-primary");
+  });
+
+  it("renders fenced code blocks with <pre><code>", () => {
+    const { container } = render(<>{renderMarkdown("```\nhello()\n```\n", channel)}</>);
+    const pre = container.querySelector("pre");
+    expect(pre).not.toBeNull();
+    expect(pre?.querySelector("code")?.textContent?.trim()).toBe("hello()");
+  });
+
+  it("opens links in a new tab so the webview doesn't navigate", () => {
+    const { container } = render(<>{renderMarkdown("See [docs](https://example.com).", channel)}</>);
+    const anchor = container.querySelector("a");
+    expect(anchor?.getAttribute("target")).toBe("_blank");
+    expect(anchor?.getAttribute("rel")).toContain("noopener");
+  });
+
+  it("renders GFM tables (remark-gfm wired up)", () => {
+    const md = "| a | b |\n| - | - |\n| 1 | 2 |\n";
+    const { container } = render(<>{renderMarkdown(md, channel)}</>);
+    expect(container.querySelector("table")).not.toBeNull();
+    expect(container.querySelectorAll("th")).toHaveLength(2);
   });
 });
 

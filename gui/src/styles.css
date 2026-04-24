@@ -1213,6 +1213,44 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   color: var(--color-text-primary);
   word-wrap: break-word;
 }
+/* react-markdown renders block-level elements directly inside .msg-body.
+   These rules make assistant markdown output readable — matching header
+   scale, tight list spacing, code blocks, tables, and blockquotes. */
+.message .msg-body > :first-child { margin-top: 0; }
+.message .msg-body > :last-child { margin-bottom: 0; }
+.message .msg-body p { margin: var(--space-2) 0; }
+.message .msg-body h1,
+.message .msg-body h2,
+.message .msg-body h3,
+.message .msg-body h4,
+.message .msg-body h5,
+.message .msg-body h6 {
+  margin: var(--space-4) 0 var(--space-2);
+  line-height: var(--line-tight, 1.25);
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+}
+.message .msg-body h1 { font-size: 1.35em; }
+.message .msg-body h2 { font-size: 1.2em; }
+.message .msg-body h3 { font-size: 1.1em; }
+.message .msg-body h4,
+.message .msg-body h5,
+.message .msg-body h6 { font-size: 1em; }
+.message .msg-body ul,
+.message .msg-body ol {
+  margin: var(--space-2) 0;
+  padding-left: var(--space-6);
+}
+.message .msg-body li { margin: var(--space-1) 0; }
+.message .msg-body li > p { margin: 0; }
+.message .msg-body code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--color-paper-alt);
+  border: 1px solid var(--color-paper-line);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
+}
 .message .msg-body pre {
   background: var(--color-paper-alt);
   border: 1px solid var(--color-paper-line);
@@ -1222,6 +1260,39 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   font-family: var(--font-mono);
   font-size: var(--font-size-base);
   margin: var(--space-3) 0;
+}
+.message .msg-body pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+}
+.message .msg-body blockquote {
+  margin: var(--space-3) 0;
+  padding-left: var(--space-4);
+  border-left: 3px solid var(--color-paper-line);
+  color: var(--color-text-muted);
+}
+.message .msg-body a {
+  color: var(--color-accent-sky);
+  text-decoration: underline;
+}
+.message .msg-body table {
+  border-collapse: collapse;
+  margin: var(--space-3) 0;
+  font-size: 0.95em;
+}
+.message .msg-body th,
+.message .msg-body td {
+  border: 1px solid var(--color-paper-line);
+  padding: var(--space-1) var(--space-3);
+  text-align: left;
+}
+.message .msg-body th { background: var(--color-paper-alt); font-weight: var(--font-weight-semibold); }
+.message .msg-body hr {
+  border: 0;
+  border-top: 1px solid var(--color-paper-line);
+  margin: var(--space-4) 0;
 }
 
 .chat-empty {
@@ -1283,7 +1354,51 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   font-size: var(--font-size-md);
   color: var(--color-text-primary);
   line-height: var(--line-relaxed);
+  word-wrap: break-word;
 }
+/* Reuse the .msg-body markdown rules for streaming output — same author
+   (claude), same markdown features, same visual treatment. */
+.stream-body > :first-child { margin-top: 0; }
+.stream-body > :last-child { margin-bottom: 0; }
+.stream-body p { margin: var(--space-2) 0; }
+.stream-body h1,
+.stream-body h2,
+.stream-body h3,
+.stream-body h4,
+.stream-body h5,
+.stream-body h6 {
+  margin: var(--space-4) 0 var(--space-2);
+  line-height: var(--line-tight, 1.25);
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+}
+.stream-body h1 { font-size: 1.35em; }
+.stream-body h2 { font-size: 1.2em; }
+.stream-body h3 { font-size: 1.1em; }
+.stream-body ul,
+.stream-body ol { margin: var(--space-2) 0; padding-left: var(--space-6); }
+.stream-body li { margin: var(--space-1) 0; }
+.stream-body li > p { margin: 0; }
+.stream-body code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--color-paper-alt);
+  border: 1px solid var(--color-paper-line);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
+}
+.stream-body pre {
+  background: var(--color-paper-alt);
+  border: 1px solid var(--color-paper-line);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-base);
+  margin: var(--space-3) 0;
+}
+.stream-body pre code { background: transparent; border: none; padding: 0; font-size: inherit; }
+.stream-body a { color: var(--color-accent-sky); text-decoration: underline; }
 
 /* ── Composer ─────────────────────────────────────────────── */
 
