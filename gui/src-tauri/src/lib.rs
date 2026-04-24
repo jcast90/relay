@@ -358,6 +358,13 @@ struct AgentBinarySpec {
 ///      layouts (pnpm global, homebrew, cmux's bundled wrapper, npm
 ///      global, cargo bin, user-local bin).
 ///
+/// Each candidate must pass an `is_file` check — an invalid pinned path
+/// or a stale env var silently falls through to the next resolver
+/// rather than hard-failing. The Settings → Agent CLIs **Test** button
+/// is the discoverability mechanism for "my pin is wrong"; hard-
+/// failing here would mask the user's env var / candidate fallbacks
+/// when a saved pin later breaks (e.g. brew reinstall).
+///
 /// Returns `None` when nothing resolves; callers decide whether to
 /// fall back to the bare name or surface an error.
 fn resolve_agent_bin(spec: &AgentBinarySpec, pinned: Option<&str>) -> Option<String> {

@@ -369,7 +369,7 @@ function AgentCliRow({
           )}
         </span>
       </div>
-      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+      <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center" }}>
         <button
           type="button"
           onClick={() => onSave(local)}
@@ -379,19 +379,22 @@ function AgentCliRow({
           {saving ? "Saving…" : "Save"}
         </button>
         <button type="button" onClick={runTest} disabled={testing}>
-          {testing ? "Testing…" : "Test"}
+          {testing ? "Testing…" : local.trim() ? "Test" : detected ? "Test auto-detected" : "Test"}
         </button>
-        {value && (
+        {(value || local) && (
           <button
             type="button"
             className="danger"
             onClick={() => {
               setLocal("");
-              onSave("");
+              // Only round-trip through save when there was a saved pin
+              // to clear; clearing a dirty-but-unsaved input is a pure
+              // local reset.
+              if (value) onSave("");
             }}
             disabled={saving}
           >
-            Clear pin
+            {value ? "Clear pin" : "Reset"}
           </button>
         )}
         <span style={{ color: "var(--color-text-dim)", fontSize: "var(--font-size-xs)" }}>
