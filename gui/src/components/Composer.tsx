@@ -8,6 +8,11 @@ type ActivityEntry = { text: string; ts: number };
 
 export type ActiveStream = {
   streamId: number;
+  // The channel the turn was submitted from. CenterPane gates the card's
+  // render + "am I streaming" predicate on this matching the currently
+  // open channel — otherwise a stream started in channel A would leak
+  // into channel B's view when the user switches.
+  channelId: string;
   alias: string | null;
   accum: string;
   activity: ActivityEntry[];
@@ -218,6 +223,7 @@ export function Composer({
       });
       onStartStream({
         streamId,
+        channelId: channel.channelId,
         alias: target || null,
         accum: "",
         activity: [],

@@ -61,11 +61,25 @@ export function CenterPane({
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [stream, setStream] = useState<ActiveStream | null>(null);
 
+  // Streams are single-slot in CenterPane but tagged with the channel
+  // they started in. When the user switches channels, the state persists
+  // (so returning to the origin channel still shows the card) but we
+  // hide it from the now-foreground channel. Without this scoping, the
+  // card — and its "streaming" predicate — leaked across channels.
+  const currentStream = stream && channel && stream.channelId === channel.channelId ? stream : null;
+  // A closed stream card is kept mounted so the user can review the
+  // completed turn's activity + response. It is NOT "in flight" though,
+  // so it must not gate the composer's submit button (Composer
+  // disables send while `streaming` is true). `isStreaming` is the
+  // load-bearing predicate for the *current* channel's composer.
+  const isStreaming = !!currentStream && !currentStream.closed;
   // Push streaming presence up to App so the Sidebar's Running row can
-  // show a real count. Single-center-pane app → count is 0 or 1.
+  // show a real count. This reports globally (any channel) because the
+  // sidebar is channel-agnostic — a background stream should still count.
+  const hasLiveStream = !!stream && !stream.closed;
   useEffect(() => {
-    onStreamingChanged?.(stream ? 1 : 0);
-  }, [stream, onStreamingChanged]);
+    onStreamingChanged?.(hasLiveStream ? 1 : 0);
+  }, [hasLiveStream, onStreamingChanged]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [promoteOpen, setPromoteOpen] = useState(false);
   // AL-10: resolve "is there an autonomous session for this channel?" by
@@ -248,8 +262,8 @@ export function CenterPane({
             sessionId={sessionId}
             feed={feed}
             sessionMessages={sessionMessages}
-            stream={stream}
-            streamId={stream?.streamId ?? null}
+            stream={currentStream}
+            streamId={currentStream?.streamId ?? null}
             onToggleStreamExpanded={() =>
               setStream((s) => (s ? { ...s, expanded: !s.expanded } : s))
             }
@@ -262,7 +276,7 @@ export function CenterPane({
             channel={channel}
             sessionId={sessionId}
             activeSession={activeSession}
-            streaming={!!stream}
+            streaming={isStreaming}
             onStartStream={setStream}
             onSessionCreated={onSessionCreated}
             onSlashNew={isDm ? () => setPromoteOpen(true) : undefined}

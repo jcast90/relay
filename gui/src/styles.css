@@ -1411,14 +1411,30 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   font-family: var(--font-mono);
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--space-2);
 }
-.stream-activity.expanded { max-height: 220px; overflow-y: auto; }
+/* Expanded view raises the scroll cap and keeps the same gap as
+   collapsed so each entry reads as its own line. */
+.stream-activity.expanded {
+  max-height: 360px;
+  overflow-y: auto;
+}
 .stream-activity-line {
-  display: flex; gap: var(--space-3);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: flex;
+  gap: var(--space-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Preserve per-line height so long activity logs are readable —
+     without these, flex children with nowrap text can collapse to the
+     ascender-only height and lines visually merge. */
+  line-height: 1.5;
+  min-height: 1.5em;
+  align-items: baseline;
 }
-.stream-activity-line.newest { color: var(--color-text-primary); }
+.stream-activity-line.newest {
+  color: var(--color-text-primary);
+}
 .stream-activity-more {
   margin-top: var(--space-2);
   background: transparent;

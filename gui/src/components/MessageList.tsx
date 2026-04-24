@@ -7,10 +7,10 @@ import { agentAvatar } from "../lib/agents";
 import { useAppearance } from "../lib/appearance";
 import type { ActiveStream } from "./Composer";
 
-// Collapsed stream card shows the last 6 activity lines by default — 3
-// was too narrow and the user lost visibility into what the agent ran.
-// Expand (and keeping the card mounted post-done) reveals the full list.
-const ACTIVITY_TOP_N = 6;
+// Collapsed stream card shows the 3 most recent activity lines. Enough
+// to signal liveness without dominating the chat surface; the user can
+// expand or keep the card mounted post-done to review the full run.
+const ACTIVITY_TOP_N = 3;
 
 /**
  * Memoized markdown body. `renderMarkdown` runs react-markdown + remark-gfm
@@ -80,7 +80,7 @@ export function MessageList({
           channel={channel}
           sessionId={sessionId}
           messages={sessionMessages}
-          streaming={!!stream}
+          streaming={!!stream && !stream.closed}
           streamId={streamId}
           closedStreamAccum={stream?.closed ? stream.accum : null}
           onRewound={onRewound}
