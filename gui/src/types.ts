@@ -33,12 +33,24 @@ export type ChannelTier = "feature_large" | "feature" | "bugfix" | "chore" | "qu
 // equivalent to `none` at the UI layer.
 export type TicketProvider = "relay" | "linear" | "none" | "unknown";
 
+export type AgentBinaryPaths = {
+  rly?: string;
+  claude?: string;
+};
+
 export type GuiSettings = {
   ticketProvider: TicketProvider;
   linearApiToken: string;
   linearWorkspace: string;
   linearPollSeconds: number;
   rightRailOpen: boolean;
+  agentBinaries: AgentBinaryPaths;
+};
+
+export type AgentBinaryTestResult = {
+  success: boolean;
+  output: string;
+  error: string | null;
 };
 
 export type Channel = {

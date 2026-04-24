@@ -527,6 +527,15 @@ impl Default for TicketProvider {
 pub const POLL_SECONDS_MIN: u32 = 10;
 pub const POLL_SECONDS_MAX: u32 = 3600;
 
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentBinaryPaths {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rly: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct GuiSettings {
@@ -540,6 +549,12 @@ pub struct GuiSettings {
     pub linear_poll_seconds: u32,
     #[serde(default = "default_right_rail_open")]
     pub right_rail_open: bool,
+    /// User-pinned absolute paths for agent CLIs. When set, these win
+    /// over env var overrides and auto-detection — the escape hatch for
+    /// users whose binaries live in non-standard locations. Missing
+    /// entries fall through to env vars / PATH / candidate probes.
+    #[serde(default)]
+    pub agent_binaries: AgentBinaryPaths,
 }
 
 impl Default for GuiSettings {
@@ -550,6 +565,7 @@ impl Default for GuiSettings {
             linear_workspace: String::new(),
             linear_poll_seconds: default_poll_interval(),
             right_rail_open: default_right_rail_open(),
+            agent_binaries: AgentBinaryPaths::default(),
         }
     }
 }
@@ -1858,6 +1874,7 @@ mod tests {
             linear_workspace: "acme".to_string(),
             linear_poll_seconds: 45,
             right_rail_open: false,
+            agent_binaries: AgentBinaryPaths::default(),
         };
         save_gui_settings(&s).expect("save ok");
 

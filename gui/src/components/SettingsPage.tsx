@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { GuiSettings, ProviderProfile } from "../types";
+import type { AgentBinaryTestResult, GuiSettings, ProviderProfile } from "../types";
 import { useAppearance, type AvatarStyle, type Density } from "../lib/appearance";
 
-type Section = "ticketing" | "providers" | "appearance" | "general";
+type Section = "ticketing" | "providers" | "agent-clis" | "appearance" | "general";
 
 type Props = {
   settings: GuiSettings;
@@ -48,6 +48,12 @@ export function SettingsPage({ settings, onSaved, onClose }: Props) {
           Providers
         </button>
         <button
+          className={`settings-nav-item ${section === "agent-clis" ? "active" : ""}`}
+          onClick={() => setSection("agent-clis")}
+        >
+          Agent CLIs
+        </button>
+        <button
           className={`settings-nav-item ${section === "appearance" ? "active" : ""}`}
           onClick={() => setSection("appearance")}
         >
@@ -68,6 +74,9 @@ export function SettingsPage({ settings, onSaved, onClose }: Props) {
           <TicketingSection draft={draft} onChange={save} saving={saving} error={error} />
         )}
         {section === "providers" && <ProvidersSection />}
+        {section === "agent-clis" && (
+          <AgentCliSection draft={draft} onChange={save} saving={saving} error={error} />
+        )}
         {section === "appearance" && <AppearanceSection />}
         {section === "general" && <GeneralSection />}
       </div>
@@ -192,6 +201,225 @@ function GeneralSection() {
         </p>
       </div>
     </>
+  );
+}
+
+type AgentKind = "rly" | "claude";
+
+/**
+ * Pinned-path override for each agent CLI. Relay ships with
+ * auto-detection that walks PATH + known install locations, but it
+ * misses unusual setups (custom brew prefix, mise, corporate /opt
+ * installs, portable builds). This section lets the user pin an
+ * absolute path that takes priority over detection — the escape hatch
+ * for "I know where my binary is, stop guessing."
+ *
+ * Precedence mirrored in `resolve_agent_bin` on the Rust side:
+ *   settings pin → env var → PATH → candidate dirs.
+ */
+function AgentCliSection({
+  draft,
+  onChange,
+  saving,
+  error,
+}: {
+  draft: GuiSettings;
+  onChange: (next: GuiSettings) => void;
+  saving: boolean;
+  error: string | null;
+}) {
+  const agents: Array<{ key: AgentKind; label: string; envVar: string; description: string }> = [
+    {
+      key: "rly",
+      label: "Relay CLI (rly)",
+      envVar: "RELAY_BIN",
+      description: "The Relay command-line tool. Required for every dispatch.",
+    },
+    {
+      key: "claude",
+      label: "Claude CLI",
+      envVar: "CLAUDE_BIN",
+      description: "Anthropic's Claude Code CLI. Used by the Claude adapter.",
+    },
+  ];
+
+  return (
+    <>
+      <h2>Agent CLIs</h2>
+      <p className="help">
+        Relay auto-detects each CLI on launch (PATH, then common install dirs). Pin an absolute path
+        here when auto-detection misses your install — pins take priority over <code>$PATH</code>
+        and environment overrides, and changes take effect on the next command without a restart.
+      </p>
+      {agents.map((agent) => (
+        <AgentCliRow
+          key={agent.key}
+          agent={agent}
+          value={draft.agentBinaries[agent.key] ?? ""}
+          onSave={(next) =>
+            onChange({
+              ...draft,
+              agentBinaries: {
+                ...draft.agentBinaries,
+                [agent.key]: next.trim() || undefined,
+              },
+            })
+          }
+          saving={saving}
+        />
+      ))}
+      {error && <div className="error">{error}</div>}
+    </>
+  );
+}
+
+function AgentCliRow({
+  agent,
+  value,
+  onSave,
+  saving,
+}: {
+  agent: { key: AgentKind; label: string; envVar: string; description: string };
+  value: string;
+  onSave: (next: string) => void;
+  saving: boolean;
+}) {
+  const [local, setLocal] = useState(value);
+  const [detected, setDetected] = useState<string | null | undefined>(undefined);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<AgentBinaryTestResult | null>(null);
+
+  useEffect(() => {
+    // Re-sync local input when the parent's saved value changes (e.g.
+    // after a save round-trip). Avoid clobbering the user's in-flight
+    // edits by only syncing on true parent-value changes.
+    setLocal(value);
+  }, [value]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .autoDetectAgentBinary(agent.key)
+      .then((p) => {
+        if (!cancelled) setDetected(p);
+      })
+      .catch(() => {
+        if (!cancelled) setDetected(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agent.key]);
+
+  const dirty = local.trim() !== (value ?? "").trim();
+
+  const runTest = async () => {
+    const target = local.trim() || detected || "";
+    if (!target) {
+      setTestResult({
+        success: false,
+        output: "",
+        error: "No path to test — enter one or wait for auto-detect.",
+      });
+      return;
+    }
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await api.testAgentBinary(target);
+      setTestResult(result);
+    } catch (err) {
+      setTestResult({ success: false, output: "", error: String(err) });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <div className="settings-section">
+      <h3>{agent.label}</h3>
+      <p className="help">{agent.description}</p>
+      <label>
+        Pinned path (optional)
+        <input
+          value={local}
+          onChange={(e) => setLocal(e.target.value)}
+          placeholder={detected ?? `/path/to/${agent.key}`}
+          style={{ fontFamily: "var(--font-mono)" }}
+        />
+      </label>
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          alignItems: "center",
+          marginTop: 8,
+          fontSize: "var(--font-size-sm)",
+          color: "var(--color-text-muted)",
+        }}
+      >
+        <span>
+          Auto-detected:{" "}
+          {detected === undefined ? (
+            <em>checking…</em>
+          ) : detected === null ? (
+            <em>not found</em>
+          ) : (
+            <code>{detected}</code>
+          )}
+        </span>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <button
+          type="button"
+          onClick={() => onSave(local)}
+          disabled={saving || !dirty}
+          className="primary"
+        >
+          {saving ? "Saving…" : "Save"}
+        </button>
+        <button type="button" onClick={runTest} disabled={testing}>
+          {testing ? "Testing…" : "Test"}
+        </button>
+        {value && (
+          <button
+            type="button"
+            className="danger"
+            onClick={() => {
+              setLocal("");
+              onSave("");
+            }}
+            disabled={saving}
+          >
+            Clear pin
+          </button>
+        )}
+        <span style={{ color: "var(--color-text-dim)", fontSize: "var(--font-size-xs)" }}>
+          Env var: <code>{agent.envVar}</code>
+        </span>
+      </div>
+      {testResult && (
+        <div
+          className={testResult.success ? "" : "error"}
+          style={{
+            marginTop: 12,
+            padding: 8,
+            background: testResult.success
+              ? "var(--color-accent-mint-soft, var(--color-paper-alt))"
+              : undefined,
+            borderRadius: 4,
+            fontFamily: "var(--font-mono)",
+            fontSize: "var(--font-size-xs)",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+          }}
+        >
+          {testResult.success
+            ? `✓ ${testResult.output || "ok"}`
+            : `✗ ${testResult.error ?? "failed"}`}
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -83,6 +83,7 @@ export function App() {
           linearWorkspace: "",
           linearPollSeconds: 30,
           rightRailOpen: true,
+          agentBinaries: {},
         });
       });
   }, []);

@@ -333,54 +333,103 @@ struct CliResult {
     code: Option<i32>,
 }
 
-/// Resolve the `rly` binary to an absolute path.
-///
-/// When the GUI is launched from Finder/Launchpad on macOS, it inherits
-/// launchd's minimal PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) — shell init
-/// files never run, so per-user install dirs (pnpm global, homebrew,
-/// npm-global, cargo, ~/.local/bin) aren't visible. A bare
-/// `Command::new("rly")` then fails ENOENT even though `rly` is installed.
-///
-/// Resolution order:
-///   1. `$RELAY_BIN` — explicit override, always wins.
-///   2. `$PATH` — works for terminal-launched sessions.
-///   3. Candidate user-local install dirs — covers Finder launches.
-///
-/// Resolved once per process (the CLI location doesn't change under us).
-fn resolve_rly_bin() -> String {
-    static RESOLVED: OnceLock<String> = OnceLock::new();
-    RESOLVED
-        .get_or_init(|| {
-            if let Ok(v) = std::env::var("RELAY_BIN") {
-                if !v.is_empty() {
-                    return v;
-                }
-            }
-            if let Some(p) = find_on_path("rly") {
-                return p;
-            }
-            let home = std::env::var("HOME").unwrap_or_default();
-            let candidates = [
-                format!("{home}/Library/pnpm/rly"),      // pnpm global, macOS
-                format!("{home}/.local/share/pnpm/rly"), // pnpm global, linux
-                "/opt/homebrew/bin/rly".to_string(),     // homebrew, apple silicon
-                "/usr/local/bin/rly".to_string(),        // homebrew intel + /usr/local
-                format!("{home}/.npm-global/bin/rly"),
-                format!("{home}/.local/bin/rly"),
-                format!("{home}/.cargo/bin/rly"),
-            ];
-            for c in &candidates {
-                if std::path::Path::new(c).is_file() {
-                    return c.clone();
-                }
-            }
-            // Nothing found — return the bare name so Command::new produces
-            // the ENOENT and cli_json wraps it with the full args for context.
-            "rly".to_string()
-        })
-        .clone()
+/// Describes how to find one agent CLI binary. One spec per provider
+/// (rly, claude, …) — adding a new provider is a single `const`.
+struct AgentBinarySpec {
+    /// Bare filename on PATH (`rly`, `claude`).
+    name: &'static str,
+    /// Env var that, when set and pointing at an existing file, wins
+    /// over auto-detection. Mirrors `$CLAUDE_BIN` / `$RELAY_BIN` UX.
+    env_override: &'static str,
+    /// Fallback paths probed after PATH lookup. Absolute literals stay
+    /// as-is; relative entries are joined to `$HOME`.
+    candidates: &'static [&'static str],
 }
 
+/// Resolve an agent binary to an absolute path.
+///
+/// Order (highest priority first):
+///   1. `pinned` — path pinned by the user in GUI settings.
+///   2. `spec.env_override` — legacy env var override (`$CLAUDE_BIN` etc.).
+///   3. Augmented PATH lookup — works for terminal launches and, with
+///      the shell-sourced PATH from [`resolve_shell_path`], for GUI
+///      launches too.
+///   4. `spec.candidates` — final fallback covering common install
+///      layouts (pnpm global, homebrew, cmux's bundled wrapper, npm
+///      global, cargo bin, user-local bin).
+///
+/// Returns `None` when nothing resolves; callers decide whether to
+/// fall back to the bare name or surface an error.
+fn resolve_agent_bin(spec: &AgentBinarySpec, pinned: Option<&str>) -> Option<String> {
+    if let Some(p) = pinned {
+        let p = p.trim();
+        if !p.is_empty() && PathBuf::from(p).is_file() {
+            return Some(p.to_string());
+        }
+    }
+    if let Ok(v) = std::env::var(spec.env_override) {
+        let v = v.trim().to_string();
+        if !v.is_empty() && PathBuf::from(&v).is_file() {
+            return Some(v);
+        }
+    }
+    let augmented = augmented_child_path();
+    for dir in std::env::split_paths(&augmented) {
+        let candidate = dir.join(spec.name);
+        if candidate.is_file() {
+            return Some(candidate.to_string_lossy().into_owned());
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    for rel in spec.candidates {
+        let path = if rel.starts_with('/') {
+            PathBuf::from(*rel)
+        } else {
+            PathBuf::from(&home).join(rel)
+        };
+        if path.is_file() {
+            return Some(path.to_string_lossy().into_owned());
+        }
+    }
+    None
+}
+
+const RLY_SPEC: AgentBinarySpec = AgentBinarySpec {
+    name: "rly",
+    env_override: "RELAY_BIN",
+    candidates: &[
+        "Library/pnpm/rly",
+        ".local/share/pnpm/rly",
+        "/opt/homebrew/bin/rly",
+        "/usr/local/bin/rly",
+        ".npm-global/bin/rly",
+        ".local/bin/rly",
+        ".cargo/bin/rly",
+    ],
+};
+
+const CLAUDE_SPEC: AgentBinarySpec = AgentBinarySpec {
+    name: "claude",
+    env_override: "CLAUDE_BIN",
+    candidates: &[
+        ".claude/local/claude",
+        "/Applications/cmux.app/Contents/Resources/bin/claude",
+        "/opt/homebrew/bin/claude",
+        "/usr/local/bin/claude",
+        ".npm-global/bin/claude",
+        ".local/bin/claude",
+    ],
+};
+
+fn agent_spec_for(kind: &str) -> Option<&'static AgentBinarySpec> {
+    match kind {
+        "rly" => Some(&RLY_SPEC),
+        "claude" => Some(&CLAUDE_SPEC),
+        _ => None,
+    }
+}
+
+#[allow(dead_code)] // exercised by tests; kept as a utility
 fn find_on_path(name: &str) -> Option<String> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
@@ -510,23 +559,25 @@ enum RlyInvocation {
     Shim(String),
 }
 
-fn resolve_rly_invocation() -> RlyInvocation {
-    static RESOLVED: OnceLock<RlyInvocation> = OnceLock::new();
-    RESOLVED
-        .get_or_init(|| {
-            let shim = resolve_rly_bin();
-            if let Some(mjs) = extract_rly_mjs_from_shim(&shim) {
-                if let Some(node) = resolve_node_bin() {
-                    return RlyInvocation::Direct { node, mjs };
-                }
-            }
-            RlyInvocation::Shim(shim)
-        })
-        .clone()
+/// Resolve the current invocation strategy given the settings snapshot.
+///
+/// Intentionally not cached — `cli_run` is called outside any hot loop
+/// and the user's pinned path in settings needs to take effect the next
+/// time they dispatch, without a restart. The cost is a handful of
+/// `is_file` probes.
+fn resolve_rly_invocation(settings: &data::GuiSettings) -> RlyInvocation {
+    let shim = resolve_agent_bin(&RLY_SPEC, settings.agent_binaries.rly.as_deref())
+        .unwrap_or_else(|| "rly".to_string());
+    if let Some(mjs) = extract_rly_mjs_from_shim(&shim) {
+        if let Some(node) = resolve_node_bin() {
+            return RlyInvocation::Direct { node, mjs };
+        }
+    }
+    RlyInvocation::Shim(shim)
 }
 
-fn rly_command() -> Command {
-    match resolve_rly_invocation() {
+fn rly_command(settings: &data::GuiSettings) -> Command {
+    match resolve_rly_invocation(settings) {
         RlyInvocation::Direct { node, mjs } => {
             let mut cmd = Command::new(node);
             cmd.arg(mjs);
@@ -538,8 +589,8 @@ fn rly_command() -> Command {
 
 /// Human-readable description of the current invocation. Used only in
 /// error messages so the user can tell which resolution branch we took.
-fn rly_invocation_debug() -> String {
-    match resolve_rly_invocation() {
+fn rly_invocation_debug(settings: &data::GuiSettings) -> String {
+    match resolve_rly_invocation(settings) {
         RlyInvocation::Direct { node, mjs } => format!("direct: {node} {mjs}"),
         RlyInvocation::Shim(p) => format!("shim: {p}"),
     }
@@ -698,8 +749,11 @@ fn cli_run(args: &[&str]) -> CliResult {
     // on macOS Finder launches, nvm upgrades, and pnpm reinstalls. The
     // augmented PATH is still set for the direct path as defense in
     // depth: any child the mjs spawns (git, for instance) should see
-    // the same sensible PATH a terminal would give it.
-    match rly_command()
+    // the same sensible PATH a terminal would give it. Settings are
+    // read per-call so a user pinning a path in GUI settings takes
+    // effect on the next command without a restart.
+    let settings = data::load_gui_settings();
+    match rly_command(&settings)
         .args(args)
         .env("PATH", augmented_child_path())
         .stdout(Stdio::piped())
@@ -728,12 +782,14 @@ fn cli_json(args: &[&str]) -> Result<serde_json::Value, String> {
         // child never ran. Augment with the resolved path and the
         // RELAY_BIN override so the user has an actionable message.
         if result.code.is_none() {
+            let settings = data::load_gui_settings();
             return Err(format!(
                 "rly {} failed to launch: {} ({}). \
-                 Set RELAY_BIN / RELAY_NODE or install rly on PATH.",
+                 Pin a path in Settings → Agent CLIs, set RELAY_BIN / RELAY_NODE, \
+                 or install rly on PATH.",
                 args.join(" "),
                 result.stderr.trim(),
-                rly_invocation_debug()
+                rly_invocation_debug(&settings)
             ));
         }
         return Err(format!(
@@ -1239,6 +1295,92 @@ fn update_settings(settings: data::GuiSettings) -> Result<(), String> {
     data::save_gui_settings(&settings)
 }
 
+/// Run the full resolver for a given agent kind *without* applying any
+/// user pin, so the GUI can show "here's what we'd pick if you left
+/// this blank" next to the pin input.
+#[tauri::command]
+fn auto_detect_agent_binary(kind: String) -> Option<String> {
+    let spec = agent_spec_for(&kind)?;
+    resolve_agent_bin(spec, None)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentBinaryTestResult {
+    success: bool,
+    /// Stdout from `{path} --version`, trimmed. Shown to the user as
+    /// confirmation that the binary works.
+    output: String,
+    /// Non-empty when the test failed — surfaces the spawn error or
+    /// stderr tail so the user can see *why*.
+    error: Option<String>,
+}
+
+/// Run `{path} --version` against a candidate agent binary with a
+/// short timeout, so the user can validate their pinned path before
+/// committing to it. Uses the augmented PATH so the binary's own
+/// child lookups (e.g. the `claude` wrapper's real-claude search)
+/// don't fail for environmental reasons.
+#[tauri::command]
+fn test_agent_binary(path: String) -> AgentBinaryTestResult {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return AgentBinaryTestResult {
+            success: false,
+            output: String::new(),
+            error: Some("Path is empty.".to_string()),
+        };
+    }
+    if !PathBuf::from(trimmed).is_file() {
+        return AgentBinaryTestResult {
+            success: false,
+            output: String::new(),
+            error: Some(format!("No file at {trimmed}")),
+        };
+    }
+    use std::sync::mpsc;
+    let (tx, rx) = mpsc::channel();
+    let path_owned = trimmed.to_string();
+    std::thread::spawn(move || {
+        let out = Command::new(&path_owned)
+            .arg("--version")
+            .env("PATH", augmented_child_path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output();
+        let _ = tx.send(out);
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+        Ok(Ok(out)) if out.status.success() => AgentBinaryTestResult {
+            success: true,
+            output: String::from_utf8_lossy(&out.stdout).trim().to_string(),
+            error: None,
+        },
+        Ok(Ok(out)) => AgentBinaryTestResult {
+            success: false,
+            output: String::from_utf8_lossy(&out.stdout).trim().to_string(),
+            error: Some(
+                String::from_utf8_lossy(&out.stderr)
+                    .trim()
+                    .chars()
+                    .take(500)
+                    .collect(),
+            ),
+        },
+        Ok(Err(e)) => AgentBinaryTestResult {
+            success: false,
+            output: String::new(),
+            error: Some(format!("Spawn failed: {e}")),
+        },
+        Err(_) => AgentBinaryTestResult {
+            success: false,
+            output: String::new(),
+            error: Some("Timed out after 5s.".to_string()),
+        },
+    }
+}
+
 #[tauri::command]
 fn set_primary_repo(channel_id: String, workspace_id: String) -> Result<(), String> {
     validate_id_segment(&channel_id, "channelId")?;
@@ -1618,7 +1760,17 @@ fn start_chat(
                 .and_then(|v| v.get("prompt").and_then(|p| p.as_str().map(String::from)))
         };
 
-        let claude_bin = std::env::var("CLAUDE_BIN").unwrap_or_else(|_| "claude".to_string());
+        // Resolve claude the same way we resolve rly: settings pin →
+        // $CLAUDE_BIN → augmented PATH → candidate dirs (covers cmux's
+        // bundled wrapper at /Applications/cmux.app/…, .claude/local,
+        // homebrew, npm global). Lets a user point at a specific
+        // install without hunting PATH.
+        let gui_settings = data::load_gui_settings();
+        let claude_bin = resolve_agent_bin(
+            &CLAUDE_SPEC,
+            gui_settings.agent_binaries.claude.as_deref(),
+        )
+        .unwrap_or_else(|| "claude".to_string());
         let mut args: Vec<String> = vec![
             "-p".into(),
             "--output-format".into(),
@@ -1659,7 +1811,9 @@ fn start_chat(
                     ChatEvent::Error {
                         stream_id,
                         message: format!(
-                            "Failed to launch claude: {}. Set CLAUDE_BIN if claude is not on PATH.",
+                            "Failed to launch claude ({claude_bin}): {}. \
+                             Pin a path in Settings → Agent CLIs, set CLAUDE_BIN, \
+                             or install claude on PATH.",
                             e
                         ),
                     },
@@ -3684,6 +3838,8 @@ pub fn run() {
             set_primary_repo,
             get_settings,
             update_settings,
+            auto_detect_agent_binary,
+            test_agent_binary,
             post_to_channel,
             create_session,
             delete_session,
