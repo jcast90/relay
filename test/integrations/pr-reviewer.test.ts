@@ -147,11 +147,20 @@ describe("reviewPullRequest", () => {
       expect(call[0].passEnv).not.toContain("GITHUB_TOKEN");
       expect(call[0].passEnv).not.toContain("GH_TOKEN");
 
-      const feed = await store.readFeed(channel.channelId);
-      const reviewerEntry = feed.find((e) => e.fromDisplayName === "pr-reviewer");
+      // Phase 4 routing: full findings land in the PR DM; the tracked
+      // (parent) channel receives a pr_link cross-link summary.
+      const dm = await store.findChannelByPrUrl(entry.pr.url);
+      expect(dm).not.toBeNull();
+      const dmFeed = await store.readFeed(dm!.channelId);
+      const reviewerEntry = dmFeed.find((e) => e.fromDisplayName === "pr-reviewer");
       expect(reviewerEntry).toBeDefined();
       expect(reviewerEntry!.content).toContain("1 blocking");
       expect(reviewerEntry!.metadata.reviewStatus).toBe("ready_for_human_ack");
+
+      const parentFeed = await store.readFeed(channel.channelId);
+      const crossLink = parentFeed.find((e) => e.type === "pr_link");
+      expect(crossLink).toBeDefined();
+      expect(crossLink!.metadata.dmChannelId).toBe(dm!.channelId);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -181,6 +190,11 @@ describe("reviewPullRequest", () => {
       expect(result.findings.summary).toContain("gh pr checkout failed");
       // Reviewer must NOT have been invoked when checkout failed.
       expect(invoker.exec).not.toHaveBeenCalled();
+      // Phase-4: errored reviews skip DM mint — no thread is created for a
+      // PR we couldn't even fetch. The error lands in the tracked channel
+      // so operators still see the failure in the feature thread.
+      const dm = await store.findChannelByPrUrl(entry.pr.url);
+      expect(dm).toBeNull();
       const feed = await store.readFeed(channel.channelId);
       const errEntry = feed.find((e) => e.fromDisplayName === "pr-reviewer");
       expect(errEntry).toBeDefined();
@@ -211,10 +225,127 @@ describe("reviewPullRequest", () => {
       expect(result.findings.status).toBe("inconclusive");
       expect(result.findings.blocking).toBe(0);
       expect(result.findings.nits).toBe(0);
-      const feed = await store.readFeed(channel.channelId);
-      const inconclusive = feed.find((e) => e.fromDisplayName === "pr-reviewer");
+      const dm = await store.findChannelByPrUrl(entry.pr.url);
+      expect(dm).not.toBeNull();
+      const dmFeed = await store.readFeed(dm!.channelId);
+      const inconclusive = dmFeed.find((e) => e.fromDisplayName === "pr-reviewer");
       expect(inconclusive).toBeDefined();
       expect(inconclusive!.content).toContain("inconclusive");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips DM mint when prState is merged and falls back to the tracked channel", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pr-reviewer-merged-skip-"));
+    const store = new ChannelStore(dir);
+    try {
+      const channel = await store.createChannel({ name: "#pr-rev", description: "" });
+      const entry = makeEntry({
+        channelId: channel.channelId,
+        openedByAutonomous: true,
+      });
+      const invoker = mockInvoker(
+        ["Summary: late review", "OK: tests pass", "NIT: typo"].join("\n")
+      );
+      const checkout = vi.fn(async () => {});
+
+      await reviewPullRequest(entry, {
+        trustMode: "supervised",
+        invoker,
+        checkout,
+        channelStore: store,
+        channelId: channel.channelId,
+        prState: "merged",
+      });
+
+      // No DM minted for already-merged PR.
+      const dm = await store.findChannelByPrUrl(entry.pr.url);
+      expect(dm).toBeNull();
+
+      // Full findings land in the tracked channel (fallback).
+      const feed = await store.readFeed(channel.channelId);
+      const reviewerEntry = feed.find((e) => e.fromDisplayName === "pr-reviewer");
+      expect(reviewerEntry).toBeDefined();
+      expect(reviewerEntry!.content).toContain("1 nit");
+      const crossLink = feed.find((e) => e.type === "pr_link");
+      expect(crossLink).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("stamps pr.state onto the cross-link metadata so the GUI pill renders the right variant", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pr-reviewer-crosslink-state-"));
+    const store = new ChannelStore(dir);
+    try {
+      const channel = await store.createChannel({ name: "#pr-rev", description: "" });
+      const entry = makeEntry({
+        channelId: channel.channelId,
+        openedByAutonomous: true,
+      });
+      const invoker = mockInvoker(["Summary: LGTM", "OK: passes"].join("\n"));
+      const checkout = vi.fn(async () => {});
+
+      await reviewPullRequest(entry, {
+        trustMode: "supervised",
+        invoker,
+        checkout,
+        channelStore: store,
+        channelId: channel.channelId,
+      });
+
+      const parentFeed = await store.readFeed(channel.channelId);
+      const crossLink = parentFeed.find((e) => e.type === "pr_link");
+      expect(crossLink).toBeDefined();
+      expect(crossLink!.metadata.prState).toBe("open");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("posts findings directly in the tracked channel when it is already a PR DM", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pr-reviewer-dm-tracked-"));
+    const store = new ChannelStore(dir);
+    try {
+      // MCP-initiated flow: `pr_review_start` minted a DM, the poller is
+      // tracking against that DM's channelId, and the reviewer fires.
+      // Findings belong in the DM itself — no extra DM is minted and no
+      // cross-link is posted.
+      const dm = await store.createPrDm({
+        pr: {
+          url: "https://github.com/acme/widgets/pull/42",
+          number: 42,
+          repo: { owner: "acme", name: "widgets" },
+          state: "open",
+        },
+      });
+      const entry = makeEntry({
+        channelId: dm.channelId,
+        openedByAutonomous: true,
+      });
+      const invoker = mockInvoker(
+        ["Summary: LGTM overall", "BLOCKING: src/a.ts issue", "OK: tests"].join("\n")
+      );
+      const checkout = vi.fn(async () => {});
+
+      const beforeCount = (await store.listChannels()).length;
+      await reviewPullRequest(entry, {
+        trustMode: "supervised",
+        invoker,
+        checkout,
+        channelStore: store,
+        channelId: dm.channelId,
+      });
+      const afterCount = (await store.listChannels()).length;
+      expect(afterCount).toBe(beforeCount);
+
+      const feed = await store.readFeed(dm.channelId);
+      const reviewerEntry = feed.find((e) => e.fromDisplayName === "pr-reviewer");
+      expect(reviewerEntry).toBeDefined();
+      expect(reviewerEntry!.content).toContain("1 blocking");
+      const crossLink = feed.find((e) => e.type === "pr_link");
+      expect(crossLink).toBeUndefined();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

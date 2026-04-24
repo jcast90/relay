@@ -74,9 +74,26 @@ export type Channel = {
   // PR 2 of the provider-profiles series; this GUI tolerates the field
   // being absent on older channel files.
   providerProfileId?: string;
+  // PR-review DM metadata. Present on channels minted by the
+  // `pr_review_start` MCP tool. Absent on every other channel — the
+  // header treats the `undefined` case as "not a PR DM" and skips the
+  // pill. `state` mirrors the GitHub PR state and is flipped by the
+  // PR poller on merge/close.
+  pr?: ChannelPr;
   // ISO 8601; optional for back-compat with older channel files.
   createdAt?: string;
   updatedAt?: string;
+};
+
+export type ChannelPrState = "open" | "merged" | "closed";
+
+export type ChannelPr = {
+  url: string;
+  number: number;
+  repo: { owner: string; name: string };
+  state: ChannelPrState;
+  title?: string;
+  parentChannelId?: string;
 };
 
 // A named bundle of adapter + env overrides that resolves at dispatch

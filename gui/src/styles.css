@@ -637,6 +637,73 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .channel-header-tier.tier-chore         { background: var(--color-paper-alt); color: var(--color-text-muted); }
 .channel-header-tier.tier-question      { background: rgba(74, 127, 208, 0.15); color: var(--color-accent-sky); }
 
+/* PR-review DM pill (phase 5). Clickable link-out to GitHub. The small
+ * state dot uses the same mint/coral/neutral palette as other status chips
+ * so the pill reads at a glance without colliding with the tier colors. */
+.channel-header-pr {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: 10px;
+  font-weight: var(--font-weight-semibold);
+  font-family: var(--font-mono);
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+  white-space: nowrap;
+  text-decoration: none;
+  background: var(--color-paper-alt);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-soft, rgba(0, 0, 0, 0.08));
+}
+.channel-header-pr:hover { text-decoration: underline; }
+.channel-header-pr .pr-state-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.85;
+}
+.channel-header-pr .pr-state-label { text-transform: uppercase; }
+.channel-header-pr.pr-state-open   { color: #2a7a5a; background: var(--color-accent-mint-soft); }
+.channel-header-pr.pr-state-merged { color: #5a4a90; background: rgba(90, 82, 144, 0.15); }
+.channel-header-pr.pr-state-closed { color: var(--color-text-muted); background: var(--color-paper-alt); }
+
+/* Feed entry rendering for pr_link cross-links (phase 5). Compact row,
+ * similar shape to `.message-tool` so PR notifications don't dominate the
+ * feed. `Open PR →` is an external link; `review thread` shows the DM
+ * channelId as a tooltip (navigation is a future follow-up). */
+.message-pr-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 2px calc(var(--layout-message-avatar) + var(--space-4));
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-dim);
+  margin-bottom: var(--space-2);
+}
+.message-pr-link .msg-pr-icon { color: var(--color-accent-sky); }
+.message-pr-link .msg-pr-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-primary);
+}
+.message-pr-link .msg-pr-open {
+  color: var(--color-accent-sky);
+  text-decoration: none;
+}
+.message-pr-link .msg-pr-open:hover { text-decoration: underline; }
+.message-pr-link .msg-pr-dm { color: var(--color-text-dim); }
+.message-pr-link .msg-pr-time { color: var(--color-text-dim); }
+.message-pr-link.pr-state-merged .msg-pr-icon { color: #5a4a90; }
+.message-pr-link.pr-state-closed .msg-pr-icon { color: var(--color-text-muted); }
+
 .agent-stack { display: inline-flex; flex-shrink: 0; }
 .agent-stack .agent-avatar {
   width: 26px; height: 26px;
