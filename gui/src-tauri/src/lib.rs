@@ -1354,10 +1354,33 @@ fn start_chat(
             }
         };
 
+        // Drain stderr on its own thread. If we leave it unread, the OS pipe
+        // buffer (~64 KB on macOS/Linux) fills and the child blocks on its
+        // next stderr write — the user sees an eternal "thinking…" with no
+        // output. We also keep the captured text so an unsuccessful exit can
+        // surface claude's actual diagnostic to the UI instead of dropping it.
+        let stderr_buf = std::sync::Arc::new(Mutex::new(String::new()));
+        let stderr_handle = child.stderr.take().map(|stderr| {
+            let buf = stderr_buf.clone();
+            std::thread::spawn(move || {
+                let reader = BufReader::new(stderr);
+                for line in reader.lines().map_while(Result::ok) {
+                    eprintln!("[claude stderr] {}", line);
+                    if let Ok(mut guard) = buf.lock() {
+                        if !guard.is_empty() {
+                            guard.push('\n');
+                        }
+                        guard.push_str(&line);
+                    }
+                }
+            })
+        });
+
         let reader = BufReader::new(stdout);
         let mut accum = String::new();
         let mut final_session_id: Option<String> = None;
         let mut cancelled = false;
+        let mut saw_any_stdout_line = false;
 
         for line in reader.lines() {
             // Rewind (and anything else that wants to abort a live stream)
@@ -1374,9 +1397,16 @@ fn start_chat(
                 Ok(l) => l,
                 Err(_) => break,
             };
+            saw_any_stdout_line = true;
             let json: serde_json::Value = match serde_json::from_str(&line) {
                 Ok(v) => v,
-                Err(_) => continue,
+                Err(e) => {
+                    // Log unparseable lines so a developer running the GUI
+                    // from a terminal can see a format mismatch immediately
+                    // instead of silently swallowing every claude line.
+                    eprintln!("[claude stdout] unparseable json ({}): {}", e, line);
+                    continue;
+                }
             };
             match json.get("type").and_then(|t| t.as_str()) {
                 Some("assistant") => {
@@ -1473,7 +1503,11 @@ fn start_chat(
                 _ => {}
             }
         }
-        let _ = child.wait();
+        let exit_status = child.wait();
+        if let Some(h) = stderr_handle {
+            let _ = h.join();
+        }
+        let stderr_text = stderr_buf.lock().map(|g| g.clone()).unwrap_or_default();
 
         // If rewind (or anything else) cancelled this stream, DO NOT
         // persist a partial assistant message or update the claude session
@@ -1487,6 +1521,41 @@ fn start_chat(
                 ChatEvent::Done {
                     stream_id,
                     final_text: String::new(),
+                },
+            );
+            return;
+        }
+
+        // Surface a useful error when the child exited with nothing on
+        // stdout, or exited non-zero. Prior to this, the GUI would silently
+        // emit `Done { final_text: "" }` and the user would see "thinking…"
+        // disappear with no message — now they see claude's own diagnostic.
+        let exit_failed = match &exit_status {
+            Ok(status) => !status.success(),
+            Err(_) => true,
+        };
+        if accum.is_empty() && (exit_failed || !saw_any_stdout_line) {
+            let exit_desc = match &exit_status {
+                Ok(status) => status
+                    .code()
+                    .map(|c| format!("exit {}", c))
+                    .unwrap_or_else(|| "signal".into()),
+                Err(e) => format!("wait failed: {}", e),
+            };
+            let stderr_snippet = stderr_text.trim();
+            let message = if stderr_snippet.is_empty() {
+                format!(
+                    "claude produced no output ({}). Run the GUI from a terminal to see stderr, or set CLAUDE_BIN.",
+                    exit_desc
+                )
+            } else {
+                format!("claude failed ({}):\n{}", exit_desc, stderr_snippet)
+            };
+            let _ = app_handle.emit(
+                "chat-event",
+                ChatEvent::Error {
+                    stream_id,
+                    message,
                 },
             );
             return;
