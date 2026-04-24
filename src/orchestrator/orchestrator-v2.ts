@@ -20,6 +20,7 @@ import type { ArtifactStore } from "../execution/artifact-store.js";
 import type { AgentExecutor } from "../execution/executor.js";
 import type { VerificationRunner } from "../execution/verification-runner.js";
 import type { ChannelStore } from "../channels/channel-store.js";
+import type { Channel } from "../domain/channel.js";
 import { classifierTierToChannelTier } from "../domain/tier-mapper.js";
 import { classifyRequest } from "./classifier.js";
 import { decomposePlanToTickets, buildTicketPlanFromPhases } from "./ticket-decomposer.js";
@@ -132,14 +133,18 @@ export class OrchestratorV2 {
 
     this.recordEvent(run, "TaskSubmitted", "phase_00", { featureRequest });
 
-    // Create a channel for this run so the dashboard can display it
+    // Resolve a channel for this run. Dedup by (name, workspaceId) so a
+    // caller that submits the same feature request more than once from the
+    // same workspace (e.g. an external MCP client repeatedly invoking
+    // `harness_dispatch` without a `channelId`) lands on the existing
+    // channel instead of minting a fresh one per call.
     if (this.channelStore && this.workspaceId) {
       try {
-        const channel = await this.channelStore.createChannel({
-          name: featureRequest.slice(0, 60),
-          description: featureRequest,
-          workspaceIds: [this.workspaceId],
-        });
+        const channel = await resolveOrCreateChannel(
+          this.channelStore,
+          featureRequest,
+          this.workspaceId
+        );
         run.channelId = channel.channelId;
         await this.channelStore.linkRun(channel.channelId, run.id, this.workspaceId);
         await this.channelStore.postEntry(channel.channelId, {
@@ -360,14 +365,15 @@ export class OrchestratorV2 {
     featureRequest: string,
     classification: ClassificationResult
   ): Promise<HarnessRun> {
-    // Create channel for trivial runs too
+    // Resolve a channel for trivial runs too. Same dedup contract as the
+    // non-trivial path above.
     if (this.channelStore && this.workspaceId && !run.channelId) {
       try {
-        const channel = await this.channelStore.createChannel({
-          name: featureRequest.slice(0, 60),
-          description: featureRequest,
-          workspaceIds: [this.workspaceId],
-        });
+        const channel = await resolveOrCreateChannel(
+          this.channelStore,
+          featureRequest,
+          this.workspaceId
+        );
         run.channelId = channel.channelId;
         await this.channelStore.linkRun(channel.channelId, run.id, this.workspaceId);
         await this.channelStore.postEntry(channel.channelId, {
@@ -678,4 +684,27 @@ export class OrchestratorV2 {
 
 export function buildRunId(): string {
   return `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Find an active channel in `workspaceId` whose name matches the truncated
+ * feature request, or create one. Prevents duplicate channels when the same
+ * feature request is submitted more than once without a channelId.
+ */
+async function resolveOrCreateChannel(
+  store: ChannelStore,
+  featureRequest: string,
+  workspaceId: string
+): Promise<Channel> {
+  const name = featureRequest.slice(0, 60);
+  const active = await store.listChannels("active");
+  const existing = active.find(
+    (c) => c.name === name && (c.workspaceIds ?? []).includes(workspaceId)
+  );
+  if (existing) return existing;
+  return store.createChannel({
+    name,
+    description: featureRequest,
+    workspaceIds: [workspaceId],
+  });
 }

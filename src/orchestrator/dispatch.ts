@@ -78,15 +78,31 @@ export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
 
   // Resolve or create a channel first — we need its `fullAccess` flag +
   // provider-profile binding to decide how to construct agents.
+  //
+  // Dedup when no channelId was supplied: an external caller (e.g. an MCP
+  // client invoking `harness_dispatch` repeatedly) that submits the same
+  // feature request from the same workspace should land on the existing
+  // channel instead of minting a new one per call. Match by exact
+  // (name, workspaceId, active) — the same triple the original create uses.
   let channelId = input.channelId;
   let channel: Channel | null;
   if (!channelId) {
-    channel = await channelStore.createChannel({
-      name: featureRequest.slice(0, 60),
-      description: featureRequest,
-      workspaceIds: [workspaceId],
-    });
-    channelId = channel.channelId;
+    const name = featureRequest.slice(0, 60);
+    const active = await channelStore.listChannels("active");
+    const existing = active.find(
+      (c) => c.name === name && (c.workspaceIds ?? []).includes(workspaceId)
+    );
+    if (existing) {
+      channel = existing;
+      channelId = existing.channelId;
+    } else {
+      channel = await channelStore.createChannel({
+        name,
+        description: featureRequest,
+        workspaceIds: [workspaceId],
+      });
+      channelId = channel.channelId;
+    }
   } else {
     channel = await channelStore.getChannel(channelId);
   }
