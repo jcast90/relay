@@ -255,25 +255,29 @@ export async function listProjectFields(
     .map((n) => ({ id: n.id, name: n.name, options: n.options }));
 }
 
-export interface EnsureFieldsResult {
-  existing: string[];
-  /** Always empty in PR A — populated once PR B (#181) wires field creation. */
-  created: string[];
-}
+// `ensureCustomFields` and the field-creation primitives moved to
+// `./fields.ts` in PR B (#181). Re-export so existing imports keep
+// working and `client.ts` stays the canonical entry point for the
+// integration.
+export {
+  createSingleSelectField,
+  defaultFieldOptions,
+  ensureCustomFields,
+  ensureCustomFieldsWithOptions,
+  type CreateSingleSelectFieldInput,
+  type EnsureFieldsResult,
+  type SingleSelectColor,
+  type SingleSelectOptionInput,
+} from "./fields.js";
 
-/**
- * Stub for the Status/Type/Priority bootstrap. PR A only reports which
- * of the requested fields already exist; PR B will create the missing
- * ones. We ship the stub now so PR C (channel/epic wiring) can call
- * the eventual API surface without holding for the full bootstrap.
- */
-export async function ensureCustomFields(
-  projectId: string,
-  fieldNames: readonly string[],
-  deps: ProjectsClientDeps
-): Promise<EnsureFieldsResult> {
-  const fields = await listProjectFields(projectId, deps);
-  const present = new Set(fields.map((f) => f.name));
-  const existing = fieldNames.filter((name) => present.has(name));
-  return { existing, created: [] };
-}
+export {
+  archiveItem,
+  createDraftItem,
+  setSingleSelectValue,
+  updateDraftIssue,
+  type ArchiveItemInput,
+  type CreateDraftItemInput,
+  type DraftItemRef,
+  type SetSingleSelectValueInput,
+  type UpdateDraftIssueInput,
+} from "./draft-items.js";

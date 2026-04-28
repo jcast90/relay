@@ -312,26 +312,14 @@ describe("github-projects/client", () => {
     });
   });
 
-  describe("ensureCustomFields (PR A stub)", () => {
-    it("reports which requested fields already exist and creates none", async () => {
-      const { fetchImpl } = stubFetch([
-        {
-          data: {
-            node: {
-              fields: {
-                nodes: [
-                  { id: "F_status", name: "Status" },
-                  { id: "F_other", name: "OtherThing" },
-                ],
-              },
-            },
-          },
-        },
-      ]);
-      const out = await ensureCustomFields("P_id", ["Status", "Type", "Priority"], deps(fetchImpl));
-      expect(out.existing).toEqual(["Status"]);
-      // PR A is read-only — creation lands in PR B (#181).
-      expect(out.created).toEqual([]);
+  // `ensureCustomFields` behavior tests moved to
+  // `github-projects-fields.test.ts` in PR B (#181) where the full
+  // create-missing-fields path is exercised. The re-export from
+  // `client.ts` is what we verify here so existing imports keep
+  // resolving.
+  describe("ensureCustomFields (re-export from fields.ts)", () => {
+    it("is re-exported from client.ts so existing imports keep working", () => {
+      expect(typeof ensureCustomFields).toBe("function");
     });
   });
 });
