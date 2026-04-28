@@ -281,3 +281,141 @@ export {
   type SetSingleSelectValueInput,
   type UpdateDraftIssueInput,
 } from "./draft-items.js";
+
+/**
+ * Lightweight projection of a project item used by the URL-paste path.
+ * The full item node carries custom-field values too; for v0.2 the
+ * classifier only needs the title, body, parent epic, and parent
+ * project so the resulting ticket gets correct channel/epic association.
+ *
+ * `parent` is null when the item is unparented (a stray draft, or the
+ * epic itself). `content` is null for plain draft items; populated when
+ * the item wraps a real Issue or PR.
+ */
+export interface ProjectItemContext {
+  itemId: string;
+  /** Title of the draft item OR the linked Issue/PR. */
+  title: string;
+  /** Body of the draft item OR the linked Issue/PR. May be empty. */
+  body: string;
+  /** Parent draft item (the channel epic, in Relay's mapping) when set. */
+  parent: { id: string; title: string } | null;
+  /** Parent project — title is needed to find-or-create the matching channel. */
+  project: { id: string; title: string; number: number; url: string };
+  /** Linked Issue/PR, when the item is not a plain draft. */
+  content: { kind: "Issue" | "PullRequest"; url: string; number: number } | null;
+}
+
+interface ProjectItemQueryResponse {
+  node: {
+    id?: string;
+    project?: {
+      id: string;
+      title: string;
+      number: number;
+      url: string;
+    };
+    parent?: {
+      id: string;
+      // Drafts expose their text via the `DraftIssue` shape inside `content`,
+      // so the parent's display title comes from its own `content` field.
+      content?: {
+        __typename?: string;
+        title?: string;
+      } | null;
+    } | null;
+    content?: {
+      __typename?: string;
+      title?: string;
+      body?: string;
+      url?: string;
+      number?: number;
+    } | null;
+  } | null;
+}
+
+/**
+ * Resolve an item's parent epic + parent project from a `PVTI_*` node id.
+ * Used by the classifier when a user pastes a Projects v2 item URL —
+ * channel/epic association is recovered from the item's `Parent` field
+ * so the new ticket lands under the right channel.
+ *
+ * Throws when the node is not found or is not a `ProjectV2Item`. Callers
+ * should treat that as "the URL parsed but the API rejected the id" and
+ * fall back to classifying the raw URL.
+ */
+export async function getProjectItemContext(
+  itemId: string,
+  deps: ProjectsClientDeps
+): Promise<ProjectItemContext> {
+  const data = await githubProjectsGraphql<ProjectItemQueryResponse>(
+    `query($itemId: ID!) {
+      node(id: $itemId) {
+        ... on ProjectV2Item {
+          id
+          project { id title number url }
+          parent {
+            id
+            content {
+              __typename
+              ... on DraftIssue { title }
+              ... on Issue { title }
+              ... on PullRequest { title }
+            }
+          }
+          content {
+            __typename
+            ... on DraftIssue { title body }
+            ... on Issue { title body url number }
+            ... on PullRequest { title body url number }
+          }
+        }
+      }
+    }`,
+    { itemId },
+    deps
+  );
+
+  if (!data.node) {
+    throw new Error(`GitHub Projects API: item not found (${itemId})`);
+  }
+  if (!data.node.project || !data.node.id) {
+    // Fragment didn't match — the id resolved, but to a non-ProjectV2Item
+    // node (e.g. someone pasted a project id where an item id was expected).
+    throw new Error(`GitHub Projects API: id ${itemId} is not a ProjectV2Item`);
+  }
+
+  const content = data.node.content ?? null;
+  const title = typeof content?.title === "string" ? content.title : "";
+  const body = typeof content?.body === "string" ? content.body : "";
+
+  let parent: ProjectItemContext["parent"] = null;
+  if (data.node.parent) {
+    const parentTitle =
+      typeof data.node.parent.content?.title === "string" ? data.node.parent.content.title : "";
+    parent = { id: data.node.parent.id, title: parentTitle };
+  }
+
+  let mappedContent: ProjectItemContext["content"] = null;
+  if (
+    content &&
+    (content.__typename === "Issue" || content.__typename === "PullRequest") &&
+    typeof content.url === "string" &&
+    typeof content.number === "number"
+  ) {
+    mappedContent = {
+      kind: content.__typename,
+      url: content.url,
+      number: content.number,
+    };
+  }
+
+  return {
+    itemId: data.node.id,
+    title,
+    body,
+    parent,
+    project: data.node.project,
+    content: mappedContent,
+  };
+}
