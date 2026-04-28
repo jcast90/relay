@@ -40,12 +40,12 @@ We also don't have a coherent way to express **project structure above the chann
 
 User-articulated mapping:
 
-| Relay | Role | GitHub Projects v2 | Linear |
-|---|---|---|---|
-| **Primary repo** | Top-level namespace | Project (createOrUpdate by name) | Team or Project (depending on model — see Linear section) |
-| **Channel** | One piece of work / "epic" | Parent draft item with `Type = Epic` | Parent Issue with sub-issues |
-| **Ticket** | A task | Draft item with `Parent = <channel epic item>` | Sub-issue under the channel parent |
-| **Board view** | Channel's workspace | Filtered view of the project where `Parent = <channel epic>` | Linear view filtered to the parent |
+| Relay            | Role                       | GitHub Projects v2                                           | Linear                                                    |
+| ---------------- | -------------------------- | ------------------------------------------------------------ | --------------------------------------------------------- |
+| **Primary repo** | Top-level namespace        | Project (createOrUpdate by name)                             | Team or Project (depending on model — see Linear section) |
+| **Channel**      | One piece of work / "epic" | Parent draft item with `Type = Epic`                         | Parent Issue with sub-issues                              |
+| **Ticket**       | A task                     | Draft item with `Parent = <channel epic item>`               | Sub-issue under the channel parent                        |
+| **Board view**   | Channel's workspace        | Filtered view of the project where `Parent = <channel epic>` | Linear view filtered to the parent                        |
 
 **Why draft items, not repo Issues:** draft items live inside the Project only — they don't appear in the repo's Issues tab, don't generate notifications to issue-watchers, and keep feature planning cleanly separated from bug triage. Teams that want a specific task promoted to a real Issue can do it ad-hoc via the Projects UI (`Convert to issue`) without Relay fighting them.
 
@@ -56,6 +56,7 @@ User-articulated mapping:
 Two ways to model the channel → epic relationship in GitHub Projects v2:
 
 **Option A — Custom single-select field.** Add a `Epic` field to the project with one option per channel. Each ticket sets `Epic = <channel-name>`. Simple, but:
+
 - GH caps single-select options at ~50 — projects that accumulate many channels over a year hit the wall.
 - No actual hierarchy — an "Epic" option is just a label you can sort on.
 - Renaming a channel renames the field option, which breaks stored filters on older views.
@@ -94,19 +95,19 @@ Adds a `tracker` block to `~/.relay/config.json`:
     "default": "github_projects",
     "providers": {
       "github_projects": {
-        "owner": "jcast90",                    // user or org login that hosts the Project
-        "project_naming": "per_primary_repo",  // or { "fixed": "Work" }
-        "epic_model": "parent_draft_item",     // or "custom_field"
-        "use_draft_items": true                // if false, create real Issues (not recommended)
+        "owner": "jcast90", // user or org login that hosts the Project
+        "project_naming": "per_primary_repo", // or { "fixed": "Work" }
+        "epic_model": "parent_draft_item", // or "custom_field"
+        "use_draft_items": true, // if false, create real Issues (not recommended)
       },
       "linear": {
-        "team_key": "REL",                     // the 3-letter team prefix
-        "project_naming": "per_primary_repo"
+        "team_key": "REL", // the 3-letter team prefix
+        "project_naming": "per_primary_repo",
       },
-      "github_issues": { "enabled": false },   // explicit off — don't mirror tickets as Issues
-      "relay_native": { "enabled": true }      // always-on offline fallback
-    }
-  }
+      "github_issues": { "enabled": false }, // explicit off — don't mirror tickets as Issues
+      "relay_native": { "enabled": true }, // always-on offline fallback
+    },
+  },
 }
 ```
 
