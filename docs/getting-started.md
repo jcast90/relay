@@ -70,6 +70,25 @@ The primary is told **not** to grep or edit `web/` directly. Instead:
 
 If no `web` agent is live, the primary sees `no_session` and can spawn one from the GUI. Relay opens a terminal tab in the `web` repo running `rly claude`, tracked in `spawns.json`: macOS uses Terminal.app via `osascript` (window/tab ids tracked for targeted close); Linux probes `$TERMINAL` then a chain (`x-terminal-emulator`, `gnome-terminal`, `konsole`, `xterm`, `alacritty`, `kitty`, `wezterm`); Windows prefers `wt.exe`, falls back to `powershell.exe` / `cmd.exe`. Kill closes the tab on macOS and SIGTERMs the crosslink session on Linux/Windows. If no supported terminal is found, spawn surfaces an error and posts a channel-feed entry telling you to `rly claude` in the repo manually.
 
+## Linking a channel to GitHub Projects v2
+
+New in v0.2. If you live on a GitHub Projects v2 board, paste the URL of any item from the board into chat as your first message — Relay's classifier resolves the project, the parent epic, and creates a ticket on the channel pointing at it. Subsequent ticket state changes (created, status changes, title edits) project back onto the board through a one-way sync worker.
+
+Concrete example. The Relay project lives at `https://github.com/users/jcast90/projects/3`. Pick any item on it — say `https://github.com/users/jcast90/projects/3/views/1?pane=issue&itemId=PVTI_lAHO…`. Paste that URL into a fresh `rly claude` session.
+
+What happens, in order:
+
+1. **Classifier** parses the URL into `(ownerType=user, owner=jcast90, projectNumber=3, itemId=PVTI_…)` via `src/integrations/github-projects/url-parser.ts`. No network call yet.
+2. **GraphQL resolve** — the classifier hits the GH GraphQL API (using your `GITHUB_TOKEN`) to fetch the item's title + body + parent epic. The parent epic becomes the channel's logical owner; if the channel doesn't already have a `trackerLinks.githubProjects` block, one is provisioned (project + epic draft item bootstrapped, custom fields ensured).
+3. **Ticket create** — a Relay ticket lands on the channel board with `externalIds.githubProjectItemId` pointing at the original draft item. The ticket title / body match what you pasted; subsequent Relay-side edits will overwrite drift on the board.
+4. **Sync worker** ticks every N seconds (configurable; default budget 200 GraphQL points reserved as headroom — see `docs/trackers.md`). It walks the channel's tickets, creates draft items for the ones that lack `externalIds`, and rewrites titles where the GitHub side has drifted.
+
+The mental model: **Relay is authoritative; the GitHub Project is a projection.** If someone retitles the draft item directly in the GitHub UI, the next sync tick logs a drift event to the channel feed and overwrites it. Teams that want a manually editable board should not link it to a Relay channel — or break the projection per [`docs/trackers.md`](./trackers.md#drift-behavior).
+
+> Bulk-import (existing GH Project → fresh Relay channel) is **not yet wired** in v0.2. Tracking issue: [#196](https://github.com/jcast90/relay/issues/196). For now you can paste individual item URLs as you encounter them and the channel grows organically.
+
+For a deeper reference — config shape, custom-field mapping, drift / rate-limit / troubleshooting — see [`docs/trackers.md`](./trackers.md).
+
 ## Mental model (reference)
 
 For when you want to see the pipeline at a glance:
