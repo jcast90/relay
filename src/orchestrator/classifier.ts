@@ -12,6 +12,16 @@ import {
   type HarnessIssue,
   type TrackerKind,
 } from "../integrations/tracker.js";
+import {
+  getProjectItemContext,
+  type ProjectItemContext,
+  type ProjectsClientDeps,
+} from "../integrations/github-projects/client.js";
+import {
+  parseGithubProjectsUrl,
+  PROJECT_ONLY_DEFERRED_MESSAGE,
+  type GitHubProjectsUrl,
+} from "../integrations/github-projects/url-parser.js";
 import { basename } from "node:path";
 
 const TRIVIAL_PATTERNS = [
@@ -160,42 +170,208 @@ function enrichFeatureRequest(featureRequest: string, issue: HarnessIssue): stri
   return `${issue.title}${labels}${body}\n\nSource: ${issue.url}`;
 }
 
+/**
+ * Same idea as `enrichFeatureRequest` but for a GitHub Projects v2 item.
+ * Includes the parent epic title (so the planner sees channel/epic
+ * context) and any wrapped Issue/PR link, which downstream agents can
+ * follow when deeper context is needed.
+ */
+function enrichFromProjectItem(item: ProjectItemContext, originalUrl: string): string {
+  const parts: string[] = [];
+  parts.push(item.title || "(untitled draft item)");
+  if (item.parent && item.parent.title) {
+    parts.push(`\nParent epic: ${item.parent.title}`);
+  }
+  parts.push(`\nProject: ${item.project.title}`);
+  if (item.body) {
+    parts.push(`\n\n${item.body}`);
+  }
+  if (item.content) {
+    parts.push(`\n\nLinked ${item.content.kind}: ${item.content.url}`);
+  }
+  parts.push(`\n\nSource: ${originalUrl}`);
+  return parts.join("");
+}
+
+/**
+ * Build a `ProjectsClientDeps` from a caller-supplied bag. Returns
+ * null when no token is supplied — the classifier's URL enrichment
+ * is best-effort and gracefully degrades to the project-only deferred
+ * message rather than the env-fallback shortcut. Callers (CLI / MCP
+ * entry points) are expected to read `process.env.GITHUB_TOKEN` once
+ * at their boundary and plumb it through `projectsDeps.token`. See
+ * AGENTS.md § "Things to watch out for" for the rationale (subprocess
+ * env sanitization + per-name `passEnv` opt-in contract).
+ */
+function resolveProjectsDeps(
+  caller: Partial<ProjectsClientDeps> | undefined
+): ProjectsClientDeps | null {
+  if (!caller?.token) return null;
+  return { token: caller.token, fetch: caller.fetch, apiUrl: caller.apiUrl };
+}
+
+/**
+ * If `featureRequest` is a Projects v2 URL, resolve item context (or
+ * surface the project-only deferred error). Returns null when the input
+ * is not a Projects v2 URL at all so the caller can fall through to
+ * the existing tracker path.
+ */
+type ProjectsResolution =
+  | { kind: "item"; context: ProjectItemContext; parsed: GitHubProjectsUrl }
+  | { kind: "deferred"; message: string; parsed: GitHubProjectsUrl };
+
+async function tryResolveProjectsUrl(
+  featureRequest: string,
+  projectsDeps: Partial<ProjectsClientDeps> | undefined
+): Promise<ProjectsResolution | null> {
+  const parsed = parseGithubProjectsUrl(featureRequest);
+  if (!parsed) return null;
+
+  if (parsed.kind === "project") {
+    return { kind: "deferred", message: PROJECT_ONLY_DEFERRED_MESSAGE, parsed };
+  }
+
+  const deps = resolveProjectsDeps(projectsDeps);
+  if (!deps) {
+    return {
+      kind: "deferred",
+      message:
+        "GitHub Projects item context cannot be resolved without a token. " +
+        "Pass one via the classifier's `projectsDeps.token` deps bag.",
+      parsed,
+    };
+  }
+
+  try {
+    const context = await getProjectItemContext(parsed.itemId, deps);
+    return { kind: "item", context, parsed };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[classifier] Failed to resolve GitHub Projects item ${parsed.itemId}; ` +
+        `falling back to raw input. ${message}`
+    );
+    return { kind: "deferred", message, parsed };
+  }
+}
+
 export async function classifyRequest(input: {
   run: HarnessRun;
   featureRequest: string;
   repoRoot: string;
   dispatch: (run: HarnessRun, request: Omit<WorkRequest, "runId">) => Promise<AgentResult>;
+  /**
+   * Optional GitHub Projects client deps. When the feature request looks
+   * like a Projects v2 item URL we use this to resolve channel/epic
+   * context. Tests pass a stubbed `fetch`; CLI callers pass a token.
+   * Falls back to `process.env.GITHUB_TOKEN` if `token` is omitted.
+   */
+  projectsDeps?: Partial<ProjectsClientDeps>;
 }): Promise<ClassificationResult> {
+  // Projects v2 URL takes precedence: it overlaps with `github.com` host
+  // but uses /(users|orgs)/.../projects/<n>, which the existing tracker
+  // detector does NOT match — so the two paths can't fight. We only
+  // fall through to tracker resolution if the input was not a Projects
+  // URL at all.
+  const projectsResolution = await tryResolveProjectsUrl(input.featureRequest, input.projectsDeps);
+
+  if (projectsResolution?.kind === "deferred") {
+    // Project-only URL OR API/auth failure. Surface a clear rationale so
+    // the user sees why the paste didn't enrich. We deliberately do not
+    // throw — the orchestrator UX prefers a returned classification with
+    // an explanatory rationale to a hard failure.
+    const fallback: ClassificationResult = {
+      tier: "feature_small",
+      rationale: projectsResolution.message,
+      suggestedSpecialties: ["general"],
+      estimatedTicketCount: 1,
+      needsDesignDoc: false,
+      needsUserApproval: true,
+    };
+    return fallback;
+  }
+
+  if (projectsResolution?.kind === "item") {
+    return classifyEnrichedRequest({
+      run: input.run,
+      originalRequest: input.featureRequest,
+      effectiveRequest: enrichFromProjectItem(
+        projectsResolution.context,
+        projectsResolution.parsed.url
+      ),
+      contextLines: [
+        `GitHub Project: ${projectsResolution.context.project.title} (${projectsResolution.context.project.url})`,
+        ...(projectsResolution.context.parent && projectsResolution.context.parent.title
+          ? [`Parent epic: ${projectsResolution.context.parent.title}`]
+          : []),
+      ],
+      suggestedBranch: undefined,
+      repoRoot: input.repoRoot,
+      dispatch: input.dispatch,
+    });
+  }
+
   const issue = await tryResolveTrackerIssue(input.featureRequest, input.repoRoot);
   const effectiveRequest = issue
     ? enrichFeatureRequest(input.featureRequest, issue)
     : input.featureRequest;
   const suggestedBranch = issue?.branchName;
 
-  const heuristicTier = classifyByHeuristic(effectiveRequest);
-
-  if (heuristicTier) {
-    const result = buildHeuristicClassification(heuristicTier, effectiveRequest);
-    return suggestedBranch ? { ...result, suggestedBranch } : result;
-  }
-
-  const context: string[] = [
-    `Repository root: ${input.repoRoot}`,
-    `Feature request: ${effectiveRequest}`,
-  ];
+  const trackerContext: string[] = [];
   if (issue) {
-    context.push(`Tracker: ${issue.url}`);
+    trackerContext.push(`Tracker: ${issue.url}`);
     if (issue.labels.length) {
-      context.push(`Tracker labels: ${issue.labels.join(", ")}`);
+      trackerContext.push(`Tracker labels: ${issue.labels.join(", ")}`);
     }
   }
 
-  const result = await input.dispatch(input.run, {
+  return classifyEnrichedRequest({
+    run: input.run,
+    originalRequest: input.featureRequest,
+    effectiveRequest,
+    contextLines: trackerContext,
+    suggestedBranch,
+    repoRoot: input.repoRoot,
+    dispatch: input.dispatch,
+  });
+}
+
+/**
+ * Heuristic + dispatch tail of the classifier. Factored out so both the
+ * existing tracker-issue path and the new Projects v2 item path can
+ * share it without duplicating the LLM-prompt construction.
+ */
+async function classifyEnrichedRequest(args: {
+  run: HarnessRun;
+  /** Raw input the user actually pasted; kept for log/audit context. */
+  originalRequest: string;
+  /** Enriched objective fed to the heuristics + LLM. */
+  effectiveRequest: string;
+  /** Extra context lines (tracker labels, project info, etc.). */
+  contextLines: string[];
+  /** Optional branch hint from the tracker plugin. */
+  suggestedBranch: string | undefined;
+  repoRoot: string;
+  dispatch: (run: HarnessRun, request: Omit<WorkRequest, "runId">) => Promise<AgentResult>;
+}): Promise<ClassificationResult> {
+  const heuristicTier = classifyByHeuristic(args.effectiveRequest);
+  if (heuristicTier) {
+    const result = buildHeuristicClassification(heuristicTier, args.effectiveRequest);
+    return args.suggestedBranch ? { ...result, suggestedBranch: args.suggestedBranch } : result;
+  }
+
+  const context: string[] = [
+    `Repository root: ${args.repoRoot}`,
+    `Feature request: ${args.effectiveRequest}`,
+    ...args.contextLines,
+  ];
+
+  const result = await args.dispatch(args.run, {
     phaseId: "phase_00",
     kind: "classify_request",
     specialty: "general",
     title: "Classify request complexity",
-    objective: effectiveRequest,
+    objective: args.effectiveRequest,
     acceptanceCriteria: [
       "Classify the request into exactly one complexity tier.",
       "Provide a rationale for the classification.",
@@ -214,7 +390,7 @@ export async function classifyRequest(input: {
   try {
     const raw = result.rawResponse ? JSON.parse(result.rawResponse) : {};
     const parsed = parseClassificationResult(raw.classification ?? raw);
-    return suggestedBranch ? { ...parsed, suggestedBranch } : parsed;
+    return args.suggestedBranch ? { ...parsed, suggestedBranch: args.suggestedBranch } : parsed;
   } catch {
     const fallback: ClassificationResult = {
       tier: "feature_small",
@@ -224,6 +400,6 @@ export async function classifyRequest(input: {
       needsDesignDoc: false,
       needsUserApproval: false,
     };
-    return suggestedBranch ? { ...fallback, suggestedBranch } : fallback;
+    return args.suggestedBranch ? { ...fallback, suggestedBranch: args.suggestedBranch } : fallback;
   }
 }
