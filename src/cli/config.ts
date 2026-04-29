@@ -51,14 +51,26 @@ export async function readConfig(): Promise<HarnessGlobalConfig> {
 
 export async function writeConfig(config: HarnessGlobalConfig): Promise<void> {
   await mkdir(globalRoot(), { recursive: true });
-  const tmpPath = `${configPath()}.tmp.${process.pid}`;
-  // Preserve any unknown top-level keys we read off disk so a future
+  // Preserve unknown top-level keys we read off disk so a future
   // config field added by a newer Relay doesn't get silently dropped
-  // when an older version round-trips the file.
+  // when an older version round-trips the file. Read the existing
+  // file (best-effort — missing/malformed = empty existing) and spread
+  // it before our known fields.
+  let existing: Record<string, unknown> = {};
+  try {
+    existing = JSON.parse(await readFile(configPath(), "utf8")) as Record<string, unknown>;
+    if (existing === null || typeof existing !== "object" || Array.isArray(existing)) {
+      existing = {};
+    }
+  } catch {
+    // file absent or malformed — nothing to preserve, proceed with empty
+  }
   const merged: Record<string, unknown> = {
+    ...existing,
     projectDirs: config.projectDirs,
     tracker: config.tracker,
   };
+  const tmpPath = `${configPath()}.tmp.${process.pid}`;
   await writeFile(tmpPath, JSON.stringify(merged, null, 2));
   await rename(tmpPath, configPath());
 }

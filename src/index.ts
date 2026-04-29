@@ -27,6 +27,7 @@ import {
 } from "./cli/workspace.js";
 import { getGlobalRoot, listRegisteredWorkspaces } from "./cli/workspace-registry.js";
 import { addProjectDir, readConfig, removeProjectDir } from "./cli/config.js";
+import { diagnoseTrackerConfig } from "./domain/tracker-config.js";
 import { LocalArtifactStore } from "./execution/artifact-store.js";
 import { getHarnessStore } from "./storage/factory.js";
 import { buildMcpMessageHandler, startMcpServer } from "./mcp/server.js";
@@ -809,15 +810,21 @@ async function handleChannelCommand(args: string[]): Promise<void> {
 
     if (trackerArg) {
       const validTrackers = ["github_projects", "linear", "github_issues", "relay_native"];
-      if (!validTrackers.includes(trackerArg)) {
+      if (trackerArg === "none") {
+        // Explicit unpin — drop the override so the channel falls back
+        // to the workspace `tracker.default`. `updateChannel` treats
+        // explicit-undefined as "clear" via Object.prototype.hasOwnProperty.
+        patch.trackerOverride = undefined;
+      } else if (!validTrackers.includes(trackerArg)) {
         console.error(
-          `--tracker must be one of: ${validTrackers.join(", ")} (got "${trackerArg}").`
+          `--tracker must be one of: ${validTrackers.join(", ")}, none (got "${trackerArg}").`
         );
         process.exitCode = 1;
         return;
+      } else {
+        patch.trackerOverride =
+          trackerArg as import("./domain/tracker-config.js").TrackerProviderName;
       }
-      patch.trackerOverride =
-        trackerArg as import("./domain/tracker-config.js").TrackerProviderName;
     }
 
     if (reposArg) {
@@ -2853,7 +2860,6 @@ async function printTrackerDoctor(): Promise<void> {
   console.log("Tracker:");
   try {
     const config = await readConfig();
-    const { diagnoseTrackerConfig } = await import("./domain/tracker-config.js");
     const diagnostics = diagnoseTrackerConfig(config.tracker);
     for (const d of diagnostics) {
       const prefix = d.level === "error" ? "  ✗" : d.level === "warn" ? "  !" : "  ✓";
