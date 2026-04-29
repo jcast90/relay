@@ -70,6 +70,12 @@ export interface SyncTickResult {
   created: string[];
   /** Tickets that had drifted on the GitHub side — overwritten with Relay state. */
   drift: DriftEvent[];
+  /**
+   * Tickets whose stored GitHub-project item id no longer resolves
+   * (item deleted out from under us). Their `externalIds` were
+   * cleared on this tick so the next tick re-projects from scratch.
+   */
+  staleIdCleared: string[];
   /** Last rate-limit snapshot read during the tick. */
   rateLimit: RateLimitInfo;
 }
@@ -112,6 +118,7 @@ export async function syncChannelTickets(
 
   const created: string[] = [];
   const drift: DriftEvent[] = [];
+  const staleIdCleared: string[] = [];
   let lastRateLimit: RateLimitInfo = EMPTY_RATE_LIMIT;
 
   for (const ticket of tickets) {
@@ -121,6 +128,7 @@ export async function syncChannelTickets(
         throttled: true,
         created,
         drift,
+        staleIdCleared,
         rateLimit: lastRateLimit,
       };
     }
@@ -146,6 +154,22 @@ export async function syncChannelTickets(
         },
       });
     }
+    if (projection.staleIdCleared) {
+      staleIdCleared.push(ticket.ticketId);
+      const remaining = stripGithubExternalIds(ticket.externalIds);
+      await store.upsertChannelTickets(input.channelId, [{ ...ticket, externalIds: remaining }]);
+      await store.postEntry(input.channelId, {
+        type: "status_update",
+        fromAgentId: null,
+        fromDisplayName: "tracker:github-projects",
+        content: `External item for ticket ${ticket.ticketId} no longer resolves on GitHub; cleared stale ids so the next tick re-projects.`,
+        metadata: {
+          tracker: "github-projects",
+          ticketId: ticket.ticketId,
+          kind: "stale-id-cleared",
+        },
+      });
+    }
     if (projection.created) {
       created.push(ticket.ticketId);
       await store.upsertChannelTickets(input.channelId, [
@@ -167,14 +191,35 @@ export async function syncChannelTickets(
     throttled: false,
     created,
     drift,
+    staleIdCleared,
     rateLimit: lastRateLimit,
   };
+}
+
+/**
+ * Strip the GitHub-projects-specific keys from a ticket's
+ * externalIds map, returning `undefined` if no other foreign-tracker
+ * ids remain so the field doesn't get serialized as `{}`.
+ */
+function stripGithubExternalIds(
+  externalIds: TicketLedgerEntry["externalIds"]
+): TicketLedgerEntry["externalIds"] {
+  if (!externalIds) return undefined;
+  const { githubProjectItemId: _itemId, githubDraftIssueId: _draftId, ...rest } = externalIds;
+  return Object.keys(rest).length > 0 ? rest : undefined;
 }
 
 interface ProjectionResult {
   itemId: string;
   draftIssueId: string;
   created: boolean;
+  /**
+   * True when the stored external id no longer resolves (item was
+   * deleted on the GitHub side). Caller clears the ticket's
+   * `externalIds.github*` fields and posts a status_update warning so
+   * the next tick re-projects.
+   */
+  staleIdCleared: boolean;
   driftEvent: DriftEvent | null;
   rateLimit: RateLimitInfo;
 }
@@ -247,6 +292,7 @@ async function projectNewTicket(
     itemId: projectItem.id,
     draftIssueId: projectItem.content.id,
     created: true,
+    staleIdCleared: false,
     driftEvent: null,
     rateLimit: lastRate,
   };
@@ -284,13 +330,14 @@ async function reconcileExistingTicket(
 
   const draft = data.node?.content;
   if (!draft) {
-    // Item or its draft content was deleted on the GitHub side. Drop
-    // the broken external id so the next tick re-projects from
-    // scratch — same recovery path as a never-projected ticket.
+    // Item or its draft content was deleted on the GitHub side. Flag
+    // the stored ids as stale; the caller clears them and posts a
+    // status_update warning so the next tick re-projects from scratch.
     return {
-      itemId,
-      draftIssueId: ticket.externalIds!.githubDraftIssueId ?? "",
+      itemId: "",
+      draftIssueId: "",
       created: false,
+      staleIdCleared: true,
       driftEvent: null,
       rateLimit,
     };
@@ -298,7 +345,14 @@ async function reconcileExistingTicket(
 
   const draftIssueId = draft.id;
   if (draft.title === ticket.title) {
-    return { itemId, draftIssueId, created: false, driftEvent: null, rateLimit };
+    return {
+      itemId,
+      draftIssueId,
+      created: false,
+      staleIdCleared: false,
+      driftEvent: null,
+      rateLimit,
+    };
   }
 
   // Title drifted — overwrite with Relay's value.
@@ -318,6 +372,7 @@ async function reconcileExistingTicket(
     itemId,
     draftIssueId,
     created: false,
+    staleIdCleared: false,
     driftEvent: {
       ticketId: ticket.ticketId,
       externalItemId: itemId,
@@ -348,6 +403,7 @@ function emptyResult(overrides: Partial<SyncTickResult>): SyncTickResult {
     throttled: false,
     created: [],
     drift: [],
+    staleIdCleared: [],
     rateLimit: EMPTY_RATE_LIMIT,
     ...overrides,
   };

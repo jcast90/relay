@@ -187,6 +187,7 @@ describe("github-projects/sync-worker", () => {
       expect(result.skipped).toBe(false);
       expect(result.created).toEqual(["T-1", "T-2"]);
       expect(result.drift).toEqual([]);
+      expect(result.staleIdCleared).toEqual([]);
 
       const tickets = await store.readChannelTickets(ch.channelId);
       const t1 = tickets.find((t) => t.ticketId === "T-1");
@@ -215,7 +216,7 @@ describe("github-projects/sync-worker", () => {
         }),
       ]);
 
-      const { fetchImpl } = stubFetch([
+      const { fetchImpl, calls } = stubFetch([
         listFieldsResponse(),
         // Existing external item — title diverges from Relay's.
         fetchItemResponse("DI_t1", "Edited title on GitHub"),
@@ -236,6 +237,16 @@ describe("github-projects/sync-worker", () => {
         kind: "title-changed",
         observed: "Edited title on GitHub",
         applied: "Relay's authoritative title",
+      });
+
+      // The third call MUST be the overwrite mutation against the right
+      // draft id with Relay's title — otherwise a regression that wrote
+      // back the observed title (or the wrong id) would still pass the
+      // drift-event assertion above.
+      expect(calls[2].body.query).toMatch(/updateProjectV2DraftIssue/);
+      expect(calls[2].body.variables).toMatchObject({
+        draftIssueId: "DI_t1",
+        title: "Relay's authoritative title",
       });
 
       // Drift warning must land on the channel feed.
@@ -279,7 +290,7 @@ describe("github-projects/sync-worker", () => {
   });
 
   it("clears a stale external id when the GH item was deleted out from under us", async () => {
-    await withStore(async (store) => {
+    await withStore(async (store, dir) => {
       const ch = await store.createChannel({ name: "deleted", description: "" });
       await store.updateChannel(ch.channelId, {
         trackerLinks: { githubProjects: TRACKER_LINK },
@@ -307,6 +318,19 @@ describe("github-projects/sync-worker", () => {
       expect(result.created).toEqual([]);
       expect(result.drift).toEqual([]);
       expect(result.skipped).toBe(false);
+      // Stale id MUST be reported and the ticket's externalIds cleared
+      // on disk so the next tick re-projects from scratch.
+      expect(result.staleIdCleared).toEqual(["T-1"]);
+
+      const tickets = await store.readChannelTickets(ch.channelId);
+      const t1 = tickets.find((t) => t.ticketId === "T-1");
+      // Whole field stripped because no other tracker ids remained.
+      expect(t1?.externalIds).toBeUndefined();
+
+      // Warning posted to the channel feed.
+      const feed = await readFile(join(dir, ch.channelId, "feed.jsonl"), "utf8");
+      expect(feed).toMatch(/no longer resolves on GitHub/);
+      expect(feed).toMatch(/stale-id-cleared/);
     });
   });
 });
