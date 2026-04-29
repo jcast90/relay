@@ -113,6 +113,12 @@ rly channel set-provider <channelId> clear         # inherit default / HARNESS_P
 
 The GUI exposes the same surface: Settings drawer → About → Provider dropdown on each channel, and a Providers tab in the global Settings page for full CRUD.
 
+## GitHub Projects v2 auth
+
+The v0.2 GitHub Projects v2 integration ([`docs/trackers.md`](./trackers.md)) reuses the **existing GitHub auth surface** — no new token, no new env var. The classifier and the sync worker both pick `GITHUB_TOKEN` up at the entry boundary (URL paste, scheduled tick) and pass it down to the GraphQL client through the classifier deps bag (`ProjectsClientDeps` in `src/integrations/github-projects/client.ts`). Internal callers never read the env var directly — they receive it as an explicit dependency, which keeps the integration testable without touching `process.env`.
+
+The token does need an extra scope vs. the existing PR-watcher / issue-tracker uses: `project` for personal projects and `read:org` on top of that for org-owned projects. Once added, the same token covers issues, PRs, and Projects in one place.
+
 ## Native adapters (not yet)
 
 Everything above goes through the Claude or Codex CLI. Providers that ship their _own_ coding CLI (Cursor's `cursor-agent`, Google's `gemini`, Aider, etc.) need a native adapter — new class in `src/agents/cli-agents.ts`, new case in `src/agents/factory.ts`, widened `AgentProvider` union in `src/domain/agent.ts`, matching widening in `crates/harness-data/src/lib.rs`. That's a bigger change and isn't done yet. If you want it for a specific CLI, open an issue describing the CLI's arg shape and structured-output story.

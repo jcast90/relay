@@ -38,6 +38,7 @@ The agent-harness space is crowded, but most tools solve only **one** of: runnin
 - 📋 **One ticket board spans many repos.** Tickets carry a dependency DAG and `assignedAlias` routing — a feature touching 3 repos is one plan with 3 ticket streams, not 3 uncorrelated sessions. Single-repo orchestrators can't express this.
 - 💬 **Every decision is logged with rationale + alternatives.** Like Slack threads, but for architectural choices. Step away for 4 hours, come back to an audit trail — who chose what, why, and what else was considered. Most harnesses don't persist anything beyond the raw transcript.
 - 🎛 **Three dashboards, one source of truth — no cloud.** CLI (`rly`), ratatui TUI, and Tauri desktop GUI all read the same `~/.relay/` files. No sync layer, no split brain, no hosted service, no telemetry. Rare in AI tooling, required in regulated environments.
+- 🗂 **GitHub Projects v2 integration (v0.2).** Channels project to a GH Projects v2 board automatically — channels become epics, tickets become draft items, with `Type` / `Status` / `Priority` custom fields kept in sync. Relay stays authoritative; drift detected on the GitHub side is logged to the channel feed and overwritten. Paste a Projects item URL into chat and the classifier resolves the project + epic + creates the ticket. See [`docs/trackers.md`](./docs/trackers.md).
 
 ## What Relay is
 
@@ -388,8 +389,12 @@ Built on Composio's [`@aoagents/ao-core`](https://www.npmjs.com/package/@aoagent
 
 Tokens:
 
-- `GITHUB_TOKEN` — GitHub issues + PR watcher
+- `GITHUB_TOKEN` — GitHub issues + PR watcher + GitHub Projects v2 sync (needs `project` scope; `read:org` for org-owned projects)
 - `LINEAR_API_KEY` (or `COMPOSIO_API_KEY`) — Linear issues
+
+### GitHub Projects v2 (v0.2, new)
+
+Relay channels project onto a GH Projects v2 board: channel → epic draft item, ticket → child draft item, with `Type` / `Status` / `Priority` custom fields kept in sync by a one-way Relay-authoritative sync worker. URL-paste a Projects v2 item into chat and the classifier resolves the project + epic + creates the ticket. Reuses `GITHUB_TOKEN`. Full reference: [`docs/trackers.md`](./docs/trackers.md).
 
 ### PR watcher (scm-github)
 
@@ -479,6 +484,7 @@ Verification commands run through an `Executor` abstraction (`src/execution/exec
 ```
 ~/.relay/
   config.json                 # global config (project dirs, etc.)
+                              #   `tracker` config block — see docs/trackers.md
   config.env.template         # copy to config.env and fill in
   workspace-registry.json     # all registered repos
   workspaces/<hash>/
@@ -492,8 +498,10 @@ Verification commands run through an `Executor` abstraction (`src/execution/exec
         approval.json
   channels/<channelId>/
     channel.json              # name, members, repoAssignments, primaryWorkspaceId
+                              #   .trackerLinks.githubProjects → projectId, epicItemId, epicDraftIssueId
+                              #   (populated when the channel is provisioned against GH Projects v2)
     feed.jsonl                # append-only feed
-    tickets.json              # unified ticket board
+    tickets.json              # unified ticket board (each ticket may carry .externalIds)
     runs.json                 # linked orchestrator runs
     tracked-prs.json          # PR-watcher mirror (read by TUI/GUI pr-status surfaces)
     decisions/<id>.json       # one file per decision (atomic writes)
