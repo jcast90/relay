@@ -1853,6 +1853,7 @@ mod tests {
             section_id: None,
             provider_profile_id: None,
             pr: None,
+            tracker_links: None,
             created_at: Some("2026-01-01T00:00:00Z".to_string()),
             updated_at: Some("2026-01-01T00:00:00Z".to_string()),
         }
@@ -2033,6 +2034,7 @@ mod tests {
             section_id: None,
             provider_profile_id: None,
             pr: None,
+            tracker_links: None,
             created_at: None,
             updated_at: None,
         }

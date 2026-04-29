@@ -231,6 +231,11 @@ describe("github-projects/channel-hooks", () => {
       expect(out.epicItemId).toBe("PVTI_e1");
       // No setSingleSelectValue call.
       expect(calls.every((c) => !/updateProjectV2ItemFieldValue/.test(c.body.query))).toBe(true);
+      // Pin call count too — a regression that adds a stray field-write
+      // between createDraftItem and the final list would otherwise slip
+      // through silently. Expected: resolveProject + listFields(ensure)
+      // + createDraft + listFields(re-read) = 4 calls.
+      expect(calls).toHaveLength(4);
     });
   });
 
