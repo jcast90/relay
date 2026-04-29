@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.7.0
+
+### Minor Changes
+
+- GitHub Projects v2 tracker integration (v0.2). Channels project onto a GH Projects v2 board: channel → epic draft item, tickets → child draft items, with `Type` / `Status` / `Priority` custom fields kept in sync by a one-way Relay-authoritative sync worker. Drift on the GitHub side is logged to the channel feed as a `status_update` warning and overwritten on the next tick.
+
+  Shipped slices (PRs A, B, C, D, E, G, H from the v0.2 milestone):
+  - **GraphQL client + project resolver** (#188) — find-or-create-by-title, owner-id resolution for user vs org projects
+  - **Draft-item CRUD + custom-field bootstrap** (#189) — create / update / archive draft items, idempotent Status/Type/Priority field creation with seeded options
+  - **Channel ↔ epic orchestration** (#191) — `provisionEpicForChannel` / `renameEpicForChannel` / `archiveEpicForChannel` plus the `Channel.trackerLinks` shape (TS + Rust mirror with serde defaults for back-compat)
+  - **One-shot sync worker** (#192) — `syncChannelTickets` reconciliation tick with title-drift detection, rate-limit throttling (default min budget 200), stale-id recovery (item-deleted-out-from-under-us repair), and `TicketLedgerEntry.externalIds` for foreign-key tracking
+  - **Classifier URL parsing** (#190) — pasting a Projects v2 item URL into chat resolves the project + epic + creates the ticket; project-only URL pastes return a clear deferred-error message
+  - **Tracker config block** (#198) — `tracker` block in `~/.relay/config.json` with `default` provider, per-provider settings (`github_projects` / `linear` / `github_issues` / `relay_native`), per-channel override via `rly channel update --tracker <name>` (or `none` to unpin), and `rly doctor` diagnostics (default-points-at-missing-provider errors, custom-field 50-option-cap warnings, footgun warnings)
+  - **Documentation** (#197) — new `docs/trackers.md` reference with mapping tables, drift behavior, rate limits, troubleshooting; `docs/getting-started.md` adds a "Linking a channel to GitHub Projects v2" section; `README.md` notes the integration and adds `trackerLinks` to the file-layout tree
+
+  Deferred to follow-up issues (gated behind the new `tracker` config block before any of them auto-fire):
+  - **#193** MCP-handler wiring for `channel_create` / `channel_update` / `channel_archive` (high priority)
+  - **#194** Scheduler / interval timer for `syncChannelTickets` (high priority)
+  - **#195** Status-field drift detection
+  - **#196** Bulk-import an existing GH Projects v2 board into a fresh channel
+  - **#185** Linear parity (PR F — analogous mapping onto Linear projects + sub-issues)
+
+  Migration: configs that predate v0.2 have no `tracker` block; `readConfig` synthesizes the default (`relay_native`, offline-first) so no user action is required. Existing `linear-mirror.ts` users keep working unchanged until #185 lands.
+
+  Test count: 905 → 978 across the v0.2 work. Full Rust workspace passes `cargo check` + `cargo test` for `harness-data`.
+
 ## 0.5.1
 
 ### Patch Changes
