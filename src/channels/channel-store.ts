@@ -204,6 +204,7 @@ export class ChannelStore {
         | "providerProfileId"
         | "pr"
         | "trackerLinks"
+        | "trackerOverride"
       >
     >
   ): Promise<Channel | null> {
