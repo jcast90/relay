@@ -1,6 +1,6 @@
 {
   "name": "@jcast90/relay",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Local-first orchestration for coding agents — classify, decompose, dispatch Claude/Codex, and supervise from a dashboard.",
   "keywords": [
     "agent-orchestration",
