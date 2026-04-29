@@ -218,6 +218,15 @@ pub struct Channel {
     /// values themselves. Optional + `#[serde(default)]` for back-compat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracker_links: Option<ChannelTrackerLinks>,
+    /// Per-channel tracker override mirroring
+    /// `src/domain/channel.ts::Channel.trackerOverride`. When set, this
+    /// channel routes through the named provider regardless of the
+    /// global `tracker.default`. Stored as a free-form string here
+    /// (rather than a Rust enum) so a future provider name can land
+    /// without bumping the dashboards. Optional + `#[serde(default)]`
+    /// for back-compat with channel files that predate v0.2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracker_override: Option<String>,
 }
 
 /// Per-provider projection metadata for a channel. Mirrors
@@ -1872,6 +1881,7 @@ mod tests {
             provider_profile_id: None,
             pr: None,
             tracker_links: None,
+            tracker_override: None,
             created_at: Some("2026-01-01T00:00:00Z".to_string()),
             updated_at: Some("2026-01-01T00:00:00Z".to_string()),
         }
@@ -2053,6 +2063,7 @@ mod tests {
             provider_profile_id: None,
             pr: None,
             tracker_links: None,
+            tracker_override: None,
             created_at: None,
             updated_at: None,
         }

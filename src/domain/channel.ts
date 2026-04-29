@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import type { AgentProvider, AgentRole } from "./agent.js";
+import type { TrackerProviderName } from "./tracker-config.js";
 
 export const ChannelStatusSchema = z.enum(["active", "archived"]);
 export type ChannelStatus = z.infer<typeof ChannelStatusSchema>;
@@ -177,6 +178,16 @@ export interface Channel {
    * means no external projection has been set up.
    */
   trackerLinks?: ChannelTrackerLinks;
+  /**
+   * Per-channel tracker override. When set, the orchestrator and sync
+   * worker route this channel through the named provider regardless of
+   * the global `tracker.default` in `~/.relay/config.json`. Common
+   * uses: opting one channel into `github_projects` while the
+   * workspace default stays `relay_native`, or temporarily flipping a
+   * misbehaving channel to `relay_native` while debugging. Optional —
+   * `undefined` means "use the workspace default".
+   */
+  trackerOverride?: TrackerProviderName;
   createdAt: string;
   updatedAt: string;
 }

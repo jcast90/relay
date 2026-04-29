@@ -791,7 +791,7 @@ async function handleChannelCommand(args: string[]): Promise<void> {
     const channelId = args[1];
     if (!channelId) {
       console.error(
-        "Usage: rly channel update <channelId> [--repos alias:wsId:path,...] [--primary <alias>]"
+        "Usage: rly channel update <channelId> [--repos alias:wsId:path,...] [--primary <alias>] [--tracker github_projects|linear|github_issues|relay_native]"
       );
       process.exitCode = 1;
       return;
@@ -799,9 +799,26 @@ async function handleChannelCommand(args: string[]): Promise<void> {
 
     const reposArg = parseNamedArg(args, "--repos");
     const primaryArg = parseNamedArg(args, "--primary");
+    const trackerArg = parseNamedArg(args, "--tracker");
     const patch: Partial<
-      Pick<import("./domain/channel.js").Channel, "repoAssignments" | "primaryWorkspaceId">
+      Pick<
+        import("./domain/channel.js").Channel,
+        "repoAssignments" | "primaryWorkspaceId" | "trackerOverride"
+      >
     > = {};
+
+    if (trackerArg) {
+      const validTrackers = ["github_projects", "linear", "github_issues", "relay_native"];
+      if (!validTrackers.includes(trackerArg)) {
+        console.error(
+          `--tracker must be one of: ${validTrackers.join(", ")} (got "${trackerArg}").`
+        );
+        process.exitCode = 1;
+        return;
+      }
+      patch.trackerOverride =
+        trackerArg as import("./domain/tracker-config.js").TrackerProviderName;
+    }
 
     if (reposArg) {
       patch.repoAssignments = reposArg.split(",").map((r) => {
@@ -2819,7 +2836,33 @@ async function printDoctor(input: {
   console.log("");
   await printStatus(input.artifactStore, input.cwd);
   console.log("");
+  await printTrackerDoctor();
+  console.log("");
   await inspectMcp(input);
+}
+
+/**
+ * Surface tracker-config diagnostics in `rly doctor`. Common
+ * misconfigurations (default points at an absent provider, custom-field
+ * epic model with its 50-option cap, real-Issue projection turned on)
+ * surface as warnings or errors so users find them before runtime
+ * does. Pure delegation to `diagnoseTrackerConfig` keeps the rule set
+ * unit-testable.
+ */
+async function printTrackerDoctor(): Promise<void> {
+  console.log("Tracker:");
+  try {
+    const config = await readConfig();
+    const { diagnoseTrackerConfig } = await import("./domain/tracker-config.js");
+    const diagnostics = diagnoseTrackerConfig(config.tracker);
+    for (const d of diagnostics) {
+      const prefix = d.level === "error" ? "  ✗" : d.level === "warn" ? "  !" : "  ✓";
+      console.log(`${prefix} ${d.message}`);
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.log(`  ✗ tracker config unreadable: ${message}`);
+  }
 }
 
 async function printUpStatus(input: {
