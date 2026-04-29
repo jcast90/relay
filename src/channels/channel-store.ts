@@ -203,6 +203,7 @@ export class ChannelStore {
         | "sectionId"
         | "providerProfileId"
         | "pr"
+        | "trackerLinks"
       >
     >
   ): Promise<Channel | null> {

@@ -61,6 +61,36 @@ export async function githubProjectsGraphql<T>(
   variables: Record<string, unknown>,
   deps: ProjectsClientDeps
 ): Promise<T> {
+  const { data } = await githubProjectsGraphqlWithMeta<T>(query, variables, deps);
+  return data;
+}
+
+/**
+ * Rate-limit snapshot read from response headers. GitHub returns
+ * `X-RateLimit-Remaining` and `X-RateLimit-Reset` (epoch seconds) on
+ * every authenticated GraphQL response. The sync worker (PR D) uses
+ * this to back off when the remaining budget runs low so we never burn
+ * through a customer's quota with reconciliation traffic.
+ */
+export interface RateLimitInfo {
+  remaining: number | null;
+  /** Unix epoch seconds when the budget refills. `null` if the header was absent. */
+  resetEpochSeconds: number | null;
+}
+
+/**
+ * Lower-level variant of `githubProjectsGraphql` that also surfaces
+ * the rate-limit headers. Existing callers stay on the simpler
+ * data-only return; the sync worker upgrades to this so it can pause
+ * before depleting the budget. Behaviour is otherwise identical:
+ * throws on non-2xx HTTP, surfaces GraphQL `errors`, throws on
+ * missing `data`.
+ */
+export async function githubProjectsGraphqlWithMeta<T>(
+  query: string,
+  variables: Record<string, unknown>,
+  deps: ProjectsClientDeps
+): Promise<{ data: T; rateLimit: RateLimitInfo }> {
   const fetchImpl = deps.fetch ?? fetch;
   const url = deps.apiUrl ?? GITHUB_API_URL;
   const res = await fetchImpl(url, {
@@ -84,7 +114,13 @@ export async function githubProjectsGraphql<T>(
   if (!payload.data) {
     throw new Error("GitHub Projects API returned no data");
   }
-  return payload.data;
+  const remainingHeader = res.headers.get("x-ratelimit-remaining");
+  const resetHeader = res.headers.get("x-ratelimit-reset");
+  const rateLimit: RateLimitInfo = {
+    remaining: remainingHeader != null ? Number.parseInt(remainingHeader, 10) : null,
+    resetEpochSeconds: resetHeader != null ? Number.parseInt(resetHeader, 10) : null,
+  };
+  return { data: payload.data, rateLimit };
 }
 
 /**
