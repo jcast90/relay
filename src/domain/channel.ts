@@ -168,8 +168,41 @@ export interface Channel {
    * transitions to `merged` / `closed`. See {@link ChannelPr}.
    */
   pr?: ChannelPr;
+  /**
+   * External-tracker projection metadata. Populated by the channel-hooks
+   * in `src/integrations/github-projects/channel-hooks.ts` when a project
+   * is provisioned for the channel. Relay is authoritative — these ids
+   * exist purely so the sync worker (PR D, #183) can find the right
+   * project / epic on each tick. Optional + back-compat: a missing field
+   * means no external projection has been set up.
+   */
+  trackerLinks?: ChannelTrackerLinks;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Per-provider projection metadata for a channel. Each tracker the user
+ * opts into gets its own block. Today only `githubProjects` is wired —
+ * Linear parity (PR F, #185) will add a `linear` sibling.
+ */
+export interface ChannelTrackerLinks {
+  githubProjects?: ChannelGitHubProjectsLink;
+}
+
+/**
+ * Stable references for a channel's GitHub Projects v2 projection. Both
+ * `epicItemId` (PVTI_…) and `epicDraftIssueId` (DI_…) are stored because
+ * the two id types serve different mutations: itemId for field updates
+ * and archival, draftIssueId for title/body edits. See
+ * `src/integrations/github-projects/draft-items.ts` for the contract.
+ */
+export interface ChannelGitHubProjectsLink {
+  projectId: string;
+  projectNumber: number;
+  projectUrl: string;
+  epicItemId: string;
+  epicDraftIssueId: string;
 }
 
 /**

@@ -978,6 +978,7 @@ fn create_dm(
         section_id: None,
         provider_profile_id: None,
         pr: None,
+        tracker_links: None,
         created_at: Some(now.to_rfc3339()),
         updated_at: Some(now.to_rfc3339()),
     };

@@ -192,6 +192,38 @@ pub struct Channel {
     /// with channel files written before the PR-review DM feature.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr: Option<ChannelPr>,
+    /// External-tracker projection metadata. Populated by the
+    /// channel-hooks in
+    /// `src/integrations/github-projects/channel-hooks.ts` when a project
+    /// is provisioned for the channel. Rust round-trips the field so
+    /// dashboard writes stay lossless; the dashboards do not mint these
+    /// values themselves. Optional + `#[serde(default)]` for back-compat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracker_links: Option<ChannelTrackerLinks>,
+}
+
+/// Per-provider projection metadata for a channel. Mirrors
+/// `src/domain/channel.ts::ChannelTrackerLinks`. New provider blocks
+/// (Linear parity in PR F, #185) land as additional optional fields here.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelTrackerLinks {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_projects: Option<ChannelGitHubProjectsLink>,
+}
+
+/// Stable references for a channel's GitHub Projects v2 projection.
+/// Mirrors `src/domain/channel.ts::ChannelGitHubProjectsLink`. Both ids
+/// are kept because field updates take the project-item id (`PVTI_…`)
+/// while title/body edits take the draft-issue id (`DI_…`).
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelGitHubProjectsLink {
+    pub project_id: String,
+    pub project_number: u64,
+    pub project_url: String,
+    pub epic_item_id: String,
+    pub epic_draft_issue_id: String,
 }
 
 /// PR-review metadata mirrored from `src/domain/channel.ts::ChannelPr`. The
@@ -1821,6 +1853,7 @@ mod tests {
             section_id: None,
             provider_profile_id: None,
             pr: None,
+            tracker_links: None,
             created_at: Some("2026-01-01T00:00:00Z".to_string()),
             updated_at: Some("2026-01-01T00:00:00Z".to_string()),
         }
@@ -2001,6 +2034,7 @@ mod tests {
             section_id: None,
             provider_profile_id: None,
             pr: None,
+            tracker_links: None,
             created_at: None,
             updated_at: None,
         }
