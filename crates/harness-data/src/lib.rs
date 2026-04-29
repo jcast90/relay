@@ -77,6 +77,24 @@ pub struct TicketLedgerEntry {
     pub linear_state: Option<String>,
     #[serde(default)]
     pub linear_url: Option<String>,
+    /// Foreign-key references to projections of this ticket in
+    /// external trackers. Mirrors
+    /// `src/domain/ticket.ts::TicketExternalIds`. Populated by the
+    /// GH Projects sync worker (PR D, #183) the first time a ticket
+    /// is mirrored. Optional + `#[serde(default)]` for back-compat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_ids: Option<TicketExternalIds>,
+}
+
+/// Foreign-key references to a ticket's projections in external
+/// trackers. Mirrors `src/domain/ticket.ts::TicketExternalIds`.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TicketExternalIds {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_project_item_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_draft_issue_id: Option<String>,
 }
 
 // --- Channel ---

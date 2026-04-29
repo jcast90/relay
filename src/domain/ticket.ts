@@ -104,6 +104,24 @@ export interface TicketLedgerEntry {
   linearIdentifier?: string;
   linearState?: string;
   linearUrl?: string;
+  /**
+   * Foreign-key references to projections of this ticket in external
+   * trackers. Populated by the sync worker
+   * (`src/integrations/github-projects/sync-worker.ts`) the first time
+   * a ticket is mirrored. Relay is authoritative — these ids exist
+   * purely so subsequent ticks can find the right external row to
+   * overwrite. Optional for back-compat: ticket files written before
+   * the sync worker existed simply have no `externalIds` map and are
+   * treated as "needs to be projected" on the next tick.
+   */
+  externalIds?: TicketExternalIds;
+}
+
+export interface TicketExternalIds {
+  /** GitHub Projects v2 project-item id (PVTI_…). */
+  githubProjectItemId?: string;
+  /** GitHub Projects v2 draft-issue id (DI_…) — for title/body edits. */
+  githubDraftIssueId?: string;
 }
 
 export function initializeTicketLedger(
