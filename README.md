@@ -498,7 +498,7 @@ Verification commands run through an `Executor` abstraction (`src/execution/exec
         approval.json
   channels/<channelId>/
     channel.json              # name, members, repoAssignments, primaryWorkspaceId
-                              #   .trackerLinks.githubProjects → projectId, epicItemId, epicDraftIssueId
+                              #   .trackerLinks.githubProjects → projectId, projectNumber, projectUrl, epicItemId, epicDraftIssueId
                               #   (populated when the channel is provisioned against GH Projects v2)
     feed.jsonl                # append-only feed
     tickets.json              # unified ticket board (each ticket may carry .externalIds)

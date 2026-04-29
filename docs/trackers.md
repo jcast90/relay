@@ -49,10 +49,12 @@ PR G ([#186](https://github.com/jcast90/relay/issues/186)) lands a `tracker` blo
     "providers": {
       "github_projects": {
         "owner": "jcast90", // user or org login
+        "ownerType": "user", // or "organization"
         "project_naming": "per_primary_repo", // or { "fixed": "Work" }
         "epic_model": "parent_draft_item",
         "use_draft_items": true,
-        "sync_min_rate_limit_budget": 200, // see Rate limits below
+        "sync_interval_seconds": 30, // sync-worker tick interval (PR #194)
+        "min_rate_limit_budget": 200, // see Rate limits below
       },
       "linear": {
         "team_key": "REL",
@@ -161,7 +163,7 @@ GitHub's GraphQL API has a points-based rate limit (5000 points/hour for persona
 
 - **Default threshold: 200 points.** Conservative — leaves headroom for ad-hoc CLI invocations during reconciliation.
 - **Tunable per-call** via `SyncTickInput.minRateLimitBudget`. Pass `0` to disable throttling (sane only in tests).
-- **Tunable globally** via `tracker.providers.github_projects.sync_min_rate_limit_budget` once PR G ([#186](https://github.com/jcast90/relay/issues/186)) lands.
+- **Tunable globally** via `tracker.providers.github_projects.min_rate_limit_budget` once PR G ([#186](https://github.com/jcast90/relay/issues/186)) lands.
 
 A throttled tick returns `{ throttled: true, ... }` and emits a feed entry. The next tick re-evaluates the budget and resumes once headroom returns.
 
