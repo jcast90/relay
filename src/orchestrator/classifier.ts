@@ -194,16 +194,20 @@ function enrichFromProjectItem(item: ProjectItemContext, originalUrl: string): s
 }
 
 /**
- * Build a `ProjectsClientDeps` from a caller-supplied bag, falling back
- * to `process.env.GITHUB_TOKEN` only at this single boundary. New code
- * should accept a deps bag rather than reaching into env.
+ * Build a `ProjectsClientDeps` from a caller-supplied bag. Returns
+ * null when no token is supplied — the classifier's URL enrichment
+ * is best-effort and gracefully degrades to the project-only deferred
+ * message rather than the env-fallback shortcut. Callers (CLI / MCP
+ * entry points) are expected to read `process.env.GITHUB_TOKEN` once
+ * at their boundary and plumb it through `projectsDeps.token`. See
+ * AGENTS.md § "Things to watch out for" for the rationale (subprocess
+ * env sanitization + per-name `passEnv` opt-in contract).
  */
 function resolveProjectsDeps(
   caller: Partial<ProjectsClientDeps> | undefined
 ): ProjectsClientDeps | null {
-  const token = caller?.token ?? process.env.GITHUB_TOKEN ?? "";
-  if (!token) return null;
-  return { token, fetch: caller?.fetch, apiUrl: caller?.apiUrl };
+  if (!caller?.token) return null;
+  return { token: caller.token, fetch: caller.fetch, apiUrl: caller.apiUrl };
 }
 
 /**
@@ -232,8 +236,8 @@ async function tryResolveProjectsUrl(
     return {
       kind: "deferred",
       message:
-        "GITHUB_TOKEN not available; cannot resolve GitHub Projects item context. " +
-        "Pass a token via `projectsDeps` or set GITHUB_TOKEN.",
+        "GitHub Projects item context cannot be resolved without a token. " +
+        "Pass one via the classifier's `projectsDeps.token` deps bag.",
       parsed,
     };
   }
