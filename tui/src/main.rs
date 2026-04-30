@@ -640,6 +640,13 @@ impl App {
     }
 
     fn refresh(&mut self) {
+        // Re-read on every refresh tick (~3s) so peer-surface drift
+        // clears the moment the user runs `rly install gui` from another
+        // terminal without needing to relaunch the TUI. Cost is one
+        // ~1KB JSON read; the primary "running != installed" hint also
+        // refreshes (though that one only changes via relaunch).
+        self.update_nudge = install_drift::detect_drift_footer();
+
         self.channels = load_channels();
         self.agents = load_agent_names();
 
