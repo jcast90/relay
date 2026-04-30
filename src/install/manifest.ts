@@ -152,7 +152,10 @@ export type SurfaceState = "fresh" | "current" | "behind";
  *   couldn't read a SHA on either side).
  * - `behind` — installed differs from source. Nudge.
  */
-export function diffSurface(record: SurfaceRecord | undefined, source: SourceVersion): SurfaceState {
+export function diffSurface(
+  record: SurfaceRecord | undefined,
+  source: SourceVersion
+): SurfaceState {
   if (!record) return "fresh";
   // Prefer SHA comparison — it catches "same version, different commit"
   // (the common case during dev — every PR pre-release shares the version

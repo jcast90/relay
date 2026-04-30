@@ -1,10 +1,5 @@
 import { runInstall, type InstallResult } from "../install/installer.js";
-import {
-  getSourceVersion,
-  reportDrift,
-  type Surface,
-  SURFACES,
-} from "../install/manifest.js";
+import { getSourceVersion, reportDrift, type Surface, SURFACES } from "../install/manifest.js";
 
 const HELP = [
   "Usage: rly install [target] [options]",
@@ -117,7 +112,9 @@ async function runCheck(json: boolean): Promise<number> {
     return 1;
   }
   const list = drift.behind.join(" ");
-  console.log(`Run \`rly install ${drift.behind.length === SURFACES.length ? "" : list}\` to update.`);
+  console.log(
+    `Run \`rly install ${drift.behind.length === SURFACES.length ? "" : list}\` to update.`
+  );
   return 1;
 }
 
@@ -156,8 +153,7 @@ export async function handleInstallCommand(args: string[]): Promise<number> {
   // Print what we're about to do up-front so the user sees a single header
   // before pnpm/cargo/tauri start streaming their own output.
   const source = await getSourceVersion();
-  const targetLabel =
-    parsed.surfaces.length === 0 ? "all surfaces" : parsed.surfaces.join(", ");
+  const targetLabel = parsed.surfaces.length === 0 ? "all surfaces" : parsed.surfaces.join(", ");
   console.log(
     `[rly install] target: ${targetLabel} — source v${source.version}${source.sourceSha ? ` (${source.sourceSha.slice(0, 7)})` : ""}`
   );
