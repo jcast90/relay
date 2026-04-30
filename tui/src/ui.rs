@@ -12,13 +12,22 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Multi-line content shows a condensed "[1 of N lines]" indicator.
     let input_height: u16 = 3;
 
-    // Always reserve space at bottom for input bar
-    let (main_area, input_area) = {
+    // Reserve a single optional row above the input bar for the install
+    // drift nudge — only when `app.update_nudge` is populated. We use
+    // separate Layout calls instead of branching on constraint counts so
+    // the unwrapping of returned chunks stays statically known.
+    let nudge_height: u16 = if app.update_nudge.is_some() { 1 } else { 0 };
+
+    let (main_area, nudge_area, input_area) = {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(input_height)])
+            .constraints([
+                Constraint::Min(1),
+                Constraint::Length(nudge_height),
+                Constraint::Length(input_height),
+            ])
             .split(size);
-        (chunks[0], chunks[1])
+        (chunks[0], chunks[1], chunks[2])
     };
 
     // Main layout: left sidebar | center content | right panel
@@ -40,6 +49,19 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_sidebar(frame, app, main_chunks[0]);
     draw_center(frame, app, main_chunks[1]);
     draw_right(frame, app, main_chunks[2]);
+
+    // Drift footer — amber-tinted single line, drawn between the main
+    // area and the input bar. Suppressed when None.
+    if let Some(text) = app.update_nudge.clone() {
+        let line = Paragraph::new(Line::from(Span::styled(
+            text,
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )));
+        frame.render_widget(line, nudge_area);
+    }
 
     // Always-visible input bar
     draw_input_bar(frame, app, input_area);
