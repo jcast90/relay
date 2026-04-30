@@ -16,6 +16,8 @@ import {
 import { AgentRegistry } from "./agents/registry.js";
 import { launchGui, launchTui, parseGuiFlags } from "./cli/launch-gui-tui.js";
 import { parseRebuildFlags, runRebuild } from "./cli/rebuild.js";
+import { handleInstallCommand } from "./cli/install.js";
+import { maybePrintUpdateNudge } from "./cli/update-nudge.js";
 import { launchInteractiveCommand } from "./cli/launcher.js";
 import { createStreamActivityRenderer, isQuietMode } from "./cli/stream-activity-renderer.js";
 import { hasOnboarded, parseWelcomeFlags, runWelcome } from "./cli/welcome.js";
@@ -86,6 +88,9 @@ export async function main(): Promise<void> {
   }
 
   const command = rawCommand;
+  // Fire the update nudge before workspace bootstrap so it appears at the
+  // top of the user's output. Internally suppressed for install/help/json.
+  await maybePrintUpdateNudge({ command, argv: args });
   const packageVersion = await readPackageVersion();
   const workspace = await ensureHarnessWorkspace(cwd, packageVersion);
   const artifactStore = new LocalArtifactStore(workspace.paths.artifactsDir, getHarnessStore());
@@ -167,6 +172,11 @@ export async function main(): Promise<void> {
 
   if (command === "rebuild") {
     process.exitCode = await runRebuild(parseRebuildFlags(args));
+    return;
+  }
+
+  if (command === "install") {
+    process.exitCode = await handleInstallCommand(args);
     return;
   }
 
@@ -2967,6 +2977,7 @@ async function printTopLevelHelp(): Promise<void> {
     "  config <subcommand>      Manage global config (add/remove project dirs)",
     "  providers <subcommand>   Manage named provider profiles (see docs/providers.md)",
     "  rebuild                  Rebuild native artifacts (tui/gui)",
+    "  install [target]         Build + install cli/tui/gui so PATH and /Applications match source",
     "",
     "Misc:",
     "  version | --version      Print version",
