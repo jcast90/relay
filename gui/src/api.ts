@@ -55,6 +55,35 @@ export const api = {
       args,
     }),
 
+  // Install drift surface — used by the in-app update banner. Mirrors
+  // `rly install --check --json` plus the GUI's compiled-in version
+  // so the banner can also catch the "freshly installed but not yet
+  // relaunched" case.
+  checkRelayUpdate: () =>
+    invoke<{
+      drift: {
+        source: { version: string; sourceSha: string | null };
+        surfaces: Record<
+          "cli" | "tui" | "gui",
+          {
+            record:
+              | {
+                  version: string;
+                  sourceSha: string | null;
+                  installedAt: string;
+                }
+              | undefined;
+            state: "fresh" | "current" | "behind";
+          }
+        >;
+        behind: ("cli" | "tui" | "gui")[];
+      };
+      runningVersion: string;
+      runningSha: string | null;
+      runningBehindSource: boolean;
+    }>("check_relay_update"),
+  triggerRelayInstallGui: () => invoke<void>("trigger_relay_install_gui"),
+
   createChannel: (
     name: string,
     description: string,

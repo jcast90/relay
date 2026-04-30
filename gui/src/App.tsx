@@ -9,6 +9,7 @@ import { NewDmModal } from "./components/NewDmModal";
 import { RightPane } from "./components/RightPane";
 import { SettingsPage } from "./components/SettingsPage";
 import { Sidebar } from "./components/Sidebar";
+import { UpdateBanner } from "./components/UpdateBanner";
 
 const RAIL_OPEN_KEY = "relay.rightRailOpen";
 
@@ -110,6 +111,7 @@ export function App() {
 
   return (
     <div className={`app density-${appearance.density} ${rightRailOpen ? "" : "rail-collapsed"}`}>
+      <UpdateBanner />
       {settingsOpen && settings ? (
         <div style={{ gridColumn: "1 / -1", display: "flex", minHeight: 0 }}>
           <SettingsPage

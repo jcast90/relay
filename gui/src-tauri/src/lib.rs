@@ -873,6 +873,105 @@ fn run_cli(args: Vec<String>) -> Result<CliResult, String> {
     Ok(cli_run(&refs))
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct UpdateStatus {
+    /// `rly install --check --json` output verbatim — UI uses
+    /// `behind` and the per-surface `state` for the per-surface labels.
+    drift: serde_json::Value,
+    /// `CARGO_PKG_VERSION` of this GUI binary (always set).
+    running_version: &'static str,
+    /// Repo HEAD SHA at the time *this* GUI was compiled. `None` when the
+    /// build wasn't run from a git checkout (release tarballs, custom
+    /// downstream builds). The frontend treats `None` as "can't compare,
+    /// fall back to the manifest drift signal."
+    running_sha: Option<&'static str>,
+    /// True when the running GUI's compiled-in SHA differs from
+    /// `drift.source.sourceSha`. Catches the "you `rly install gui`'d but
+    /// haven't relaunched yet" case the manifest drift can't see — the
+    /// new install matches source, but the live process is still old.
+    running_behind_source: bool,
+}
+
+/// Read what `rly install --check --json` says, fold in the GUI's own
+/// compiled-in version, and return one struct the renderer can switch on.
+///
+/// Returns errors verbatim from `cli_json` so the UI can show a sensible
+/// "couldn't check" state instead of a silent green light.
+#[tauri::command]
+fn check_relay_update() -> Result<UpdateStatus, String> {
+    let drift = cli_json(&["install", "--check", "--json"])?;
+    // The CLI emits the SHA as `drift.source.sourceSha`. We only look at
+    // the SHA here — semver comparison would also work but during dev
+    // every commit shares 0.7.0 and would never trip a drift signal.
+    let source_sha = drift
+        .get("source")
+        .and_then(|s| s.get("sourceSha"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let running_sha = option_env!("RELAY_GIT_SHA").filter(|s| !s.is_empty());
+    let running_behind_source = match (running_sha, source_sha.as_deref()) {
+        (Some(running), Some(source)) => running != source,
+        // Either side missing a SHA → can't tell. Defer to the manifest
+        // drift signal already in `drift.behind`.
+        _ => false,
+    };
+    Ok(UpdateStatus {
+        drift,
+        running_version: env!("CARGO_PKG_VERSION"),
+        running_sha,
+        running_behind_source,
+    })
+}
+
+/// Open Terminal.app (macOS) or `$TERMINAL` (Linux/Windows fallback) and
+/// run `rly install gui`. The build streams to that terminal window so
+/// the user sees pnpm/cargo/tauri output instead of an opaque modal —
+/// and they choose when to relaunch Relay rather than us yanking it.
+///
+/// We don't try to auto-restart the GUI: replacing /Applications/Relay.app
+/// while the binary is mapped works on APFS but the running process keeps
+/// executing the old code. Asking the user to quit + relaunch is the
+/// honest answer.
+#[tauri::command]
+fn trigger_relay_install_gui() -> Result<(), String> {
+    if cfg!(not(target_os = "macos")) {
+        // Non-macOS users currently have no automatic install path
+        // (`rly install gui` on Linux/Windows just builds the bundle and
+        // tells the user where it is). Surface that explicitly rather
+        // than spawning a terminal that fails opaquely.
+        return Err(
+            "In-app GUI install is macOS-only. Run `rly install gui` from a terminal."
+                .to_string(),
+        );
+    }
+    // Use osascript to open Terminal.app and run `rly install gui`.
+    // The trailing `read` keeps the window open after the install
+    // finishes so the user can read any errors before it closes.
+    // Terminal.app inherits the user's login shell, which already has
+    // PATH set up — no need to resolve rly to an absolute path here.
+    let script = "tell application \"Terminal\"\n\
+                  activate\n\
+                  do script \"rly install gui; echo; \
+                  echo '── Install finished. Quit Relay (⌘Q) and relaunch from /Applications. ──'; \
+                  read -n 1 -s -r -p 'Press any key to close…'\"\n\
+                  end tell";
+    let output = Command::new("osascript")
+        .args(["-e", script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("failed to launch osascript: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "osascript failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoAssignmentInput {
@@ -3835,6 +3934,8 @@ pub fn run() {
             list_ticket_ledger,
             list_agent_names,
             run_cli,
+            check_relay_update,
+            trigger_relay_install_gui,
             create_channel,
             archive_channel,
             unarchive_channel,
