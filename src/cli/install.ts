@@ -102,7 +102,9 @@ async function runCheck(json: boolean): Promise<number> {
   console.log("");
 
   // Three buckets the user cares about: nothing installed yet (fresh),
-  // installed but stale (behind), or all good (current).
+  // installed but stale (behind), or all good (current). The non-zero
+  // exits below let scripts run `rly install --check || rly install`
+  // cleanly — exit 1 means "do something."
   if (drift.behind.length === 0 && freshSurfaces.length === 0) {
     console.log("All surfaces match source. Nothing to do.");
     return 0;
@@ -116,7 +118,6 @@ async function runCheck(json: boolean): Promise<number> {
   }
   const list = drift.behind.join(" ");
   console.log(`Run \`rly install ${drift.behind.length === SURFACES.length ? "" : list}\` to update.`);
-  // Non-zero so scripts can `rly install --check || rly install` cleanly.
   return 1;
 }
 
