@@ -570,7 +570,9 @@ function buildPrompt(agentName: string, request: WorkRequest): string {
     "If this is planning work (kind=draft_plan), include a phasePlan object matching the harness phase-plan schema.",
     "If this is classification work (kind=classify_request), return a classification object with: tier (trivial|bugfix|feature_small|feature_large|architectural|multi_repo), rationale, suggestedSpecialties, estimatedTicketCount, needsDesignDoc, needsUserApproval.",
     "If this is ticket decomposition work (kind=decompose_tickets), return a ticketPlan object with parallelizable tickets and dependsOn edges.",
-    "If this is design doc work (kind=generate_design_doc), provide the design document in your summary.",
+    "If this is design doc work (kind=generate_design_doc), provide the design document in your summary as Markdown with these sections, in order: a short status header (Status / Owner / Target version / Related code paths), `## Problem`, `## Goals`, `## Non-goals`, `## Mental model`, `## Architectural decisions` (optional for feature tiers), `## Implementation plan`, `## Specs`, `## Open questions`, `## Sign-off`.",
+    "The `## Specs` section captures behavioural requirements as `Given … / When … / Then …` scenarios. List each requirement as a bullet, then nest one or more scenarios under it. Skip the section only when no behaviour-visible requirement applies (rare).",
+    "See `docs/design/openspec-spike.md` and `docs/design/tracker-projects-mapping.md` for the established shape — match their tone and section ordering.",
     "Otherwise, omit phasePlan, classification, and ticketPlan.",
   ];
 

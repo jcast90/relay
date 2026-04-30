@@ -48,7 +48,11 @@ describe("classification domain", () => {
     expect(tierNeedsApproval("feature_small")).toBe(false);
 
     expect(tierNeedsDesignDoc("architectural")).toBe(true);
-    expect(tierNeedsDesignDoc("feature_large")).toBe(false);
+    expect(tierNeedsDesignDoc("feature_large")).toBe(true);
+    expect(tierNeedsDesignDoc("feature_small")).toBe(true);
+    expect(tierNeedsDesignDoc("bugfix")).toBe(false);
+    expect(tierNeedsDesignDoc("trivial")).toBe(false);
+    expect(tierNeedsDesignDoc("multi_repo")).toBe(false);
 
     expect(tierSkipsPlanning("trivial")).toBe(true);
     expect(tierSkipsPlanning("bugfix")).toBe(false);

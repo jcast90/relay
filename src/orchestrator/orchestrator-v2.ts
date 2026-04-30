@@ -226,14 +226,14 @@ export class OrchestratorV2 {
     run.plan = planResult.phasePlan ?? createSeedPlan(featureRequest, this.repoRoot);
     await this.transition(run, "PlanGenerated", "phase_00");
 
-    // Step 4: Design doc (architectural tier)
+    // Step 4: Design doc (architectural / feature_large / feature_small)
     if (tierNeedsDesignDoc(classification.tier)) {
       const designResult = await this.dispatch(run, {
         phaseId: "phase_00",
         kind: "generate_design_doc",
         specialty: "general",
         title: "Generate design document",
-        objective: `Create an architectural design document for: ${featureRequest}`,
+        objective: `Create a design document for: ${featureRequest}`,
         acceptanceCriteria: [
           "Document should cover architecture, trade-offs, and implementation approach.",
           "Include component boundaries and data flow.",

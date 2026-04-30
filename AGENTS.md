@@ -92,6 +92,12 @@ crates/harness-data/      # shared Rust types consumed by tui/ + gui/
 
 Files an agent will commonly touch: `src/orchestrator/*.ts` for pipeline logic, `src/channels/channel-store.ts` for feed/ticket state, `src/mcp/*.ts` for tool definitions, `src/domain/*.ts` for shared shapes.
 
+## Design-doc convention
+
+Design docs live in `docs/design/<feature>.md` and are emitted by `/plan` for tiers that pass `tierNeedsDesignDoc()` (currently: `architectural`, `feature_large`, `feature_small`). Required sections in order: a short status header (Status / Owner / Target version / Related code paths), `## Problem`, `## Goals`, `## Non-goals`, `## Mental model`, `## Architectural decisions` (optional for feature tiers), `## Implementation plan`, `## Specs`, `## Open questions`, `## Sign-off`.
+
+The `## Specs` section captures behavioural requirements as `Given … / When … / Then …` scenarios — one bullet per requirement, scenarios nested under it. See `docs/design/openspec-spike.md` for a worked example and `docs/design/tracker-projects-mapping.md` for the established tone.
+
 ## Cross-dashboard contract
 
 This is where agents quietly break things:

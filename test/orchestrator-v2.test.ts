@@ -10,6 +10,8 @@ import { NodeCommandInvoker } from "../src/agents/command-invoker.js";
 import { ChannelStore } from "../src/channels/channel-store.js";
 import { LocalArtifactStore } from "../src/execution/artifact-store.js";
 import { FileHarnessStore } from "../src/storage/file-store.js";
+import { STORE_NS } from "../src/storage/namespaces.js";
+import type { HarnessStore } from "../src/storage/store.js";
 import { VerificationRunner } from "../src/execution/verification-runner.js";
 import { OrchestratorV2 } from "../src/orchestrator/orchestrator-v2.js";
 import { ScriptedInvoker } from "../src/simulation/scripted-invoker.js";
@@ -74,7 +76,7 @@ function buildOrchestrator(
   );
   const verificationRunner = new VerificationRunner(new NodeCommandInvoker(), artifactStore);
 
-  return new OrchestratorV2(
+  const orchestrator = new OrchestratorV2(
     registry,
     cwd,
     verificationRunner,
@@ -83,6 +85,27 @@ function buildOrchestrator(
     opts.channelStore,
     opts.workspaceId
   );
+
+  return { orchestrator, artifactStore };
+}
+
+async function readSavedDesignDoc(
+  artifactStore: LocalArtifactStore,
+  runId: string
+): Promise<string | undefined> {
+  // The artifact store has no public read-back for design docs today;
+  // #206's coverage need does not justify expanding the public interface.
+  const store = (artifactStore as unknown as { store: HarnessStore }).store;
+  try {
+    const bytes = await store.getBlob({
+      ns: STORE_NS.runArtifacts,
+      id: `${runId}__design-doc`,
+      size: 0,
+    });
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return undefined;
+  }
 }
 
 describe("OrchestratorV2 integration", () => {
@@ -91,7 +114,7 @@ describe("OrchestratorV2 integration", () => {
     const artifactsDir = join(tmpDir, "artifacts");
 
     try {
-      const orchestrator = buildOrchestrator(tmpDir, artifactsDir);
+      const { orchestrator, artifactStore } = buildOrchestrator(tmpDir, artifactsDir);
       const run = await orchestrator.run(
         "Implement a new authentication system with JWT tokens and session management"
       );
@@ -115,6 +138,13 @@ describe("OrchestratorV2 integration", () => {
       expect(eventTypes).toContain("ClassificationComplete");
       expect(eventTypes).toContain("PlanGenerated");
       expect(eventTypes).toContain("TicketsCreated");
+
+      // #206: feature_small now triggers the design-doc step. Verify the
+      // artifact landed so a future revert of tierNeedsDesignDoc would fail
+      // this test instead of silently passing.
+      const designDoc = await readSavedDesignDoc(artifactStore, run.id);
+      expect(designDoc).toBeDefined();
+      expect(designDoc!.length).toBeGreaterThan(0);
     } finally {
       await rm(tmpDir, RM_OPTS);
     }
@@ -125,7 +155,7 @@ describe("OrchestratorV2 integration", () => {
     const artifactsDir = join(tmpDir, "artifacts");
 
     try {
-      const orchestrator = buildOrchestrator(tmpDir, artifactsDir);
+      const { orchestrator, artifactStore } = buildOrchestrator(tmpDir, artifactsDir);
       const run = await orchestrator.run("Fix typo in README");
 
       expect(run.classification).not.toBeNull();
@@ -138,6 +168,10 @@ describe("OrchestratorV2 integration", () => {
       const eventTypes = run.events.map((e) => e.type);
       expect(eventTypes).toContain("ClassificationComplete");
       expect(eventTypes).toContain("TicketsCreated");
+
+      // #206: trivial must NOT trigger the design-doc step.
+      const designDoc = await readSavedDesignDoc(artifactStore, run.id);
+      expect(designDoc).toBeUndefined();
     } finally {
       await rm(tmpDir, RM_OPTS);
     }
@@ -151,7 +185,7 @@ describe("OrchestratorV2 integration", () => {
       // Override classification by using a request that won't match heuristics
       // The ScriptedInvoker always returns feature_small, so let's test with
       // a direct classification override via a bugfix heuristic
-      const orchestrator = buildOrchestrator(tmpDir, artifactsDir);
+      const { orchestrator } = buildOrchestrator(tmpDir, artifactsDir);
       const run = await orchestrator.run(
         "Implement a new authentication system with JWT tokens and session management"
       );
@@ -174,7 +208,7 @@ describe("OrchestratorV2 integration", () => {
         artifactsDir,
         new FileHarnessStore(join(artifactsDir, "__hs__"))
       );
-      const orchestrator = buildOrchestrator(tmpDir, artifactsDir);
+      const { orchestrator } = buildOrchestrator(tmpDir, artifactsDir);
       const run = await orchestrator.run("Fix typo in README");
 
       // Verify snapshot was written
@@ -202,7 +236,7 @@ describe("OrchestratorV2 integration", () => {
 
     try {
       const channelStore = new ChannelStore(channelsDir);
-      const orchestrator = buildOrchestrator(tmpDir, artifactsDir, {
+      const { orchestrator } = buildOrchestrator(tmpDir, artifactsDir, {
         channelStore,
         workspaceId: "ws-test",
       });
@@ -237,7 +271,7 @@ describe("OrchestratorV2 integration", () => {
 
     try {
       const channelStore = new ChannelStore(channelsDir);
-      const orchestrator = buildOrchestrator(tmpDir, artifactsDir, {
+      const { orchestrator } = buildOrchestrator(tmpDir, artifactsDir, {
         channelStore,
         workspaceId: "ws-test",
       });
@@ -272,7 +306,7 @@ describe("OrchestratorV2 integration", () => {
         throw new Error("simulated write failure");
       };
 
-      const orchestrator = buildOrchestrator(tmpDir, artifactsDir, {
+      const { orchestrator } = buildOrchestrator(tmpDir, artifactsDir, {
         channelStore,
         workspaceId: "ws-test",
       });
