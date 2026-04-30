@@ -78,7 +78,7 @@ export function tierNeedsApproval(tier: ComplexityTier): boolean {
 }
 
 export function tierNeedsDesignDoc(tier: ComplexityTier): boolean {
-  return tier === "architectural";
+  return tier === "architectural" || tier === "feature_large" || tier === "feature_small";
 }
 
 export function tierSkipsPlanning(tier: ComplexityTier): boolean {

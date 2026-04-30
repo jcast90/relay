@@ -47,6 +47,23 @@ One narrow ticket: **add an optional `specs/` block to the design-doc convention
 
 This captures the only OpenSpec idea that doesn't already exist in Relay, costs a small docs + prompt change, and creates zero new sources of truth.
 
+## Specs
+
+The `## Specs` section is the convention this spike establishes. It belongs on every design doc emitted by `/plan` for `feature_small`, `feature_large`, and `architectural` tiers. Format: one bullet per requirement, with one or more `Given … / When … / Then …` scenarios nested under it. The example below documents this very convention so design-doc readers see the shape immediately.
+
+- **`/plan` emits a `## Specs` section in the design doc when the classifier tier is `feature_small`, `feature_large`, or `architectural`.**
+  - Given a request classified as `feature_large`
+    When `/plan` runs and reaches the design-doc step
+    Then the emitted design doc contains a `## Specs` section with at least one requirement bullet and at least one nested `Given/When/Then` scenario.
+  - Given a request classified as `bugfix` or `trivial`
+    When `/plan` runs
+    Then no design doc is emitted, and per-ticket `acceptanceCriteria` covers verification.
+
+- **The `## Specs` section is human-skimmable and lives next to the rest of the design doc — no parallel folder tree.**
+  - Given a contributor opens `docs/design/<feature>.md`
+    When they scroll the file
+    Then `## Specs` appears between `## Implementation plan` and `## Open questions`, with the same heading depth as siblings.
+
 ## Sign-off
 
-Recommendation: **pass on OpenSpec adoption; open a sized-S follow-up for the `specs/` block on design docs.** Close #204 with a link to this doc.
+Recommendation: **pass on OpenSpec adoption; open a sized-S follow-up for the `specs/` block on design docs.** Close #204 with a link to this doc. (Follow-up shipped as #206 / this PR — see the `## Specs` section above for the worked example.)
