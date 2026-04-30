@@ -94,12 +94,14 @@ export function UpdateBanner() {
   const sourceLabel = `v${status.drift.source.version} (${shortSha(status.drift.source.sourceSha)})`;
   const runningLabel = `v${status.runningVersion}${status.runningSha ? ` (${shortSha(status.runningSha)})` : ""}`;
 
+  // Live region is the message-only span; the buttons and error sit
+  // outside so action labels don't get re-announced on every refresh.
   return (
-    <div className="update-banner" role="status" aria-live="polite">
+    <div className="update-banner">
       <span className="update-banner__icon" aria-hidden="true">
         ↻
       </span>
-      <span className="update-banner__text">
+      <span className="update-banner__text" role="status" aria-live="polite">
         Update available — running {runningLabel}, source {sourceLabel}
       </span>
       <button

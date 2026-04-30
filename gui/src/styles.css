@@ -49,10 +49,22 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 
 /* ── App shell ─────────────────────────────────────────────────── */
 
+/* `.app-shell` wraps the optional `<UpdateBanner />` and the main `.app`
+ * grid in a vertical flex column so the banner takes its natural height
+ * at the top and the app fills the rest. The banner is normal-flow (not
+ * fixed) so it can't overlay the sidebar header or macOS title bar. */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 0;
+}
+
 .app {
   display: grid;
   grid-template-columns: var(--layout-sidebar) 1fr var(--layout-right-rail);
-  height: 100vh;
+  flex: 1;
+  min-height: 0;
   background: var(--color-paper-base);
 }
 .app.rail-collapsed {
@@ -3312,11 +3324,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 /* ── Update banner ─────────────────────────────────────────────── */
 
 .update-banner {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 1000;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: var(--space-3);

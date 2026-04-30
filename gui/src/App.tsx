@@ -110,89 +110,91 @@ export function App() {
   const selected = channels.find((c) => c.channelId === selectedId) ?? null;
 
   return (
-    <div className={`app density-${appearance.density} ${rightRailOpen ? "" : "rail-collapsed"}`}>
+    <div className="app-shell">
       <UpdateBanner />
-      {settingsOpen && settings ? (
-        <div style={{ gridColumn: "1 / -1", display: "flex", minHeight: 0 }}>
-          <SettingsPage
-            settings={settings}
-            onSaved={setSettings}
-            onClose={() => setSettingsOpen(false)}
-          />
-        </div>
-      ) : (
-        <>
-          <Sidebar
-            channels={channels}
-            selectedId={selectedId}
-            includeArchived={includeArchived}
-            sessionCounts={sessionCounts}
-            runningStreams={runningStreams}
-            onSelect={setSelectedId}
-            onNewChannel={(sectionId) => {
-              setNewChannelSection(sectionId ?? null);
-              setModalOpen(true);
-            }}
-            onNewDm={() => setDmModalOpen(true)}
-            onToggleIncludeArchived={setIncludeArchived}
-            onOpenSettings={() => setSettingsOpen(true)}
-            onRefresh={refresh}
-          />
-          <CenterPane
-            channel={selected}
-            sessionId={sessionId}
-            refreshTick={refreshTick}
-            rightRailOpen={rightRailOpen}
-            settings={settings}
-            onToggleRail={() => setRightRailOpen((v) => !v)}
-            onRefresh={refresh}
-            onSessionCreated={setSessionId}
-            onStreamingChanged={setRunningStreams}
-            onChannelRemoved={(id) => {
-              if (selectedId === id) setSelectedId(null);
-              refresh();
-            }}
-            onSpinoutToChannel={(kickoff, sectionId) => {
-              setNewChannelKickoff(kickoff);
-              setNewChannelSection(sectionId ?? null);
-              setModalOpen(true);
-            }}
-          />
-          {rightRailOpen && selected && (
-            <RightPane
+      <div className={`app density-${appearance.density} ${rightRailOpen ? "" : "rail-collapsed"}`}>
+        {settingsOpen && settings ? (
+          <div style={{ gridColumn: "1 / -1", display: "flex", minHeight: 0 }}>
+            <SettingsPage
+              settings={settings}
+              onSaved={setSettings}
+              onClose={() => setSettingsOpen(false)}
+            />
+          </div>
+        ) : (
+          <>
+            <Sidebar
+              channels={channels}
+              selectedId={selectedId}
+              includeArchived={includeArchived}
+              sessionCounts={sessionCounts}
+              runningStreams={runningStreams}
+              onSelect={setSelectedId}
+              onNewChannel={(sectionId) => {
+                setNewChannelSection(sectionId ?? null);
+                setModalOpen(true);
+              }}
+              onNewDm={() => setDmModalOpen(true)}
+              onToggleIncludeArchived={setIncludeArchived}
+              onOpenSettings={() => setSettingsOpen(true)}
+              onRefresh={refresh}
+            />
+            <CenterPane
               channel={selected}
               sessionId={sessionId}
-              onSelectSession={setSessionId}
               refreshTick={refreshTick}
+              rightRailOpen={rightRailOpen}
+              settings={settings}
+              onToggleRail={() => setRightRailOpen((v) => !v)}
               onRefresh={refresh}
-              onClose={() => setRightRailOpen(false)}
+              onSessionCreated={setSessionId}
+              onStreamingChanged={setRunningStreams}
+              onChannelRemoved={(id) => {
+                if (selectedId === id) setSelectedId(null);
+                refresh();
+              }}
+              onSpinoutToChannel={(kickoff, sectionId) => {
+                setNewChannelKickoff(kickoff);
+                setNewChannelSection(sectionId ?? null);
+                setModalOpen(true);
+              }}
             />
-          )}
-          {!rightRailOpen && <div />}
-        </>
-      )}
-      <NewChannelModal
-        open={modalOpen}
-        defaultSectionId={newChannelSection}
-        defaultFirstMessage={newChannelKickoff}
-        onClose={() => {
-          setModalOpen(false);
-          setNewChannelKickoff("");
-        }}
-        onCreated={(id) => {
-          setSelectedId(id);
-          setNewChannelKickoff("");
-          refresh();
-        }}
-      />
-      <NewDmModal
-        open={dmModalOpen}
-        onClose={() => setDmModalOpen(false)}
-        onCreated={(id) => {
-          setSelectedId(id);
-          refresh();
-        }}
-      />
+            {rightRailOpen && selected && (
+              <RightPane
+                channel={selected}
+                sessionId={sessionId}
+                onSelectSession={setSessionId}
+                refreshTick={refreshTick}
+                onRefresh={refresh}
+                onClose={() => setRightRailOpen(false)}
+              />
+            )}
+            {!rightRailOpen && <div />}
+          </>
+        )}
+        <NewChannelModal
+          open={modalOpen}
+          defaultSectionId={newChannelSection}
+          defaultFirstMessage={newChannelKickoff}
+          onClose={() => {
+            setModalOpen(false);
+            setNewChannelKickoff("");
+          }}
+          onCreated={(id) => {
+            setSelectedId(id);
+            setNewChannelKickoff("");
+            refresh();
+          }}
+        />
+        <NewDmModal
+          open={dmModalOpen}
+          onClose={() => setDmModalOpen(false)}
+          onCreated={(id) => {
+            setSelectedId(id);
+            refresh();
+          }}
+        />
+      </div>
     </div>
   );
 }

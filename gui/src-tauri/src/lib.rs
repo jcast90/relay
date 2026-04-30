@@ -896,29 +896,69 @@ struct UpdateStatus {
 /// Read what `rly install --check --json` says, fold in the GUI's own
 /// compiled-in version, and return one struct the renderer can switch on.
 ///
-/// Returns errors verbatim from `cli_json` so the UI can show a sensible
-/// "couldn't check" state instead of a silent green light.
+/// `rly install --check --json` exits 1 whenever any surface is fresh or
+/// behind — that's the "scripts can do `--check || install`" contract.
+/// `cli_json` rejects anything but exit 0, so we re-implement just the
+/// stdout-JSON-parse step here and accept exit 1 as a successful drift
+/// report. Anything else (spawn failure, exit > 1, malformed JSON) still
+/// surfaces as an error so the UI can show "couldn't check" instead of a
+/// silent green light.
 #[tauri::command]
 fn check_relay_update() -> Result<UpdateStatus, String> {
-    let drift = cli_json(&["install", "--check", "--json"])?;
-    // The CLI emits the SHA as `drift.source.sourceSha`. We only look at
-    // the SHA here — semver comparison would also work but during dev
-    // every commit shares 0.7.0 and would never trip a drift signal.
+    let result = cli_run(&["install", "--check", "--json"]);
+    match result.code {
+        Some(0) | Some(1) => {}
+        Some(code) => {
+            return Err(format!(
+                "rly install --check --json exited {code}: {}",
+                result.stderr.trim()
+            ));
+        }
+        None => {
+            // Spawn never produced a child — e.g. rly not on PATH.
+            // Surface the same diagnostic shape `cli_json` would have.
+            let settings = data::load_gui_settings();
+            return Err(format!(
+                "rly install --check --json failed to launch: {} ({}). Pin a path in Settings → Agent CLIs, set RELAY_BIN / RELAY_NODE, or install rly on PATH.",
+                result.stderr.trim(),
+                rly_invocation_debug(&settings)
+            ));
+        }
+    }
+    let drift: serde_json::Value = serde_json::from_str(result.stdout.trim()).map_err(|e| {
+        format!(
+            "invalid JSON from rly install --check --json: {e} (output: {})",
+            result.stdout
+        )
+    })?;
     let source_sha = drift
         .get("source")
         .and_then(|s| s.get("sourceSha"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+    let source_version = drift
+        .get("source")
+        .and_then(|s| s.get("version"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     let running_sha = option_env!("RELAY_GIT_SHA").filter(|s| !s.is_empty());
+    let running_version: &'static str = env!("CARGO_PKG_VERSION");
+    // Two ways the running binary can be behind the source on disk:
+    //   1. Compiled-in SHA differs from source SHA (the dev-time signal —
+    //      every commit moves it; semver wouldn't budge).
+    //   2. SHA can't be compared (release-tarball builds where build.rs
+    //      had no .git to read), but the running version differs from
+    //      the source version. Catches release-time updates.
     let running_behind_source = match (running_sha, source_sha.as_deref()) {
         (Some(running), Some(source)) => running != source,
-        // Either side missing a SHA → can't tell. Defer to the manifest
-        // drift signal already in `drift.behind`.
-        _ => false,
+        _ => match source_version.as_deref() {
+            Some(source_ver) => source_ver != running_version,
+            None => false,
+        },
     };
     Ok(UpdateStatus {
         drift,
-        running_version: env!("CARGO_PKG_VERSION"),
+        running_version,
         running_sha,
         running_behind_source,
     })
@@ -945,19 +985,56 @@ fn trigger_relay_install_gui() -> Result<(), String> {
                 .to_string(),
         );
     }
-    // Use osascript to open Terminal.app and run `rly install gui`.
-    // The trailing `read` keeps the window open after the install
-    // finishes so the user can read any errors before it closes.
-    // Terminal.app inherits the user's login shell, which already has
-    // PATH set up — no need to resolve rly to an absolute path here.
-    let script = "tell application \"Terminal\"\n\
-                  activate\n\
-                  do script \"rly install gui; echo; \
-                  echo '── Install finished. Quit Relay (⌘Q) and relaunch from /Applications. ──'; \
-                  read -n 1 -s -r -p 'Press any key to close…'\"\n\
-                  end tell";
+    // Resolve the same `rly` invocation the rest of the GUI uses so a
+    // user with `agent_binaries.rly` pinned (or `RELAY_BIN` set) gets a
+    // consistent install path — without this we'd check version A
+    // through the resolver and install version B through the user's
+    // login-shell PATH. Falls back to a plain `rly` if resolution fails
+    // (resolution returns `Shim("rly")` in that case via the existing
+    // helper, which is what we'd have run anyway).
+    let settings = data::load_gui_settings();
+    let invocation = resolve_rly_invocation(&settings);
+    let install_cmd = match invocation {
+        RlyInvocation::Direct { node, mjs } => {
+            // Reject paths that contain double quotes or backslashes.
+            // We embed them verbatim into a `do script "..."`; an
+            // attacker-controlled `agent_binaries.rly` value with a
+            // quote would otherwise close the AppleScript string and
+            // run arbitrary script. Sane filesystem paths never have
+            // these characters.
+            if node.contains('"') || node.contains('\\') || mjs.contains('"') || mjs.contains('\\')
+            {
+                return Err(
+                    "resolved rly path contains unsafe characters; aborting install launch".into(),
+                );
+            }
+            format!("'{node}' '{mjs}' install gui")
+        }
+        RlyInvocation::Shim(path) => {
+            if path.contains('"') || path.contains('\\') {
+                return Err(
+                    "resolved rly path contains unsafe characters; aborting install launch".into(),
+                );
+            }
+            format!("'{path}' install gui")
+        }
+    };
+    // Use osascript to open Terminal.app and run the resolved install
+    // command. The trailing `read` keeps the window open after the
+    // install finishes so the user can read any errors before it closes.
+    // We use single quotes for path quoting in the shell command (no
+    // expansion needed) and AppleScript double-quote-escapes the whole
+    // thing for `do script`.
+    let script = format!(
+        "tell application \"Terminal\"\n\
+         activate\n\
+         do script \"{install_cmd}; echo; \
+         echo '── Install finished. Quit Relay (⌘Q) and relaunch from /Applications. ──'; \
+         read -n 1 -s -r -p 'Press any key to close…'\"\n\
+         end tell"
+    );
     let output = Command::new("osascript")
-        .args(["-e", script])
+        .args(["-e", &script])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
