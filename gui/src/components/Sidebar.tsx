@@ -9,8 +9,11 @@ type Props = {
   selectedId: string | null;
   includeArchived: boolean;
   sessionCounts: Record<string, number>;
-  runningStreams: number;
+  /** Channel currently streaming, or null if nothing is live. */
+  runningChannelId: string | null;
   onSelect: (id: string) => void;
+  /** Click handler for the Running QuickAction — jumps to the streaming channel. */
+  onJumpToRunning: () => void;
   onNewChannel: (sectionId?: string | null) => void;
   onNewDm: () => void;
   onToggleIncludeArchived: (next: boolean) => void;
@@ -36,8 +39,9 @@ export function Sidebar({
   selectedId,
   includeArchived,
   sessionCounts,
-  runningStreams,
+  runningChannelId,
   onSelect,
+  onJumpToRunning,
   onNewChannel,
   onNewDm,
   onToggleIncludeArchived,
@@ -195,7 +199,7 @@ export function Sidebar({
           <div className="ws-title">Relay</div>
           <div className="ws-sub">
             {workspaceCount} {workspaceCount === 1 ? "repo" : "repos"}
-            {runningStreams > 0 && ` · ${runningStreams} working`}
+            {runningChannelId !== null && ` · 1 working`}
           </div>
         </div>
       </div>
@@ -225,15 +229,9 @@ export function Sidebar({
         <QuickAction
           icon="▶"
           label="Running"
-          pulse={runningStreams > 0}
-          onClick={() => {
-            // "Running" is a one-at-a-time presence signal today; if a
-            // stream is live we stay on the current channel (no other ID
-            // to jump to) — but still highlight the row so the click
-            // feels acknowledged. When wired to multi-stream, this jumps
-            // to the running channel.
-          }}
-          disabled={runningStreams === 0}
+          pulse={runningChannelId !== null}
+          onClick={onJumpToRunning}
+          disabled={runningChannelId === null}
         />
       </div>
 

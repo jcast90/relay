@@ -30,7 +30,7 @@ type Props = {
   onToggleRail: () => void;
   onRefresh: () => void;
   onSessionCreated: (sessionId: string) => void;
-  onStreamingChanged?: (count: number) => void;
+  onStreamingChanged?: (streaming: boolean) => void;
   onChannelRemoved: (id: string) => void;
   /**
    * Spin-out bridge: called when the inline suggestion card in a
@@ -78,7 +78,7 @@ export function CenterPane({
   // sidebar is channel-agnostic — a background stream should still count.
   const hasLiveStream = !!stream && !stream.closed;
   useEffect(() => {
-    onStreamingChanged?.(hasLiveStream ? 1 : 0);
+    onStreamingChanged?.(hasLiveStream);
   }, [hasLiveStream, onStreamingChanged]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [promoteOpen, setPromoteOpen] = useState(false);

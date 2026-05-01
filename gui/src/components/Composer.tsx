@@ -189,7 +189,12 @@ export function Composer({
     const { alias, body } = parseAliasPrefix(raw, aliases);
     const target = alias ?? primaryAlias;
     setText("");
-    onOptimisticUserMessage?.(body, target || null);
+    // Display the *raw* text the user typed — `body` strips the leading
+    // @alias prefix, which was correct for backend routing but wrong
+    // for the chat bubble: the user sees their message reformatted (or
+    // disappear entirely if the message was just an @alias). Pass the
+    // routing target separately so the bubble can still tag the agent.
+    onOptimisticUserMessage?.(raw, target || null);
 
     setBusy(true);
     setError(null);

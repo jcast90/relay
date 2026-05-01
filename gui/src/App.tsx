@@ -33,7 +33,11 @@ export function App() {
     }
   });
   const [sessionCounts, setSessionCounts] = useState<Record<string, number>>({});
-  const [runningStreams, setRunningStreams] = useState<number>(0);
+  // Tracks the channel currently streaming, if any. The previous shape
+  // was just a count (0/1) — useful for the Sidebar pulse but the
+  // Running tab onClick had nowhere to navigate. Holding the channelId
+  // lets the click jump back to the streaming channel from anywhere.
+  const [runningChannelId, setRunningChannelId] = useState<string | null>(null);
   const [appearance] = useAppearance();
 
   // Stable identity so effects that depend on it (CenterPane's chat-event
@@ -140,8 +144,11 @@ export function App() {
               selectedId={selectedId}
               includeArchived={includeArchived}
               sessionCounts={sessionCounts}
-              runningStreams={runningStreams}
+              runningChannelId={runningChannelId}
               onSelect={(id) => selectChannel(id)}
+              onJumpToRunning={() => {
+                if (runningChannelId) selectChannel(runningChannelId);
+              }}
               onNewChannel={(sectionId) => {
                 setNewChannelSection(sectionId ?? null);
                 setModalOpen(true);
@@ -160,7 +167,11 @@ export function App() {
               onToggleRail={() => setRightRailOpen((v) => !v)}
               onRefresh={refresh}
               onSessionCreated={setSessionId}
-              onStreamingChanged={setRunningStreams}
+              onStreamingChanged={(streaming) => {
+                // Hold the streaming channel id, not just a count, so
+                // the Running tab can jump back to it from anywhere.
+                setRunningChannelId(streaming && selected ? selected.channelId : null);
+              }}
               onChannelRemoved={(id) => {
                 if (selectedId === id) selectChannel(null);
                 refresh();
