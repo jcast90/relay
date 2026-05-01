@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,9 +8,18 @@ pub mod tool_activity;
 
 // --- Workspace Registry ---
 
-#[derive(Debug, Deserialize)]
+/// On-disk shape of `~/.relay/workspace-registry.json`. The TS writer
+/// (`src/cli/workspace-registry.ts`) tracks `updatedAt` plus per-entry
+/// timestamps; mirroring those fields here lets `register_workspace`
+/// preserve them across read-modify-write cycles instead of dropping
+/// them every time the GUI registers a new repo.
+#[derive(Debug, Deserialize, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkspaceRegistry {
+    #[serde(default)]
     pub workspaces: Vec<WorkspaceEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -17,6 +27,12 @@ pub struct WorkspaceRegistry {
 pub struct WorkspaceEntry {
     pub workspace_id: String,
     pub repo_path: String,
+    /// Set by the TS `register` writer; deserialized here only so we
+    /// don't clobber it during a Rust-side register round-trip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registered_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_accessed_at: Option<String>,
 }
 
 // --- Runs Index ---
@@ -685,6 +701,8 @@ fn discover_repos_in(dir: &Path) -> Vec<WorkspaceEntry> {
             repos.push(WorkspaceEntry {
                 workspace_id: format!("discovered:{}", name),
                 repo_path,
+                registered_at: None,
+                last_accessed_at: None,
             });
         }
     }
@@ -721,6 +739,84 @@ pub fn load_workspaces() -> Vec<WorkspaceEntry> {
 
     workspaces.sort_by(|a, b| a.repo_path.cmp(&b.repo_path));
     workspaces
+}
+
+/// Compute the canonical workspace_id for a repo path. Mirrors the TS
+/// `buildWorkspaceId` exactly — `<basename>-<sha256(repoPath)[..12]>` —
+/// so the Rust-side register and the TS-side register produce identical
+/// IDs for the same path. Diverging here would create duplicate
+/// registry entries pointing at the same repo.
+pub fn build_workspace_id(repo_path: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(repo_path.as_bytes());
+    let hash = hex_lower(&hasher.finalize()[..6]);
+    let basename = repo_path
+        .rsplit('/')
+        .find(|s| !s.is_empty())
+        .unwrap_or("workspace");
+    format!("{basename}-{hash}")
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push_str(&format!("{:02x}", b));
+    }
+    out
+}
+
+/// Register a repo as a real workspace, writing `workspace-registry.json`
+/// atomically. If the path is already registered, refreshes
+/// `lastAccessedAt` and returns the existing entry; otherwise appends a
+/// new entry with both timestamps set to "now". Returns the entry's
+/// canonical `workspace_id` either way.
+///
+/// Used by the GUI's attach flow to upgrade `discovered:<name>` repo
+/// pickers — which produce IDs that fail downstream char-set validation
+/// — into properly registered workspaces with stable IDs. Without this,
+/// a user attaching a repo Relay scanned from `projectDirs` would see
+/// "1 unrepresentable repo(s) skipped".
+pub fn register_workspace(repo_path: &str) -> Result<WorkspaceEntry, String> {
+    let path = harness_root().join("workspace-registry.json");
+    let mut registry = load_json::<WorkspaceRegistry>(&path).unwrap_or_default();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    if let Some(existing) = registry
+        .workspaces
+        .iter_mut()
+        .find(|w| w.repo_path == repo_path)
+    {
+        existing.last_accessed_at = Some(now.clone());
+        registry.updated_at = Some(now);
+        let cloned = existing.clone();
+        write_workspace_registry(&path, &registry)?;
+        return Ok(cloned);
+    }
+
+    let entry = WorkspaceEntry {
+        workspace_id: build_workspace_id(repo_path),
+        repo_path: repo_path.to_string(),
+        registered_at: Some(now.clone()),
+        last_accessed_at: Some(now.clone()),
+    };
+    registry.workspaces.push(entry.clone());
+    registry.updated_at = Some(now);
+    write_workspace_registry(&path, &registry)?;
+    Ok(entry)
+}
+
+fn write_workspace_registry(path: &Path, registry: &WorkspaceRegistry) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let content = serde_json::to_string_pretty(registry).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, &content).map_err(|e| e.to_string())?;
+    if let Err(e) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e.to_string());
+    }
+    Ok(())
 }
 
 pub fn load_agent_names() -> Vec<AgentNameEntry> {
@@ -2241,5 +2337,52 @@ mod tests {
         assert_eq!(reloaded.len(), 1);
         assert_eq!(reloaded[0].id, "apv-1");
         assert_eq!(reloaded[0].status, "approved");
+    }
+
+    // --- register_workspace --------------------------------------------------
+
+    #[test]
+    fn build_workspace_id_matches_ts_format() {
+        // The TS `buildWorkspaceId` is `<basename>-<sha256(repoPath)[..12]>`.
+        // We reproduce the format exactly so cross-language registers
+        // produce identical IDs for the same path.
+        let id = build_workspace_id("/Users/jonathan/projects/venture-template");
+        assert!(id.starts_with("venture-template-"));
+        let suffix = &id["venture-template-".len()..];
+        assert_eq!(suffix.len(), 12);
+        assert!(suffix.chars().all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()));
+    }
+
+    #[test]
+    fn register_workspace_appends_new_repo() {
+        let _root = scoped_root();
+        let entry = register_workspace("/tmp/freshly-attached").expect("register ok");
+        assert_eq!(entry.workspace_id, build_workspace_id("/tmp/freshly-attached"));
+        assert!(entry.registered_at.is_some());
+        assert!(entry.last_accessed_at.is_some());
+
+        let registry: WorkspaceRegistry = serde_json::from_str(
+            &fs::read_to_string(harness_root().join("workspace-registry.json")).expect("read"),
+        )
+        .expect("parse");
+        assert_eq!(registry.workspaces.len(), 1);
+        assert_eq!(registry.workspaces[0].repo_path, "/tmp/freshly-attached");
+    }
+
+    #[test]
+    fn register_workspace_refreshes_existing_entry() {
+        let _root = scoped_root();
+        let first = register_workspace("/tmp/already-here").expect("first ok");
+        // Second register must not duplicate; should bump lastAccessedAt
+        // but keep the original registeredAt + workspace_id.
+        let second = register_workspace("/tmp/already-here").expect("second ok");
+        assert_eq!(first.workspace_id, second.workspace_id);
+        assert_eq!(first.registered_at, second.registered_at);
+
+        let registry: WorkspaceRegistry = serde_json::from_str(
+            &fs::read_to_string(harness_root().join("workspace-registry.json")).expect("read"),
+        )
+        .expect("parse");
+        assert_eq!(registry.workspaces.len(), 1);
     }
 }

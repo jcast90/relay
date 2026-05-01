@@ -41,15 +41,56 @@ fn validate_id_segment<'a>(value: &'a str, field: &str) -> Result<&'a str, Strin
     Ok(value)
 }
 
+/// Resolve `discovered:<name>` workspace IDs to real registered ones.
+///
+/// `data::load_workspaces` synthesises entries for repos found under
+/// `projectDirs` with IDs like `discovered:venture-template`. Those
+/// don't satisfy the `[A-Za-z0-9._-]` rule below, and the colon also
+/// breaks the `--repos a:b:c` CLI encoding. When the user picks a
+/// discovered repo to attach, we register it as a real workspace
+/// (writing `~/.relay/workspace-registry.json`) and substitute the
+/// canonical `<basename>-<sha256[..12]>` ID before validation runs.
+///
+/// Failures here aren't fatal — we leave the original ID in place so
+/// `sanitize_repos` produces the same "unrepresentable" diagnostic the
+/// user would have seen pre-fix, just with a registry-write error
+/// printed to stderr for the next pair of eyes.
+fn auto_register_discovered(repos: &mut [RepoAssignmentInput]) {
+    for r in repos.iter_mut() {
+        if !r.workspace_id.starts_with("discovered:") {
+            continue;
+        }
+        if r.repo_path.is_empty() {
+            continue;
+        }
+        match data::register_workspace(&r.repo_path) {
+            Ok(entry) => {
+                r.workspace_id = entry.workspace_id;
+            }
+            Err(err) => {
+                eprintln!(
+                    "[gui] auto-register failed for repoPath='{}': {} — leaving original workspaceId='{}'",
+                    r.repo_path, err, r.workspace_id
+                );
+            }
+        }
+    }
+}
+
 /// Filter a `repos` payload to only the assignments whose alias +
 /// workspaceId can round-trip through the `--repos a:b:c` CLI encoding.
 /// Returns the kept list plus a list of dropped aliases so the caller
 /// can surface a "N repos skipped" hint to the UI — previously we
 /// ate the drops with a bare `eprintln!`, which code review flagged
 /// as a silent narrowing of the request.
+///
+/// Discovered-workspace inputs are upgraded in-place by
+/// `auto_register_discovered` before this runs, so a `projectDirs`
+/// scan no longer trips on the colon in `discovered:<name>`.
 fn sanitize_repos(
-    repos: Vec<RepoAssignmentInput>,
+    mut repos: Vec<RepoAssignmentInput>,
 ) -> (Vec<RepoAssignmentInput>, Vec<String>) {
+    auto_register_discovered(&mut repos);
     let mut kept = Vec::new();
     let mut dropped = Vec::new();
     for r in repos.into_iter() {
