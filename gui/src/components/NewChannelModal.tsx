@@ -12,7 +12,15 @@ const CREATE_SECTION_SENTINEL = "__create__";
 type Props = {
   open: boolean;
   onClose: () => void;
-  onCreated: (channelId: string) => void;
+  /**
+   * Fired after the channel is created. When the user provided a
+   * kickoff message, `kickoffSessionId` is the id of the session the
+   * modal already created and started a chat against — the parent
+   * must promote it to the active session so the chat stream renders
+   * and the user's next message continues that session instead of
+   * spawning a fresh one. `null` when no kickoff was sent.
+   */
+  onCreated: (channelId: string, kickoffSessionId: string | null) => void;
   /**
    * Section id to preselect on the first step. Usually the section the
    * user had visible in the sidebar when they clicked +; null = None /
@@ -213,6 +221,7 @@ export function NewChannelModal({
       }
 
       const kickoff = firstMessage.trim();
+      let kickoffSessionId: string | null = null;
       if (kickoff) {
         const primary = sel.find((r) => r.workspaceId === primaryWorkspaceId);
         try {
@@ -225,6 +234,12 @@ export function NewChannelModal({
             cwd: primary?.repoPath,
             autoApprove: true,
           });
+          // Hand the session id up so App.tsx promotes it to the active
+          // sessionId. Without this, CenterPane's chat-event subscription
+          // (filtered by sessionId) silently drops the kickoff response,
+          // and Composer creates a fresh session on the user's next reply
+          // because its `if (!sessionId)` branch fires.
+          kickoffSessionId = session.sessionId;
         } catch (err) {
           warnings.push(`Channel created but kickoff failed: ${err}. Send your message manually.`);
         }
@@ -234,11 +249,11 @@ export function NewChannelModal({
         setSpawnWarning(warnings.join(" · "));
         // Keep the modal open so the user can see the warning; they can close
         // manually via the × after reading it.
-        onCreated(result.channelId);
+        onCreated(result.channelId, kickoffSessionId);
         return;
       }
 
-      onCreated(result.channelId);
+      onCreated(result.channelId, kickoffSessionId);
       onClose();
     } catch (err) {
       setError(String(err));

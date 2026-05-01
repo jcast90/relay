@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { maybeSeedFirstRun } from "./lib/firstRun";
 import { useAppearance } from "./lib/appearance";
@@ -103,8 +103,21 @@ export function App() {
       .catch(() => setSessionCounts({}));
   }, [refreshTick]);
 
+  // The kickoff session created by NewChannelModal needs to survive the
+  // selectedId-change effect below (which would otherwise clobber it back
+  // to null). The modal's onCreated handler stashes the new session id
+  // here before calling setSelectedId; this effect promotes it to active
+  // sessionId and clears the ref. Any other selectedId change resets to
+  // "no active session" so CenterPane loads the right channel history.
+  const pendingKickoffSessionId = useRef<string | null>(null);
+
   useEffect(() => {
-    setSessionId(null);
+    if (pendingKickoffSessionId.current) {
+      setSessionId(pendingKickoffSessionId.current);
+      pendingKickoffSessionId.current = null;
+    } else {
+      setSessionId(null);
+    }
   }, [selectedId]);
 
   const selected = channels.find((c) => c.channelId === selectedId) ?? null;
@@ -180,7 +193,15 @@ export function App() {
             setModalOpen(false);
             setNewChannelKickoff("");
           }}
-          onCreated={(id) => {
+          onCreated={(id, kickoffSessionId) => {
+            if (kickoffSessionId) {
+              // Stash before setSelectedId so the selectedId-change effect
+              // promotes it to active session in the same render. Without
+              // this, the effect resets sessionId to null and CenterPane's
+              // stream subscription drops the kickoff response, while
+              // Composer treats the user's reply as a fresh session.
+              pendingKickoffSessionId.current = kickoffSessionId;
+            }
             setSelectedId(id);
             setNewChannelKickoff("");
             refresh();
