@@ -68,3 +68,82 @@ describe("NewChannelModal — Create new section sentinel", () => {
     });
   });
 });
+
+describe("NewChannelModal — kickoff session plumbing", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Provide a workspace so the user can advance past step 2.
+    (api.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { workspaceId: "ws-1", repoPath: "/tmp/repo-one" },
+    ]);
+    // listSections needs to resolve at least once for the modal to mount;
+    // share the same fixture across calls so reopening the modal works.
+    (api.listSections as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+  });
+
+  /** Drive the modal through steps 1+2 and return when the kickoff field is mounted. */
+  async function advanceToStep3(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(screen.getByPlaceholderText(/oauth-api-users/i), "test-channel");
+    await user.click(screen.getByRole("button", { name: /next/i }));
+    // Step 2: pick the workspace, mark primary.
+    await user.click(await screen.findByRole("checkbox"));
+    await user.click(screen.getByRole("radio"));
+    await user.click(screen.getByRole("button", { name: /next/i }));
+  }
+
+  it("passes the kickoff session id to onCreated when a first message is provided", async () => {
+    const user = userEvent.setup();
+    const onCreated = vi.fn();
+    (api.createChannel as ReturnType<typeof vi.fn>).mockResolvedValue({ channelId: "ch-42" });
+    (api.spawnAgent as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    (api.createSession as ReturnType<typeof vi.fn>).mockResolvedValue({ sessionId: "sess-99" });
+    (api.startChat as ReturnType<typeof vi.fn>).mockResolvedValue({});
+
+    render(<NewChannelModal open onClose={vi.fn()} onCreated={onCreated} />);
+    await waitFor(() => expect(api.listSections).toHaveBeenCalled());
+    await advanceToStep3(user);
+
+    await user.type(
+      screen.getByRole("textbox", { name: /first message/i }),
+      "investigate something"
+    );
+    await user.click(screen.getByRole("button", { name: /create & post/i }));
+
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith("ch-42", "sess-99"));
+  });
+
+  it("passes null kickoffSessionId when the first message is empty", async () => {
+    const user = userEvent.setup();
+    const onCreated = vi.fn();
+    (api.createChannel as ReturnType<typeof vi.fn>).mockResolvedValue({ channelId: "ch-43" });
+    (api.spawnAgent as ReturnType<typeof vi.fn>).mockResolvedValue({});
+
+    render(<NewChannelModal open onClose={vi.fn()} onCreated={onCreated} />);
+    await waitFor(() => expect(api.listSections).toHaveBeenCalled());
+    await advanceToStep3(user);
+
+    // No first-message text — submit straight away.
+    await user.click(screen.getByRole("button", { name: /create & post/i }));
+
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith("ch-43", null));
+    expect(api.createSession).not.toHaveBeenCalled();
+    expect(api.startChat).not.toHaveBeenCalled();
+  });
+
+  it("passes null when the kickoff createSession throws so the warning path doesn't promise a session that never started", async () => {
+    const user = userEvent.setup();
+    const onCreated = vi.fn();
+    (api.createChannel as ReturnType<typeof vi.fn>).mockResolvedValue({ channelId: "ch-44" });
+    (api.spawnAgent as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    (api.createSession as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("boom"));
+
+    render(<NewChannelModal open onClose={vi.fn()} onCreated={onCreated} />);
+    await waitFor(() => expect(api.listSections).toHaveBeenCalled());
+    await advanceToStep3(user);
+
+    await user.type(screen.getByRole("textbox", { name: /first message/i }), "this will fail");
+    await user.click(screen.getByRole("button", { name: /create & post/i }));
+
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith("ch-44", null));
+  });
+});

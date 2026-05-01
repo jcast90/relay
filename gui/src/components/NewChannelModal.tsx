@@ -522,8 +522,17 @@ export function NewChannelModal({
               </button>
             )}
             {step === 3 && (
-              <button className="primary" onClick={submit} disabled={busy}>
-                {busy ? "Creating…" : "Create & post"}
+              <button
+                className="primary"
+                onClick={submit}
+                // Disable on busy AND on the warnings-path lock-out:
+                // once we've emitted onCreated for a channel, a second
+                // click would create a *second* channel + kickoff
+                // session and orphan the first one. The user must close
+                // the modal (the × dismiss) to start over.
+                disabled={busy || spawnWarning !== null}
+              >
+                {busy ? "Creating…" : spawnWarning ? "Created — close modal" : "Create & post"}
               </button>
             )}
           </div>
