@@ -63,6 +63,15 @@ fn auto_register_discovered(repos: &mut [RepoAssignmentInput]) {
         if r.repo_path.is_empty() {
             continue;
         }
+        // Skip the registry write entirely when the repo is already
+        // registered — every channel save passes the assignment list,
+        // and we don't need to re-stamp `lastAccessedAt` on each one.
+        // Just self-heal the in-flight `discovered:` ID to the canonical
+        // form so downstream validation passes.
+        if let Some(existing) = data::find_workspace_by_path(&r.repo_path) {
+            r.workspace_id = existing.workspace_id;
+            continue;
+        }
         match data::register_workspace(&r.repo_path) {
             Ok(entry) => {
                 r.workspace_id = entry.workspace_id;

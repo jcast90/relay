@@ -765,18 +765,45 @@ fn hex_lower(bytes: &[u8]) -> String {
     out
 }
 
+/// Look up an existing workspace by `repo_path` without writing.
+/// Returns `Some(entry)` when registered, `None` otherwise. Used by
+/// `auto_register_discovered` to skip the disk write on every channel
+/// save when the repo is already in the registry — the previous design
+/// re-wrote the registry (refreshing `lastAccessedAt`) on every attach
+/// payload that mentioned the path, which churned disk on routine
+/// channel saves.
+pub fn find_workspace_by_path(repo_path: &str) -> Option<WorkspaceEntry> {
+    let path = harness_root().join("workspace-registry.json");
+    let registry = load_json::<WorkspaceRegistry>(&path)?;
+    registry
+        .workspaces
+        .into_iter()
+        .find(|w| w.workspace_id == build_workspace_id(repo_path))
+}
+
 /// Register a repo as a real workspace, writing `workspace-registry.json`
-/// atomically. If the path is already registered, refreshes
-/// `lastAccessedAt` and returns the existing entry; otherwise appends a
-/// new entry with both timestamps set to "now". Returns the entry's
-/// canonical `workspace_id` either way.
+/// atomically. If the path is already registered (matched by canonical
+/// `workspace_id` to mirror the TS writer's key — paths can drift on
+/// trailing slash / case), refreshes `lastAccessedAt` and returns the
+/// existing entry; otherwise appends a new entry with both timestamps
+/// set to "now". Returns the entry's canonical `workspace_id` either way.
 ///
 /// Used by the GUI's attach flow to upgrade `discovered:<name>` repo
 /// pickers — which produce IDs that fail downstream char-set validation
 /// — into properly registered workspaces with stable IDs. Without this,
 /// a user attaching a repo Relay scanned from `projectDirs` would see
 /// "1 unrepresentable repo(s) skipped".
+///
+/// **Concurrency:** writes use temp+rename atomicity, so the file never
+/// goes through a torn state. But there is currently no cross-process
+/// lock between this Rust path and the TS `WorkspaceRegistry.write`
+/// (`src/cli/workspace-registry.ts`), so two concurrent registers
+/// (one CLI, one GUI) race on read-modify-write — last writer wins,
+/// possibly dropping one append. T-402's Postgres advisory lock will
+/// close this gap; for now the practical risk is low (registers happen
+/// at attach time, not in tight loops).
 pub fn register_workspace(repo_path: &str) -> Result<WorkspaceEntry, String> {
+    let canonical_id = build_workspace_id(repo_path);
     let path = harness_root().join("workspace-registry.json");
     let mut registry = load_json::<WorkspaceRegistry>(&path).unwrap_or_default();
     let now = chrono::Utc::now().to_rfc3339();
@@ -784,8 +811,13 @@ pub fn register_workspace(repo_path: &str) -> Result<WorkspaceEntry, String> {
     if let Some(existing) = registry
         .workspaces
         .iter_mut()
-        .find(|w| w.repo_path == repo_path)
+        .find(|w| w.workspace_id == canonical_id)
     {
+        // Track the latest known path on existing IDs so a path that
+        // moved on disk (rename, symlink relocation) updates rather
+        // than silently keeps the stale path. Mirrors the TS writer's
+        // `existing.repoPath = repoPath` line.
+        existing.repo_path = repo_path.to_string();
         existing.last_accessed_at = Some(now.clone());
         registry.updated_at = Some(now);
         let cloned = existing.clone();
@@ -794,7 +826,7 @@ pub fn register_workspace(repo_path: &str) -> Result<WorkspaceEntry, String> {
     }
 
     let entry = WorkspaceEntry {
-        workspace_id: build_workspace_id(repo_path),
+        workspace_id: canonical_id,
         repo_path: repo_path.to_string(),
         registered_at: Some(now.clone()),
         last_accessed_at: Some(now.clone()),
@@ -805,12 +837,23 @@ pub fn register_workspace(repo_path: &str) -> Result<WorkspaceEntry, String> {
     Ok(entry)
 }
 
+/// Atomic-write the registry. Tmp filename includes pid + a per-process
+/// counter so two concurrent in-process `register_workspace` calls don't
+/// collide on `workspace-registry.json.tmp` and clobber each other's
+/// half-written file before rename.
 fn write_workspace_registry(path: &Path, registry: &WorkspaceRegistry) -> Result<(), String> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static TMP_COUNTER: AtomicU32 = AtomicU32::new(0);
+
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let content = serde_json::to_string_pretty(registry).map_err(|e| e.to_string())?;
-    let tmp = path.with_extension("json.tmp");
+    let counter = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let tmp = path.with_file_name(format!(
+        "workspace-registry.json.{pid}.{counter}.tmp"
+    ));
     fs::write(&tmp, &content).map_err(|e| e.to_string())?;
     if let Err(e) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
@@ -2342,15 +2385,22 @@ mod tests {
     // --- register_workspace --------------------------------------------------
 
     #[test]
-    fn build_workspace_id_matches_ts_format() {
-        // The TS `buildWorkspaceId` is `<basename>-<sha256(repoPath)[..12]>`.
-        // We reproduce the format exactly so cross-language registers
-        // produce identical IDs for the same path.
-        let id = build_workspace_id("/Users/jonathan/projects/venture-template");
-        assert!(id.starts_with("venture-template-"));
-        let suffix = &id["venture-template-".len()..];
-        assert_eq!(suffix.len(), 12);
-        assert!(suffix.chars().all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()));
+    fn build_workspace_id_matches_ts_byte_for_byte() {
+        // Pin exact-vector assertions so a future serde / hash change
+        // can't silently break round-trip with the TS writer. Reproduce
+        // by running:
+        //   printf '%s' '<path>' | shasum -a 256 | cut -c1-12
+        // or equivalently:
+        //   node -e "console.log(require('crypto').createHash('sha256')\
+        //     .update('<path>').digest('hex').slice(0,12))"
+        assert_eq!(
+            build_workspace_id("/Users/jonathan/projects/venture-template"),
+            "venture-template-1771bfee3695"
+        );
+        assert_eq!(
+            build_workspace_id("/tmp/freshly-attached"),
+            "freshly-attached-b75e1b1c40e3"
+        );
     }
 
     #[test]
