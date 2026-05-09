@@ -5,12 +5,12 @@
 <h1 align="center">Relay</h1>
 
 <p align="center">
-  <b>Slack for your coding agents.</b><br/>
-  Coordinate coding agents across repos — with an audit trail.
+  <b>Agent harnesses assume your work lives in one repo. It doesn't.</b><br/>
+  Relay lets one agent talk to agents in your other repos — delegate, coordinate, spin up sub-teams — across every codebase you own.
 </p>
 
 <p align="center">
-  Runs inside your existing Claude or Codex CLI via MCP. Local-first, self-hosted, all state in <code>~/.relay/</code> on your machine. No hosted service, no telemetry.
+  <b>Works natively with <a href="https://github.com/cmux-dev/cmux">cmux</a>.</b> Runs inside your existing Claude or Codex CLI via MCP. Local-first, self-hosted, all state in <code>~/.relay/</code> on your machine. No hosted service, no telemetry.
 </p>
 
 <p align="center">
@@ -32,13 +32,13 @@
 
 ## What makes Relay different
 
-The agent-harness space is crowded, but most tools solve only **one** of: running agents in parallel, orchestrating a single repo, or wrapping everything in a chat UI. Relay is built for the work that needs all three — with first-class cross-repo coordination on top.
+Most agent harnesses assume the work lives in one repo. Real product surfaces don't — UI, backend, ML, infra, SDKs each sit in their own codebase. Relay is built around that shape: one orchestrator agent you talk to, reaching into every repo you own, delegating down a tree.
 
-- 🗣 **Agents talk to each other — not just run side-by-side.** Sessions in different repos discover each other through MCP crosslink tools. A live agent in the `backend` repo can ask the live agent in the `web` repo a question instead of grepping its files. Parallel agent runners don't do this; Relay does.
-- 📋 **One ticket board spans many repos.** Tickets carry a dependency DAG and `assignedAlias` routing — a feature touching 3 repos is one plan with 3 ticket streams, not 3 uncorrelated sessions. Single-repo orchestrators can't express this.
-- 💬 **Every decision is logged with rationale + alternatives.** Like Slack threads, but for architectural choices. Step away for 4 hours, come back to an audit trail — who chose what, why, and what else was considered. Most harnesses don't persist anything beyond the raw transcript.
-- 🎛 **Three dashboards, one source of truth — no cloud.** CLI (`rly`), ratatui TUI, and Tauri desktop GUI all read the same `~/.relay/` files. No sync layer, no split brain, no hosted service, no telemetry. Rare in AI tooling, required in regulated environments.
+- 🌳 **Cross-repo agent-to-agent delegation.** You talk to one orchestrator. It reaches into your other repos and delegates to live agents there, who can spin up their own sub-teams. A request like "ship OAuth across UI, backend, and the SDK" fans out as a delegation tree — orchestrator → repo agents → sub-agents — not three uncorrelated chat sessions you babysit. Sessions in different repos discover each other through MCP crosslink tools and exchange messages directly. Parallel agent runners and single-repo orchestrators don't do this; Relay does.
+- 📋 **One ticket board spans many repos.** Tickets carry a dependency DAG and `assignedAlias` routing — a feature touching 3 repos is one plan with 3 ticket streams, scheduled in order, not 3 disconnected runs. Single-repo orchestrators can't express this.
+- 💬 **An audit trail falls out of the coordination.** Because every cross-repo decision is routed through Relay, you get rationale + alternatives recorded automatically — who chose what, why, what else was considered. Step away for 4 hours, come back to a log that reads like Slack threads for architectural choices. Most harnesses don't persist anything beyond the raw transcript.
 - 🗂 **GitHub Projects v2 integration (v0.2).** Channels project to a GH Projects v2 board automatically — channels become epics, tickets become draft items, with `Type` / `Status` / `Priority` custom fields kept in sync. Relay stays authoritative; drift detected on the GitHub side is logged to the channel feed and overwritten. Paste a Projects item URL into chat and the classifier resolves the project + epic + creates the ticket. See [`docs/trackers.md`](./docs/trackers.md).
+- 🎛 **Three dashboards, one source of truth — no cloud.** CLI (`rly`), ratatui TUI, and Tauri desktop GUI all read the same `~/.relay/` files. No sync layer, no split brain, no hosted service, no telemetry. The chat feed is Slack-shaped, but the GUI is a window onto the delegation tree, not the headline.
 
 ## What Relay is
 
