@@ -375,7 +375,7 @@ Exposed to Claude and Codex via the Relay MCP server:
 
 **Harness (9)**: `harness_status`, `harness_list_runs`, `harness_get_run_detail`, `harness_get_artifact`, `harness_approve_plan`, `harness_reject_plan`, `harness_dispatch`, `project_create`, `pr_review_start`
 
-**Channels (6)**: `channel_create`, `channel_get`, `channel_post`, `channel_record_decision`, `channel_task_board`, `harness_running_tasks`
+**Channels (7)**: `channel_create`, `channel_get`, `channel_post`, `channel_record_decision`, `channel_task_board`, `channel_handoff_finalize`, `harness_running_tasks`
 
 **Crosslink (3)**: `crosslink_discover`, `crosslink_send`, `crosslink_poll`
 

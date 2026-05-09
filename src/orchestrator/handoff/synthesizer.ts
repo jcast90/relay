@@ -31,6 +31,7 @@ import {
   validateTicketDag,
 } from "../../domain/ticket.js";
 import { getFilesTouchedByTicket } from "./files-touched.js";
+import { readLatestGapFill } from "./persistence.js";
 import { estimateTokens } from "./token-estimate.js";
 import {
   BRIEF_TOKEN_BUDGETS,
@@ -65,6 +66,17 @@ export async function buildBrief(options: BuildBriefOptions): Promise<HandoffBri
 
   const briefId = buildBriefId(channelId, now);
 
+  // Resolve the gap-fill: if the caller passed one explicitly we honor it
+  // (including `null`, which opts out of disk lookup); otherwise auto-load
+  // the newest non-stale `<briefId>.gap.json` from
+  // `~/.relay/channels/<id>/handoffs/`. PR-2 wires this so a gap written
+  // via `channel_handoff_finalize` flows into the next brief without the
+  // caller threading it through. Stale records (>1h) and any record with
+  // `schemaVersion !== 1` are filtered by `readLatestGapFill` itself
+  // (M9 fail-closed).
+  const gapFill =
+    options.gapFill !== undefined ? options.gapFill : await readLatestGapFill(channelId, { now });
+
   // Build each section. Truncation is per-section, newest-first
   // preservation, with `truncated = true` set when oldest items are
   // dropped to fit the budget.
@@ -80,7 +92,7 @@ export async function buildBrief(options: BuildBriefOptions): Promise<HandoffBri
     budget.filesTouched,
     gitLogEnabled
   );
-  const workingMemory = renderWorkingMemory(options.gapFill ?? null, now, budget.workingMemory);
+  const workingMemory = renderWorkingMemory(gapFill ?? null, now, budget.workingMemory);
 
   const tokenEstimate =
     statusSnapshot.estimatedTokens +
