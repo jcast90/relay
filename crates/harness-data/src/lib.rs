@@ -619,11 +619,35 @@ pub struct CrosslinkSession {
     pub ready_kind: Option<String>,
 }
 
-/// Phase 3 stub — Wave 3 lands the real reader body + serde fixture tests.
-/// Skeleton return keeps Wave 1 `cargo check` green while every TS-side
-/// test scaffold lands compile-clean.
+/// Read every crosslink-session record from
+/// `~/.relay/crosslink-session/` (the current `STORE_NS.crosslinkSession`
+/// namespace path — NOT the legacy `~/.relay/crosslink/sessions/` that
+/// the GUI's `try_sigterm_matching_session` still reads, which is a
+/// separate pre-existing bug out of scope for Phase 3).
+///
+/// Silently skips unreadable directories, non-`.json` files, and rows
+/// that fail to deserialize — matches the resilience pattern used by
+/// the other `load_*` readers in this crate. One malformed file does
+/// not poison the whole list.
 pub fn load_crosslink_sessions() -> Vec<CrosslinkSession> {
-    Vec::new()
+    let dir = harness_root().join("crosslink-session");
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if let Ok(session) = serde_json::from_str::<CrosslinkSession>(&raw) {
+            out.push(session);
+        }
+    }
+    out
 }
 
 // --- GUI Settings ---
@@ -2483,5 +2507,99 @@ mod tests {
         )
         .expect("parse");
         assert_eq!(registry.workspaces.len(), 1);
+    }
+
+    // --- Phase 3: CrosslinkSession serde + load_crosslink_sessions -----------
+
+    #[test]
+    fn crosslink_session_round_trip_with_readiness() {
+        let json = r#"{
+            "sessionId": "session-test",
+            "pid": 1234,
+            "repoPath": "/tmp/repo",
+            "description": "Phase 3 round-trip",
+            "capabilities": ["general"],
+            "agentProvider": "claude",
+            "registeredAt": "2026-05-09T10:00:00Z",
+            "lastHeartbeat": "2026-05-09T10:00:30Z",
+            "status": "active",
+            "readyAt": "2026-05-09T10:00:15Z",
+            "readyKind": "admin"
+        }"#;
+        let session: CrosslinkSession = serde_json::from_str(json).expect("parse");
+        assert_eq!(session.session_id, "session-test");
+        assert_eq!(session.pid, 1234);
+        assert_eq!(session.repo_path, "/tmp/repo");
+        assert_eq!(session.agent_provider, "claude");
+        assert_eq!(session.last_heartbeat, "2026-05-09T10:00:30Z");
+        assert_eq!(session.ready_at.as_deref(), Some("2026-05-09T10:00:15Z"));
+        assert_eq!(session.ready_kind.as_deref(), Some("admin"));
+    }
+
+    #[test]
+    fn crosslink_session_back_compat_no_readiness_fields() {
+        // Pre-Phase-3 session.json — readyAt / readyKind absent. Must
+        // deserialize cleanly with both fields None so dashboards can
+        // load existing sessions without churn after the upgrade.
+        let json = r#"{
+            "sessionId": "session-old",
+            "pid": 4321,
+            "repoPath": "/tmp/repo",
+            "description": "back-compat",
+            "capabilities": [],
+            "agentProvider": "claude",
+            "registeredAt": "2026-04-01T10:00:00Z",
+            "lastHeartbeat": "2026-04-01T10:00:30Z",
+            "status": "active"
+        }"#;
+        let session: CrosslinkSession = serde_json::from_str(json).expect("parse");
+        assert_eq!(session.session_id, "session-old");
+        assert_eq!(session.ready_at, None);
+        assert_eq!(session.ready_kind, None);
+    }
+
+    #[test]
+    fn load_crosslink_sessions_returns_valid_rows_skips_malformed() {
+        let _root = scoped_root();
+        let dir = harness_root().join("crosslink-session");
+        fs::create_dir_all(&dir).expect("mkdir");
+
+        // One valid session with readiness populated.
+        fs::write(
+            dir.join("session-good.json"),
+            r#"{
+                "sessionId": "session-good",
+                "pid": 100,
+                "repoPath": "/tmp/repo",
+                "description": "valid",
+                "capabilities": ["general"],
+                "agentProvider": "claude",
+                "registeredAt": "2026-05-09T10:00:00Z",
+                "lastHeartbeat": "2026-05-09T10:00:30Z",
+                "status": "active",
+                "readyAt": "2026-05-09T10:00:15Z",
+                "readyKind": "admin"
+            }"#,
+        )
+        .expect("write good");
+
+        // One malformed file — must be silently skipped, not poison the list.
+        fs::write(dir.join("session-bad.json"), "{ not json }").expect("write bad");
+
+        // Non-`.json` extension — also skipped.
+        fs::write(dir.join("README.md"), "ignored").expect("write readme");
+
+        let sessions = load_crosslink_sessions();
+        assert_eq!(sessions.len(), 1, "only the well-formed session loads");
+        assert_eq!(sessions[0].session_id, "session-good");
+        assert_eq!(sessions[0].ready_at.as_deref(), Some("2026-05-09T10:00:15Z"));
+    }
+
+    #[test]
+    fn load_crosslink_sessions_returns_empty_when_dir_missing() {
+        let _root = scoped_root();
+        // Don't create the crosslink-session dir at all.
+        let sessions = load_crosslink_sessions();
+        assert!(sessions.is_empty());
     }
 }
