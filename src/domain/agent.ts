@@ -65,6 +65,23 @@ export interface WorkRequest {
   priorEvidence: string[];
 }
 
+/**
+ * Per-call token usage extracted from a CLI adapter's streaming/buffered
+ * output. The shape is provider-agnostic: `inputTokens` already includes
+ * any cache-read / cache-write tokens (research Q3 — cache occupies the
+ * window). Cache breakdowns are surfaced separately for forensics.
+ *
+ * Populated by `cli-agents.ts` adapter parsing in Phase 1 PR-2 (Task 3);
+ * the type ships in PR-1 so RED tests + the orchestrator wiring (Task 4)
+ * can reference it without typecheck breaks.
+ */
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+}
+
 export interface AgentResult {
   summary: string;
   evidence: string[];
@@ -74,6 +91,8 @@ export interface AgentResult {
   phasePlan?: PhasePlan;
   ticketPlan?: TicketPlan;
   rawResponse?: string;
+  /** Provider token usage for this call, if the adapter extracted it. */
+  tokenUsage?: TokenUsage;
 }
 
 export interface Agent {
