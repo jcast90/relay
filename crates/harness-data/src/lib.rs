@@ -577,6 +577,55 @@ pub fn load_config() -> HarnessConfig {
     })
 }
 
+// --- Crosslink Sessions (Phase 3) ---
+//
+// Mirror of `src/crosslink/types.ts CrosslinkSessionSchema`. This is the
+// FIRST crosslink type to land in `harness-data`; Phase 4 (project
+// readiness surface) reads from `load_crosslink_sessions()` to render
+// alive-vs-ready state across TUI / GUI / SessionStart hook.
+//
+// Disk path: `~/.relay/crosslink-session/<sessionId>.json` — the current
+// `STORE_NS.crosslinkSession = "crosslink-session"` namespace. NOT the
+// legacy `~/.relay/crosslink/sessions/` path that the GUI's
+// `try_sigterm_matching_session` still reads (separate pre-existing bug).
+//
+// `ready_at` / `ready_kind` are populated only when a repo-admin agent
+// calls the `agent_ready` MCP tool at end-of-onboarding. Files written
+// before Phase 3 deserialize cleanly with both fields `None`
+// (`#[serde(default)]`). Wave 3 lands the real `load_crosslink_sessions`
+// body + serde fixture tests; Wave 1 ships the stub so other Wave 1
+// callers compile.
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CrosslinkSession {
+    pub session_id: String,
+    pub pid: u32,
+    pub repo_path: String,
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    pub agent_provider: String,
+    pub registered_at: String,
+    pub last_heartbeat: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ready_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ready_kind: Option<String>,
+}
+
+/// Phase 3 stub — Wave 3 lands the real reader body + serde fixture tests.
+/// Skeleton return keeps Wave 1 `cargo check` green while every TS-side
+/// test scaffold lands compile-clean.
+pub fn load_crosslink_sessions() -> Vec<CrosslinkSession> {
+    Vec::new()
+}
+
 // --- GUI Settings ---
 
 /// Ticketing provider selected on the global Settings page. `Unknown` is the

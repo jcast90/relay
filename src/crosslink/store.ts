@@ -13,6 +13,7 @@ import {
   type CrosslinkMessage,
   type MessageStatus,
   type MessageType,
+  type ReadyKind,
 } from "./types.js";
 
 const STALE_HEARTBEAT_MS = 120_000;
@@ -185,6 +186,17 @@ export class CrosslinkStore {
     session.lastHeartbeat = new Date().toISOString();
 
     await this.store.putDoc(STORE_NS.crosslinkSession, sessionId, session);
+  }
+
+  /**
+   * Phase 3 stub — Wave 2 lands the body. Skeleton export keeps Wave 1's
+   * test imports compile-clean while the test bodies remain RED.
+   */
+  async updateReadiness(
+    _sessionId: string,
+    _kind: ReadyKind = "admin"
+  ): Promise<{ readyAt: string; alreadyReady: boolean } | null> {
+    throw new Error("CrosslinkStore.updateReadiness — Wave 2 lands the body");
   }
 
   async deregisterSession(sessionId: string): Promise<void> {

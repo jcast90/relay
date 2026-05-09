@@ -4,6 +4,7 @@ import {
   REPO_ADMIN_ALLOWED_TOOLS,
   REPO_ADMIN_COORDINATION_POLICY_MARKER,
   REPO_ADMIN_MEMORY_POLICY_MARKER,
+  REPO_ADMIN_READINESS_MARKER,
   REPO_ADMIN_ROLE,
   REPO_ADMIN_SPECIALTY,
   REPO_ADMIN_TOOL_STUBS,
@@ -171,6 +172,15 @@ describe("repo-admin role — system prompt", () => {
     expect(prompt).toContain("blocked-on-repo");
     expect(prompt).toContain("repo-ready");
     expect(prompt).toContain("merge-order-proposal");
+  });
+
+  // Phase 3 — boot-readiness marker. Wave 1 ships only the constant; the
+  // system-prompt section that contains it lands in Wave 2 Task 4. Until
+  // then this test fails RED — which is the intent (drives Wave 2).
+  it("encodes the boot-readiness policy by substring match (Phase 3)", () => {
+    expect(prompt).toContain(REPO_ADMIN_READINESS_MARKER);
+    expect(prompt).toContain("alive but not ready");
+    expect(prompt).toMatch(/onboarding turn is complete/i);
   });
 
   it("tells repo-admin to propose work instead of reaching for denied tools", () => {

@@ -62,6 +62,20 @@ export const REPO_ADMIN_MEMORY_POLICY_MARKER =
  */
 export const REPO_ADMIN_COORDINATION_POLICY_MARKER = "use the typed `coordination_send` tool";
 
+/**
+ * Phase 3: marker substring that must appear in the system prompt so the
+ * boot-readiness guidance survives copy edits. Tests assert on this so a
+ * future edit that silently drops the readiness instruction trips CI
+ * rather than leaving repo-admins in the alive-but-not-ready state forever.
+ *
+ * The system-prompt section that contains this marker lands in Wave 2
+ * Task 4. Wave 1 only exports the constant so the marker test in
+ * `test/agents/repo-admin.test.ts` imports cleanly (and fails RED until
+ * the prompt section lands).
+ */
+export const REPO_ADMIN_READINESS_MARKER =
+  "call `agent_ready` exactly once when your onboarding turn is complete";
+
 export interface RepoAdminRoleInput {
   /** Absolute path to the repo the admin is foremanning. */
   repoPath: string;

@@ -23,6 +23,10 @@ export const SessionStatusSchema = z.enum(["active", "idle", "busy"]);
 
 export type SessionStatus = z.infer<typeof SessionStatusSchema>;
 
+export const ReadyKindSchema = z.enum(["admin", "worker"]);
+
+export type ReadyKind = z.infer<typeof ReadyKindSchema>;
+
 export const CrosslinkSessionSchema = z.object({
   sessionId: z.string(),
   pid: z.number(),
@@ -35,6 +39,8 @@ export const CrosslinkSessionSchema = z.object({
   registeredAt: z.string(),
   lastHeartbeat: z.string(),
   status: SessionStatusSchema,
+  readyAt: z.string().optional(),
+  readyKind: ReadyKindSchema.optional(),
 });
 
 export type CrosslinkSession = z.infer<typeof CrosslinkSessionSchema>;

@@ -369,3 +369,88 @@ describe("crosslink store warns on legacy layout", () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 });
+
+// Phase 3 — boot-readiness handshake. Wave 1 lands these as RED tests
+// (the `updateReadiness` method is a Wave-1 stub that throws). Wave 2
+// Task 2 ships the real body; these tests flip GREEN at that point.
+//
+// The first test ("starts in alive-but-not-ready state") will pass in
+// Wave 1 because it only exercises register + heartbeat — both are
+// untouched by readiness, so `readyAt` is naturally undefined. Acceptance
+// criterion `ROADMAP.md:83` is "an explicit alive-but-not-ready window
+// during onboarding (not just instantaneously transitioned at boot)" —
+// this test is its anchor.
+describe("CrosslinkStore.updateReadiness (Phase 3)", () => {
+  it("starts sessions in alive-but-not-ready state", async () => {
+    const root = await mkdtemp(join(tmpdir(), "crosslink-readiness-"));
+    const store = new CrosslinkStore(root);
+
+    try {
+      const session = await store.registerSession({
+        pid: process.pid,
+        repoPath: "/tmp/test-repo",
+        description: "Readiness boot test",
+        capabilities: ["general"],
+        agentProvider: "claude",
+        status: "active",
+      });
+
+      expect(session.readyAt).toBeUndefined();
+      expect(session.readyKind).toBeUndefined();
+      expect(session.lastHeartbeat).toBeDefined();
+
+      // Heartbeat alone does NOT flip readiness.
+      await store.updateHeartbeat(session.sessionId);
+      const sessions = await store.discoverSessions();
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0].readyAt).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("transitions to ready exactly once via updateReadiness", async () => {
+    const root = await mkdtemp(join(tmpdir(), "crosslink-readiness-"));
+    const store = new CrosslinkStore(root);
+
+    try {
+      const session = await store.registerSession({
+        pid: process.pid,
+        repoPath: "/tmp/test-repo",
+        description: "Readiness transition test",
+        capabilities: ["general"],
+        agentProvider: "claude",
+        status: "active",
+      });
+
+      const first = await store.updateReadiness(session.sessionId, "admin");
+      expect(first).not.toBeNull();
+      expect(first?.alreadyReady).toBe(false);
+      expect(first?.readyAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+      // Idempotent re-call returns the same readyAt with alreadyReady: true.
+      const second = await store.updateReadiness(session.sessionId, "admin");
+      expect(second).not.toBeNull();
+      expect(second?.alreadyReady).toBe(true);
+      expect(second?.readyAt).toBe(first?.readyAt);
+
+      const sessions = await store.discoverSessions();
+      expect(sessions[0].readyAt).toBe(first?.readyAt);
+      expect(sessions[0].readyKind).toBe("admin");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns null for unknown session ids", async () => {
+    const root = await mkdtemp(join(tmpdir(), "crosslink-readiness-"));
+    const store = new CrosslinkStore(root);
+
+    try {
+      const result = await store.updateReadiness("session-does-not-exist", "admin");
+      expect(result).toBeNull();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
