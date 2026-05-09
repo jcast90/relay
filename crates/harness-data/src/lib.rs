@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 pub mod tool_activity;
@@ -1491,6 +1492,159 @@ pub fn migrate_legacy_chat(channel_id: &str) {
     let _ = fs::remove_file(&legacy_path);
 }
 
+// --- SessionBudget (Phase 1: per-session token-usage telemetry) ------------
+//
+// Mirror of `src/domain/session-budget.ts`. Same-PR change discipline: any
+// shape change here MUST land alongside a matching TS change (and vice
+// versa). See `AGENTS.md` > "Cross-dashboard contract".
+//
+// On-disk layout: `~/.relay/sessions/<sessionId>/budget.jsonl` — one
+// JSON object per `record()` call, append-only. Each line contains
+// `cumulativeUsed` (post-record total) and an optional `kind`
+// discriminator. The `SessionBudget` snapshot below is computed by
+// `load_session_budget` from the last well-formed line.
+
+/// Discriminator for the three keyspaces under `~/.relay/sessions/`.
+/// Mirrors `SessionKind` in `src/domain/session-budget.ts`.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionKind {
+    Chat,
+    Run,
+    Admin,
+}
+
+impl Default for SessionKind {
+    fn default() -> Self {
+        SessionKind::Admin
+    }
+}
+
+/// Per-session token-budget snapshot. Mirrors `SessionBudget` in
+/// `src/domain/session-budget.ts`. Bumping `schemaVersion` requires a
+/// same-PR TS-side bump and a forward-migration helper for any pre-
+/// existing on-disk lines (CONCERNS.md "Channel state has no
+/// schema-version field anywhere"). Phase 2's handoff briefs depend on
+/// this contract being stable.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionBudget {
+    #[serde(default = "default_session_budget_schema_version")]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub kind: SessionKind,
+    pub session_id: String,
+    pub used: u64,
+    pub total: u64,
+    pub pct: f64,
+    #[serde(default)]
+    pub last_updated: Option<String>,
+    #[serde(default)]
+    pub model_name: Option<String>,
+}
+
+fn default_session_budget_schema_version() -> u32 {
+    1
+}
+
+impl SessionBudget {
+    pub fn empty(session_id: impl Into<String>, total: u64) -> Self {
+        SessionBudget {
+            schema_version: 1,
+            kind: SessionKind::default(),
+            session_id: session_id.into(),
+            used: 0,
+            total,
+            pct: 0.0,
+            last_updated: None,
+            model_name: None,
+        }
+    }
+}
+
+/// Load the per-session budget snapshot from
+/// `~/.relay/sessions/<sessionId>/budget.jsonl`. Reads the last
+/// well-formed `cumulativeUsed` value; missing/empty file returns
+/// `SessionBudget::empty()`. Hand-edited or torn lines are silently
+/// skipped (research Q7, CONCERNS.md "Cross-language read-during-write
+/// race" — accepted tradeoff).
+pub fn load_session_budget(session_id: &str, total: u64) -> SessionBudget {
+    let path = harness_root()
+        .join("sessions")
+        .join(session_id)
+        .join("budget.jsonl");
+    let Ok(file) = fs::File::open(&path) else {
+        return SessionBudget::empty(session_id, total);
+    };
+    let mut last_cumulative: u64 = 0;
+    let mut last_ts: Option<String> = None;
+    let mut last_kind: SessionKind = SessionKind::default();
+    let mut last_model: Option<String> = None;
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if let Some(c) = value.get("cumulativeUsed").and_then(|v| v.as_u64()) {
+            last_cumulative = c;
+        }
+        if let Some(ts) = value.get("ts").and_then(|v| v.as_str()) {
+            last_ts = Some(ts.to_string());
+        }
+        if let Some(k) = value.get("kind").and_then(|v| v.as_str()) {
+            last_kind = match k {
+                "chat" => SessionKind::Chat,
+                "run" => SessionKind::Run,
+                _ => SessionKind::Admin,
+            };
+        }
+        if let Some(m) = value.get("modelName").and_then(|v| v.as_str()) {
+            last_model = Some(m.to_string());
+        }
+    }
+    let pct = if total == 0 {
+        0.0
+    } else {
+        (last_cumulative as f64 / total as f64) * 100.0
+    };
+    SessionBudget {
+        schema_version: 1,
+        kind: last_kind,
+        session_id: session_id.to_string(),
+        used: last_cumulative,
+        total,
+        pct,
+        last_updated: last_ts,
+        model_name: last_model,
+    }
+}
+
+/// Walk `~/.relay/sessions/<id>/budget.jsonl` files and return one row
+/// per session. Caller filters on `kind == SessionKind::Chat` to drive
+/// the worst-session chip (M3 / M4). Missing/empty `~/.relay/sessions`
+/// returns `Vec::new()` without throwing.
+pub fn list_session_budgets() -> Vec<SessionBudget> {
+    let root = harness_root().join("sessions");
+    let Ok(read) = fs::read_dir(&root) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in read.flatten() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        // Default ceiling — caller (TS-side or Tauri-side) is responsible
+        // for resolving the actual model context window. Phase 1 surfaces
+        // the file-recorded `cumulativeUsed` directly so downstream UIs
+        // can re-compute pct against the right model.
+        let budget = load_session_budget(&name, 200_000);
+        out.push(budget);
+    }
+    out
+}
+
 // --- Tests -----------------------------------------------------------------
 
 #[cfg(test)]
@@ -2601,5 +2755,146 @@ mod tests {
         // Don't create the crosslink-session dir at all.
         let sessions = load_crosslink_sessions();
         assert!(sessions.is_empty());
+    }
+
+    // --- SessionBudget (Phase 1) --------------------------------------------
+
+    #[test]
+    fn session_budget_serde_fixture() {
+        // Hand-written camelCase JSON exactly matching what the TS side
+        // serializes. Asserts (M1) that schema_version is the parsed value
+        // — no silent default-fallthrough — and that `kind` round-trips.
+        let json = r#"{"schemaVersion":1,"kind":"chat","sessionId":"sess-x","used":42,"total":200000,"pct":0.021,"lastUpdated":"2026-05-09T00:00:00Z","modelName":"Sonnet 4.5"}"#;
+        let deserialized: SessionBudget =
+            serde_json::from_str(json).expect("fixture must deserialize");
+        assert_eq!(deserialized.schema_version, 1);
+        assert_eq!(deserialized.kind, SessionKind::Chat);
+        assert_eq!(deserialized.session_id, "sess-x");
+        assert_eq!(deserialized.used, 42);
+        assert_eq!(deserialized.total, 200000);
+
+        // Round-trip the other direction — the camelCase boundary holds.
+        let out = serde_json::to_string(&deserialized).expect("round-trip");
+        assert!(out.contains("\"schemaVersion\":1"), "got: {}", out);
+        assert!(out.contains("\"kind\":\"chat\""), "got: {}", out);
+        assert!(out.contains("\"sessionId\":\"sess-x\""), "got: {}", out);
+    }
+
+    #[test]
+    fn session_budget_v2_round_trip() {
+        // M1 drift guard: a hand-written `schemaVersion: 2` line must NOT
+        // silently downgrade to 1. Phase 2 / future schema bumps depend on
+        // the parser preserving the on-disk version.
+        let json = r#"{"schemaVersion":2,"kind":"run","sessionId":"sess-v2","used":10,"total":1000,"pct":1.0}"#;
+        let deserialized: SessionBudget =
+            serde_json::from_str(json).expect("v2 must deserialize");
+        assert_eq!(deserialized.schema_version, 2);
+        assert_eq!(deserialized.kind, SessionKind::Run);
+    }
+
+    #[test]
+    fn session_budget_kind_defaults_to_admin_when_missing() {
+        // Back-compat: pre-Phase-1 budget files have no `kind` field.
+        // Default to Admin so existing autonomous-loop snapshots load.
+        let json = r#"{"schemaVersion":1,"sessionId":"sess-legacy","used":0,"total":200000,"pct":0.0}"#;
+        let deserialized: SessionBudget =
+            serde_json::from_str(json).expect("legacy must deserialize");
+        assert_eq!(deserialized.kind, SessionKind::Admin);
+    }
+
+    #[test]
+    fn session_budget_load_from_jsonl_reads_last_cumulative() {
+        let _guard = scoped_root();
+        let sessions_dir = harness_root().join("sessions").join("sess-x");
+        fs::create_dir_all(&sessions_dir).expect("mkdir");
+        // Three lines — load_session_budget sums what it sees and returns
+        // the LAST `cumulativeUsed`. Each line carries its own kind so
+        // the loader picks up the most recent.
+        let body = "\
+{\"ts\":\"2026-05-09T00:00:00Z\",\"inputTokens\":100,\"outputTokens\":50,\"cumulativeUsed\":150,\"kind\":\"chat\"}
+{\"ts\":\"2026-05-09T00:01:00Z\",\"inputTokens\":200,\"outputTokens\":50,\"cumulativeUsed\":400,\"kind\":\"chat\"}
+{\"ts\":\"2026-05-09T00:02:00Z\",\"inputTokens\":600,\"outputTokens\":0,\"cumulativeUsed\":1000,\"kind\":\"chat\",\"modelName\":\"claude-sonnet-4-5\"}
+";
+        fs::write(sessions_dir.join("budget.jsonl"), body).expect("write");
+
+        let budget = load_session_budget("sess-x", 2000);
+        assert_eq!(budget.used, 1000);
+        assert_eq!(budget.total, 2000);
+        // pct == (used / total) * 100; allow tiny float drift via approx.
+        assert!((budget.pct - 50.0).abs() < 1e-9, "pct was {}", budget.pct);
+        assert_eq!(budget.kind, SessionKind::Chat);
+        assert_eq!(budget.last_updated.as_deref(), Some("2026-05-09T00:02:00Z"));
+        assert_eq!(budget.model_name.as_deref(), Some("claude-sonnet-4-5"));
+    }
+
+    #[test]
+    fn session_budget_load_returns_empty_when_missing() {
+        let _guard = scoped_root();
+        // No file written — loader must return SessionBudget::empty.
+        let budget = load_session_budget("sess-missing", 500);
+        assert_eq!(budget.used, 0);
+        assert_eq!(budget.total, 500);
+        assert_eq!(budget.pct, 0.0);
+        assert_eq!(budget.kind, SessionKind::Admin);
+    }
+
+    #[test]
+    fn session_budget_load_skips_torn_lines() {
+        let _guard = scoped_root();
+        let sessions_dir = harness_root().join("sessions").join("sess-torn");
+        fs::create_dir_all(&sessions_dir).expect("mkdir");
+        // First line good, second line a torn fragment, third line good.
+        // The loader must skip the malformed line and still return the
+        // correct LAST cumulativeUsed from the well-formed tail.
+        let body = "{\"cumulativeUsed\":100,\"kind\":\"chat\"}\n{not json\n{\"cumulativeUsed\":300,\"kind\":\"chat\"}\n";
+        fs::write(sessions_dir.join("budget.jsonl"), body).expect("write");
+        let budget = load_session_budget("sess-torn", 1000);
+        assert_eq!(budget.used, 300);
+    }
+
+    #[test]
+    fn list_session_budgets_returns_empty_when_dir_missing() {
+        let _guard = scoped_root();
+        // Sessions directory does not exist — must return empty without
+        // throwing.
+        let budgets = list_session_budgets();
+        assert!(budgets.is_empty());
+    }
+
+    #[test]
+    fn list_chat_session_budgets_filters_admin() {
+        // M4: list_session_budgets surfaces every session, but the GUI's
+        // worst-session chip is supposed to filter to `kind == Chat`.
+        // The Tauri command (Task 7) does that filter on top; this test
+        // mimics the same filter and confirms an admin-keyed budget is
+        // excluded while a chat-keyed budget surfaces.
+        let _guard = scoped_root();
+        let root = harness_root().join("sessions");
+
+        let chat_dir = root.join("sess-chat");
+        fs::create_dir_all(&chat_dir).expect("mkdir chat");
+        fs::write(
+            chat_dir.join("budget.jsonl"),
+            "{\"cumulativeUsed\":42,\"kind\":\"chat\"}\n",
+        )
+        .expect("write chat");
+
+        let admin_dir = root.join("admin-be");
+        fs::create_dir_all(&admin_dir).expect("mkdir admin");
+        fs::write(
+            admin_dir.join("budget.jsonl"),
+            "{\"cumulativeUsed\":100,\"kind\":\"admin\"}\n",
+        )
+        .expect("write admin");
+
+        let all = list_session_budgets();
+        assert_eq!(all.len(), 2, "list returns every session: {:?}", all);
+
+        let chat_only: Vec<_> = all
+            .into_iter()
+            .filter(|b| matches!(b.kind, SessionKind::Chat))
+            .collect();
+        assert_eq!(chat_only.len(), 1, "filter to chat only");
+        assert_eq!(chat_only[0].session_id, "sess-chat");
     }
 }
