@@ -37,7 +37,7 @@ export const SessionBudgetSchema = z.object({
   sessionId: z.string().min(1),
   used: z.number().int().nonnegative(),
   total: z.number().int().positive(),
-  pct: z.number(),
+  pct: z.number().finite(),
   lastUpdated: z.string().optional(),
   modelName: z.string().optional(),
 });

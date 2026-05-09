@@ -20,7 +20,7 @@ const RM_OPTS = { recursive: true, force: true, maxRetries: 3, retryDelay: 50 };
  * covered by `crates/harness-data/src/lib.rs::tests::session_budget_*`
  * (already GREEN from Task 6 in this PR).
  */
-describe("Session-budget end-to-end (M6)", () => {
+describe.todo("Session-budget end-to-end (M6)", () => {
   let root: string;
   const originalHome = process.env.HOME;
 

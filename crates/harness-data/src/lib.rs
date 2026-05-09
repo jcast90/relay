@@ -1591,6 +1591,11 @@ pub fn load_session_budget(session_id: &str, total: u64) -> SessionBudget {
             last_ts = Some(ts.to_string());
         }
         if let Some(k) = value.get("kind").and_then(|v| v.as_str()) {
+            // Unknown `kind` strings silently coerce to `Admin` for back-compat
+            // with pre-versioned records that may carry legacy or
+            // future-unknown values. This is asymmetric with the TS Zod schema
+            // (which rejects unknown kinds outright); the asymmetry is kept
+            // intentional so the Rust reader stays liberal toward old data.
             last_kind = match k {
                 "chat" => SessionKind::Chat,
                 "run" => SessionKind::Run,
@@ -1606,6 +1611,11 @@ pub fn load_session_budget(session_id: &str, total: u64) -> SessionBudget {
     } else {
         (last_cumulative as f64 / total as f64) * 100.0
     };
+    // `schema_version: 1` is hard-coded because the JSONL lines themselves
+    // carry no per-line schema version — only the file format is versioned
+    // (one schema version per snapshot, mirrored against the TS schema).
+    // Do not add a per-line version-extraction path here; that would
+    // misrepresent the on-disk format and diverge from the contract.
     SessionBudget {
         schema_version: 1,
         kind: last_kind,

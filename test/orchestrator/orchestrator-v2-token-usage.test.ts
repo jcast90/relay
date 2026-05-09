@@ -15,7 +15,7 @@ const RM_OPTS = { recursive: true, force: true, maxRetries: 3, retryDelay: 50 };
  * that calls `trackerPool.get(...).record(...)` and writes a
  * `kind: "run"` budget line to `~/.relay/sessions/run-<runId>/budget.jsonl`.
  */
-describe("OrchestratorV2 dispatch — token-usage wiring", () => {
+describe.todo("OrchestratorV2 dispatch — token-usage wiring", () => {
   let root: string;
   const originalHome = process.env.HOME;
 

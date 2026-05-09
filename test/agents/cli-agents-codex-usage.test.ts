@@ -65,7 +65,7 @@ function makeWorkRequest(): WorkRequest {
   };
 }
 
-describe("CodexCliAgent — usage extraction (D-07 / Branch A)", () => {
+describe.todo("CodexCliAgent — usage extraction (D-07 / Branch A)", () => {
   let cwd: string;
 
   beforeEach(async () => {

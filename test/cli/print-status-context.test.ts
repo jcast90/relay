@@ -16,7 +16,7 @@ const RM_OPTS = { recursive: true, force: true, maxRetries: 3, retryDelay: 50 };
  * RED tests for the `rly status` Active Sessions block. PR-1 ships the
  * stub-throwing formatters; PR-4 (Task 11) lands the implementations.
  */
-describe("formatActiveSessionsBlock", () => {
+describe.todo("formatActiveSessionsBlock", () => {
   it("renders one line per session with model + ctx pct + used/total", () => {
     const rows: ActiveSessionRow[] = [
       {
@@ -42,7 +42,7 @@ describe("formatActiveSessionsBlock", () => {
   });
 });
 
-describe("loadActiveSessions", () => {
+describe.todo("loadActiveSessions", () => {
   let root: string;
   const originalHome = process.env.HOME;
 

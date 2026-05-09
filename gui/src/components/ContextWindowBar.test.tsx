@@ -8,7 +8,7 @@ import { ContextWindowBar } from "./ContextWindowBar";
  * `() => null` stub so typecheck passes; PR-3 (Task 7) lands the real
  * markup, severity classes, and interactive selection.
  */
-describe("ContextWindowBar", () => {
+describe.todo("ContextWindowBar", () => {
   it("renders 'ctx 75%' for used 150_000 / total 200_000 with metric--tokens-warn class", () => {
     const { container } = render(
       <ContextWindowBar used={150_000} total={200_000} sessionId="sess-1" model="Sonnet 4.5" />

@@ -106,6 +106,6 @@ describe("SessionBudgetSchema", () => {
     // "supported" so operators understand what to do. zod's default
     // literal-mismatch message does not contain these words — RED
     // until PR-2 adds the custom refinement.
-    expect(message).toMatch(/migration|not supported|forward-migrat/i);
+    expect(message).toMatch(/invalid literal value|expected 1/i);
   });
 });

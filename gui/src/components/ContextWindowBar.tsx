@@ -16,7 +16,7 @@ export interface ContextWindowBarProps {
  * against the final props shape. The stub returns null at runtime so
  * tests that assert on the rendered output go RED loudly.
  */
-export function ContextWindowBar(_props: ContextWindowBarProps): JSX.Element | null {
+export function ContextWindowBar(_props: ContextWindowBarProps) {
   // Reference tokenPctSeverity so tree-shaking does not strip the
   // import — Task 7's implementation will use it for the severity
   // class.
