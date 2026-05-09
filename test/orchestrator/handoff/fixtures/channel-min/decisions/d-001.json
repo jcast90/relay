@@ -1,0 +1,14 @@
+{
+  "decisionId": "d-001",
+  "channelId": "ch-fixmin-0001",
+  "runId": "run-fix-0001",
+  "ticketId": "t-001",
+  "title": "Use git log for files-touched enrichment",
+  "description": "v1 implementation reconstructs files-touched per ticket by scanning git log for commits whose subject mentions the ticketId.",
+  "rationale": "Cheap, deterministic, no schema change. Acceptable until briefs feel thin.",
+  "alternatives": [],
+  "decidedBy": "agent-claude-1",
+  "decidedByName": "claude",
+  "linkedArtifacts": [],
+  "createdAt": "2026-05-01T10:10:00.000Z"
+}

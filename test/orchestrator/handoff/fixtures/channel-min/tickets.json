@@ -1,0 +1,59 @@
+{
+  "updatedAt": "2026-05-01T11:30:00.000Z",
+  "tickets": [
+    {
+      "ticketId": "t-001",
+      "title": "Set up project skeleton",
+      "specialty": "implementer",
+      "status": "completed",
+      "dependsOn": [],
+      "assignedAgentId": "agent-claude-1",
+      "assignedAgentName": "claude",
+      "crosslinkSessionId": null,
+      "verification": "passed",
+      "lastClassification": null,
+      "chosenNextAction": null,
+      "attempt": 1,
+      "startedAt": "2026-05-01T10:05:00.000Z",
+      "completedAt": "2026-05-01T10:18:00.000Z",
+      "updatedAt": "2026-05-01T10:18:00.000Z",
+      "runId": "run-fix-0001"
+    },
+    {
+      "ticketId": "t-002",
+      "title": "Wire up integration with the upstream API",
+      "specialty": "implementer",
+      "status": "executing",
+      "dependsOn": ["t-001"],
+      "assignedAgentId": "agent-claude-1",
+      "assignedAgentName": "claude",
+      "crosslinkSessionId": null,
+      "verification": "running",
+      "lastClassification": null,
+      "chosenNextAction": null,
+      "attempt": 1,
+      "startedAt": "2026-05-01T10:20:00.000Z",
+      "completedAt": null,
+      "updatedAt": "2026-05-01T11:25:00.000Z",
+      "runId": "run-fix-0001"
+    },
+    {
+      "ticketId": "t-003",
+      "title": "Add end-to-end test coverage",
+      "specialty": "tester",
+      "status": "blocked",
+      "dependsOn": ["t-002"],
+      "assignedAgentId": null,
+      "assignedAgentName": null,
+      "crosslinkSessionId": null,
+      "verification": "pending",
+      "lastClassification": null,
+      "chosenNextAction": null,
+      "attempt": 0,
+      "startedAt": null,
+      "completedAt": null,
+      "updatedAt": "2026-05-01T11:30:00.000Z",
+      "runId": "run-fix-0001"
+    }
+  ]
+}

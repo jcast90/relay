@@ -1,0 +1,16 @@
+{
+  "channelId": "ch-fixmin-0001",
+  "name": "fixture-min",
+  "description": "Minimal fixture channel for handoff brief synthesizer tests. Holds three tickets in a small DAG, two decisions (one with alternatives, one without), and a feed that includes a single Phase-1-shaped context_threshold entry at 91.23% / threshold 90 for sess-fixsrc-0001.",
+  "status": "active",
+  "workspaceIds": [],
+  "members": [],
+  "pinnedRefs": [],
+  "repoAssignments": [
+    { "alias": "primary", "workspaceId": "ws-fix-0001", "repoPath": "/tmp/fixture-repo-primary" }
+  ],
+  "tier": "feature",
+  "kind": "channel",
+  "createdAt": "2026-05-01T10:00:00.000Z",
+  "updatedAt": "2026-05-09T11:30:00.000Z"
+}

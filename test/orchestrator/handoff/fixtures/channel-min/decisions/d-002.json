@@ -1,0 +1,17 @@
+{
+  "decisionId": "d-002",
+  "channelId": "ch-fixmin-0001",
+  "runId": "run-fix-0001",
+  "ticketId": "t-002",
+  "title": "Defer first-class file tracking to v2",
+  "description": "Phase 2 ships with the git-log v1; first-class file tracking driven by hooks waits for a future phase.",
+  "rationale": "First-class tracking would require a schema change in TicketLedgerEntry and a hook plumbing redesign — both out of scope for the handoff phase.",
+  "alternatives": [
+    "Track files-touched in TicketLedgerEntry directly (rejected: schema churn).",
+    "Parse VCS blame on demand (rejected: too slow on large repos)."
+  ],
+  "decidedBy": "agent-claude-1",
+  "decidedByName": "claude",
+  "linkedArtifacts": [],
+  "createdAt": "2026-05-01T10:40:00.000Z"
+}
