@@ -1,8 +1,14 @@
+import { z } from "zod";
+
 import { getAgentName } from "../domain/agent-names.js";
 import { ChannelStore } from "../channels/channel-store.js";
 import { resolveBoardTickets } from "../channels/board-resolver.js";
 import { LocalArtifactStore } from "../execution/artifact-store.js";
 import { getGlobalRoot, listRegisteredWorkspaces } from "../cli/workspace-registry.js";
+import { HANDOFF_BRIEF_SCHEMA_VERSION } from "../domain/handoff.js";
+import { buildBriefId } from "../orchestrator/handoff/synthesizer.js";
+import { writeGapFill } from "../orchestrator/handoff/persistence.js";
+import { assertSafeSegment } from "../storage/file-store.js";
 import { getHarnessStore } from "../storage/factory.js";
 
 export interface ChannelToolState {
@@ -109,8 +115,68 @@ export function getChannelToolDefinitions(): object[] {
         properties: {},
       },
     },
+    {
+      name: "channel_handoff_finalize",
+      description:
+        "Capture working-memory context before this session ends. Call this when context is " +
+        "near its limit OR when the user has accepted a handoff prompt. The four blocks are " +
+        "persisted as the agent-authored section of the next handoff brief.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "channelId",
+          "currentLineOfAttack",
+          "activeHypothesis",
+          "abandonedApproaches",
+          "openQuestions",
+        ],
+        properties: {
+          channelId: { type: "string" },
+          currentLineOfAttack: { type: "string", maxLength: 4000 },
+          activeHypothesis: { type: "string", maxLength: 2000 },
+          abandonedApproaches: {
+            type: "array",
+            items: { type: "string", maxLength: 1000 },
+          },
+          openQuestions: {
+            type: "array",
+            items: { type: "string", maxLength: 500 },
+          },
+          sessionId: { type: "string" },
+          // Optional schemaVersion is locked to 1 (D-05/M9). Future bumps
+          // require coordinated upgrade across writer + reader.
+          schemaVersion: { type: "integer", const: 1 },
+        },
+      },
+    },
   ];
 }
+
+/**
+ * Zod schema for `channel_handoff_finalize` arguments.
+ *
+ * Mirrors the JSON Schema in {@link getChannelToolDefinitions} but with
+ * runtime enforcement that the JSON Schema layer alone cannot give us
+ * (length caps, optional `schemaVersion` locked to literal 1 per M9).
+ *
+ * Threats addressed:
+ *   - T-02-04 (secret leak via length-bombed slot): `maxLength` caps.
+ *   - T-02-13 (silent schemaVersion drift): `z.literal(1).optional()` —
+ *     any other value is rejected with a clear error message.
+ *   - T-02-08 (oversized brief DoS): caps mirror D-04's working-memory
+ *     budget; the brief synthesizer's hard cap (8K) catches anything
+ *     that slips through.
+ */
+const handoffFinalizeArgsSchema = z.object({
+  channelId: z.string().min(1),
+  currentLineOfAttack: z.string().max(4000),
+  activeHypothesis: z.string().max(2000),
+  abandonedApproaches: z.array(z.string().max(1000)),
+  openQuestions: z.array(z.string().max(500)),
+  sessionId: z.string().optional(),
+  schemaVersion: z.literal(HANDOFF_BRIEF_SCHEMA_VERSION).optional(),
+});
 
 export async function callChannelTool(
   name: string,
@@ -202,6 +268,50 @@ export async function callChannelTool(
       }
 
       return { channelId, board };
+    }
+
+    case "channel_handoff_finalize": {
+      const parsed = handoffFinalizeArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        // Surface the field-level issue (esp. for `schemaVersion !== 1`)
+        // so the agent gets actionable feedback rather than a generic
+        // "invalid input".
+        const issue = parsed.error.issues[0];
+        const field = issue.path.join(".") || "<root>";
+        throw new Error(`channel_handoff_finalize: invalid input at ${field}: ${issue.message}`);
+      }
+      const input = parsed.data;
+      // Defense in depth — `assertSafeSegment` guards path traversal even
+      // though `writeGapFill` runs the same check. T-02-02 / T-02-08.
+      assertSafeSegment(input.channelId, "channelId");
+
+      const capturedAt = new Date();
+      const briefId = buildBriefId(input.channelId, capturedAt);
+      const sessionId = input.sessionId ?? state.sessionId ?? null;
+
+      const { gapJsonPath } = await writeGapFill({
+        channelId: input.channelId,
+        briefId,
+        payload: {
+          schemaVersion: HANDOFF_BRIEF_SCHEMA_VERSION,
+          briefId,
+          channelId: input.channelId,
+          capturedAt: capturedAt.toISOString(),
+          capturedBySessionId: sessionId,
+          currentLineOfAttack: input.currentLineOfAttack,
+          activeHypothesis: input.activeHypothesis,
+          abandonedApproaches: input.abandonedApproaches,
+          openQuestions: input.openQuestions,
+        },
+      });
+
+      return {
+        ok: true,
+        briefId,
+        gapJsonPath,
+        schemaVersion: HANDOFF_BRIEF_SCHEMA_VERSION,
+        capturedAt: capturedAt.toISOString(),
+      };
     }
 
     case "harness_running_tasks": {
