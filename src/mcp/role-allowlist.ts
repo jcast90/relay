@@ -127,6 +127,12 @@ export const REPO_ADMIN_ALLOWED_TOOLS: ReadonlySet<string> = new Set<string>([
   // IpcBridge. Repo-admins running as spawned MCP children call this at
   // the start of each work cycle to pull pending cross-repo messages.
   "coordination_receive",
+  // Phase 3: boot-readiness assertion. Repo-admin calls this exactly
+  // once at end-of-onboarding to flip its CrosslinkSession.readyAt and
+  // post a single `agent_ready` channel-feed entry. Distinct from the
+  // `repo-ready` typed coordination message (PR merged → blocker gone)
+  // and from `RepoAdminSession._state = "ready"` (process is spawned).
+  "agent_ready",
 ]);
 
 /**

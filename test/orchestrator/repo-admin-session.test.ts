@@ -28,6 +28,7 @@ import {
   type RepoAdminProcessSpawner,
   type RepoAdminSessionEvent,
   type RepoAdminSpawnArgs,
+  type SessionDecisionWriter,
 } from "../../src/orchestrator/repo-admin-session.js";
 
 function buildLedgerEntry(ticketId: string, alias: string): TicketLedgerEntry {
@@ -199,6 +200,37 @@ describe("RepoAdminSession", () => {
     await session.start();
 
     expect(spawner.last().spawnArgs.fullAccess).toBe(true);
+  });
+
+  // Phase 3: the spawner must receive the bound channel id so it can
+  // thread `RELAY_CHANNEL_ID` into the child's env. The child's MCP
+  // server uses that env var to resolve which channel feed the
+  // `agent_ready` audit entry posts to.
+  it("forwards cycleConfig.channelId as channelId in spawner args", async () => {
+    const spawner = new FakeSpawner();
+    const logDir = join(root, "repo-admins", BASE_ASSIGNMENT.alias);
+    const fakeDecisions: SessionDecisionWriter = {
+      recordDecision: async () => undefined,
+    };
+    const session = new RepoAdminSession({
+      assignment: BASE_ASSIGNMENT,
+      fullAccess: false,
+      logDir,
+      spawner,
+      buildSessionId: () => `admin-fake-${++sessionIdCounter}`,
+      cycle: { channelId: "channel-phase-3-test", decisions: fakeDecisions },
+    });
+    await session.start();
+
+    expect(spawner.last().spawnArgs.channelId).toBe("channel-phase-3-test");
+  });
+
+  it("omits channelId from spawner args when no cycleConfig is wired", async () => {
+    const spawner = new FakeSpawner();
+    const { session } = buildSession({ spawner });
+    await session.start();
+
+    expect(spawner.last().spawnArgs.channelId).toBeUndefined();
   });
 
   it("double start() is a no-op (doesn't spawn twice)", async () => {

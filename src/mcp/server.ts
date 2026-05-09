@@ -28,6 +28,12 @@ import {
   isCoordinationTool,
   type CoordinationToolState,
 } from "./coordination-tools.js";
+import {
+  callReadinessTool,
+  getReadinessToolDefinitions,
+  isReadinessTool,
+  type ReadinessToolState,
+} from "./readiness-tools.js";
 import type { Coordinator } from "../crosslink/coordinator.js";
 import {
   allowlistForRole,
@@ -65,6 +71,15 @@ export interface McpHandlerContext {
    * structured error envelope (never a silent drop).
    */
   coordinationState: CoordinationToolState;
+  /**
+   * Phase 3 — `agent_ready` MCP tool state. Wires the same crosslink +
+   * channel stores used by the other surfaces; `crosslinkSessionId` is
+   * populated after auto-register; `channelId` is read from the env
+   * (`RELAY_CHANNEL_ID`, set by the spawner — Phase 3 Task 5) and is
+   * null for ad-hoc `rly claude` sessions, which the tool degrades to a
+   * disk-only readiness flip for.
+   */
+  readinessState: ReadinessToolState;
   cleanup: () => void;
 }
 
@@ -146,6 +161,19 @@ export async function buildMcpMessageHandler(
     sessionId: process.env.RELAY_SESSION_ID ?? null,
   };
 
+  // Phase 3 — `agent_ready` tool. Initially `crosslinkSessionId: null`;
+  // populated below right after auto-register fills `session.sessionId`.
+  // `channelId` comes from the spawner (Phase 3 Task 5 plumbs
+  // `RELAY_CHANNEL_ID` for autonomous-loop admins). Ad-hoc sessions
+  // without it get null and the tool falls back to disk-only readiness.
+  const readinessState: ReadinessToolState = {
+    crosslinkSessionId: null,
+    channelId: process.env.RELAY_CHANNEL_ID ?? null,
+    alias: coordinationState.alias,
+    crosslinkStore,
+    channelStore,
+  };
+
   // Auto-register this session
   const agentProvider = (process.env.RELAY_PROVIDER ?? "unknown") as "claude" | "codex" | "unknown";
   const session = await crosslinkStore.registerSession({
@@ -158,6 +186,7 @@ export async function buildMcpMessageHandler(
   });
   crosslinkState.sessionId = session.sessionId;
   channelState.sessionId = session.sessionId;
+  readinessState.crosslinkSessionId = session.sessionId;
 
   // Heartbeat every 30 seconds
   const heartbeatInterval = setInterval(() => {
@@ -181,7 +210,8 @@ export async function buildMcpMessageHandler(
       artifactStore,
       crosslinkState,
       channelState,
-      coordinationState
+      coordinationState,
+      readinessState
     );
 
   return {
@@ -192,6 +222,7 @@ export async function buildMcpMessageHandler(
       crosslinkState,
       channelState,
       coordinationState,
+      readinessState,
       cleanup,
     },
   };
@@ -223,7 +254,8 @@ async function handleMessage(
   artifactStore: LocalArtifactStore,
   crosslinkState: CrosslinkToolState,
   channelState: ChannelToolState,
-  coordinationState: CoordinationToolState
+  coordinationState: CoordinationToolState,
+  readinessState: ReadinessToolState
 ): Promise<JsonRpcMessage | null> {
   if (!message.method) {
     return null;
@@ -265,6 +297,11 @@ async function handleMessage(
           inputSchema: unknown;
         }>),
         ...(getCoordinationToolDefinitions() as Array<{
+          name: string;
+          description: string;
+          inputSchema: unknown;
+        }>),
+        ...(getReadinessToolDefinitions() as Array<{
           name: string;
           description: string;
           inputSchema: unknown;
@@ -508,7 +545,9 @@ async function handleMessage(
             ? await callChannelTool(toolName, toolArgs, channelState)
             : isCoordinationTool(toolName)
               ? await callCoordinationTool(toolName, toolArgs, coordinationState)
-              : await callTool(toolName, toolArgs, workspaceRoot, artifactStore);
+              : isReadinessTool(toolName)
+                ? await callReadinessTool(toolArgs, readinessState)
+                : await callTool(toolName, toolArgs, workspaceRoot, artifactStore);
 
         return {
           jsonrpc: "2.0",

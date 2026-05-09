@@ -52,6 +52,7 @@ describe("repo-admin role — allowlist exactness", () => {
     const sorted = [...REPO_ADMIN_ALLOWED_TOOLS].sort();
     expect(sorted).toEqual(
       [
+        "agent_ready", // Phase 3: end-of-onboarding readiness assertion
         "channel_get", // read decisions + feed + run links in one call
         "channel_post", // append-only feed updates (propose a spawn, announce a decision)
         "channel_task_board", // read the ticket board

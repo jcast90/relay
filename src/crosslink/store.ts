@@ -189,14 +189,43 @@ export class CrosslinkStore {
   }
 
   /**
-   * Phase 3 stub — Wave 2 lands the body. Skeleton export keeps Wave 1's
-   * test imports compile-clean while the test bodies remain RED.
+   * Phase 3 — boot-readiness assertion (sibling to `updateHeartbeat`).
+   *
+   * Monotonic-once-set: the first call sets `readyAt` to "now" and
+   * `readyKind` to the provided kind; subsequent calls return the
+   * existing `readyAt` with `alreadyReady: true` and do not re-write
+   * the disk. Idempotency is intentional — the agent calling
+   * `agent_ready` after a transient retry is a no-op, not an error.
+   *
+   * Liveness path is untouched: this method does not modify `lastHeartbeat`
+   * separately, but it DOES bump it as a side-effect (a readiness
+   * assertion is also activity). `updateHeartbeat` continues to leave
+   * `readyAt` untouched — heartbeat alone never flips readiness.
+   *
+   * Returns `null` for unknown sessionIds (matches `updateSession` /
+   * `updateHeartbeat` semantics).
    */
   async updateReadiness(
-    _sessionId: string,
-    _kind: ReadyKind = "admin"
+    sessionId: string,
+    kind: ReadyKind = "admin"
   ): Promise<{ readyAt: string; alreadyReady: boolean } | null> {
-    throw new Error("CrosslinkStore.updateReadiness — Wave 2 lands the body");
+    const session = await this.readSession(sessionId);
+    if (!session) return null;
+
+    if (session.readyAt) {
+      return { readyAt: session.readyAt, alreadyReady: true };
+    }
+
+    const readyAt = new Date().toISOString();
+    const updated: CrosslinkSession = {
+      ...session,
+      readyAt,
+      readyKind: kind,
+      lastHeartbeat: readyAt,
+    };
+
+    await this.store.putDoc(STORE_NS.crosslinkSession, sessionId, updated);
+    return { readyAt, alreadyReady: false };
   }
 
   async deregisterSession(sessionId: string): Promise<void> {

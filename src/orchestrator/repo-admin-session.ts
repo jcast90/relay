@@ -87,6 +87,16 @@ export const DEFAULT_ADMIN_TOKEN_CEILING = 150_000;
  */
 export const CYCLE_THRESHOLD_PCT = 60;
 
+/**
+ * Pool-level process-lifecycle state. **NOT** the agent-asserted
+ * boot-readiness signal — `"ready"` here means the child process has
+ * been spawned and the tracker is wired (mechanically alive). The
+ * agent-asserted "I have finished onboarding and can be addressed"
+ * signal lives on `CrosslinkSession.readyAt` (Phase 3) — populated only
+ * when the agent calls the `agent_ready` MCP tool. Renaming this enum
+ * (e.g. `processState` / `_processState`) would remove the lexical
+ * collision but is out of scope for Phase 3; flagged as a follow-up.
+ */
 export type RepoAdminSessionState = "booting" | "ready" | "dead" | "stopped";
 
 /**
@@ -122,6 +132,15 @@ export interface RepoAdminSpawnArgs {
    * back-compat with tests constructed before the IPC bridge landed.
    */
   autonomousSessionId?: string;
+  /**
+   * Phase 3: bound channel id, threaded into the child as
+   * `RELAY_CHANNEL_ID`. The child's MCP server reads it so the
+   * `agent_ready` tool knows which channel feed to post the readiness
+   * audit entry to. Optional — ad-hoc sessions or tests without a
+   * channel get a degraded `agent_ready` (disk flag flips, no feed
+   * entry) which is the correct semantics.
+   */
+  channelId?: string;
 }
 
 /**
@@ -327,6 +346,11 @@ export class ClaudeRepoAdminSpawner implements RepoAdminProcessSpawner {
         RELAY_AGENT_ROLE: REPO_ADMIN_ROLE,
         ...(args.autonomousSessionId ? { RELAY_SESSION_ID: args.autonomousSessionId } : {}),
         RELAY_AGENT_ALIAS: args.alias,
+        // Phase 3: lets the child's MCP server resolve the channel id
+        // for `agent_ready` audit-entry posts. Absent for ad-hoc
+        // sessions; the readiness tool degrades to a disk-only flip in
+        // that case.
+        ...(args.channelId ? { RELAY_CHANNEL_ID: args.channelId } : {}),
       },
       // Claude CLI still needs its auth creds; mirror the pass-list used
       // by the short-lived adapter in `src/agents/cli-agents.ts`.
@@ -620,6 +644,9 @@ export class RepoAdminSession {
       sessionId: nextId,
       fullAccess: this.fullAccess,
       autonomousSessionId: this.autonomousSessionId,
+      // Phase 3: thread the bound channel through so the child's MCP
+      // server can post `agent_ready` audit entries to the right feed.
+      channelId: this.cycleConfig?.channelId,
     });
     this.child = child;
 
