@@ -17,7 +17,7 @@ const RM_OPTS = { recursive: true, force: true, maxRetries: 3, retryDelay: 50 };
  * Task 2 widens the canonical list. Until PR-2 lands the wider THRESHOLDS,
  * the resumed tracker reports `[50, 60]` and this test fails.
  */
-describe.todo("TokenTracker restart-replay (D-01 survives-restart property)", () => {
+describe("TokenTracker restart-replay (D-01 survives-restart property)", () => {
   let root: string;
 
   beforeEach(async () => {

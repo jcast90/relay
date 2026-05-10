@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { appendFile, mkdir, readFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
+import type { SessionKind } from "../domain/session-budget.js";
 import { getRelayDir } from "../cli/paths.js";
 
 /**
@@ -43,12 +44,18 @@ export type ThresholdListener = (evt: ThresholdEvent) => void;
  * forensics, not for replay (the sum is the source of truth, so a
  * hand-edited file that got out of sync on cumulativeUsed still replays
  * correctly).
+ *
+ * `kind` (Phase 1, D-06) is the session-keyspace discriminator
+ * ("chat" | "run" | "admin"). Optional on the line because pre-Phase-1
+ * autonomous-loop files don't carry it; the Rust + TS readers default to
+ * `"admin"` when missing.
  */
 interface BudgetLine {
   ts: string;
   inputTokens: number;
   outputTokens: number;
   cumulativeUsed: number;
+  kind?: SessionKind;
 }
 
 /**
@@ -74,6 +81,13 @@ export class TokenTracker {
   private readonly firedThresholds = new Set<number>();
   private readonly emitter = new EventEmitter();
   private readonly filePath: string;
+  /**
+   * Session-keyspace discriminator (D-06) written onto every appended
+   * `BudgetLine`. `undefined` preserves pre-Phase-1 file shape (used by
+   * `RepoAdminSession` which never passes a kind — the Rust + TS readers
+   * default missing `kind` to `"admin"`).
+   */
+  private readonly kind?: SessionKind;
 
   // Serialize disk IO (replay on construct, append on record, final flush
   // on close). Every public mutator chains its work onto this tail
@@ -90,8 +104,17 @@ export class TokenTracker {
    * @param options.rootDir  Override the `~/.relay` base directory. Tests
    *                   use this with a tmp dir; production callers should
    *                   leave it undefined.
+   * @param options.kind  Session-keyspace discriminator (D-06). Written on
+   *                   every appended `BudgetLine` so the Rust + TS readers
+   *                   can filter chat vs admin sessions. Omit for back-
+   *                   compat with `RepoAdminSession` (the readers default
+   *                   to `"admin"` when missing).
    */
-  constructor(sessionId: string, totalTokens: number, options: { rootDir?: string } = {}) {
+  constructor(
+    sessionId: string,
+    totalTokens: number,
+    options: { rootDir?: string; kind?: SessionKind } = {}
+  ) {
     if (!sessionId) {
       throw new Error("TokenTracker: sessionId is required");
     }
@@ -103,6 +126,7 @@ export class TokenTracker {
 
     this.sessionId = sessionId;
     this._total = totalTokens;
+    this.kind = options.kind;
 
     const root = options.rootDir ?? getRelayDir();
     this.filePath = join(root, "sessions", sessionId, "budget.jsonl");
@@ -178,6 +202,7 @@ export class TokenTracker {
           inputTokens,
           outputTokens,
           cumulativeUsed: this._used,
+          ...(this.kind ? { kind: this.kind } : {}),
         });
       } catch (err) {
         // Disk failure shouldn't take down the autonomous loop — surface

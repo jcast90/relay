@@ -15,7 +15,7 @@ const RM_OPTS = { recursive: true, force: true, maxRetries: 3, retryDelay: 50 };
  * that calls `trackerPool.get(...).record(...)` and writes a
  * `kind: "run"` budget line to `~/.relay/sessions/run-<runId>/budget.jsonl`.
  */
-describe.todo("OrchestratorV2 dispatch — token-usage wiring", () => {
+describe("OrchestratorV2 dispatch — token-usage wiring", () => {
   let root: string;
   const originalHome = process.env.HOME;
 
@@ -51,30 +51,39 @@ describe.todo("OrchestratorV2 dispatch — token-usage wiring", () => {
   });
 
   it("dispatch with an Agent missing capability.model throws a clear error (hidden-assumption fix)", async () => {
-    // This test asserts the contract: the orchestrator's dispatch wiring
-    // (Task 4) hard-throws when the agent has no model so a session
-    // never gets miscalibrated against the default 200_000 ceiling.
-    //
-    // Phase 1 PR-1: the orchestrator wiring isn't in place yet. The
-    // assertion below uses a stub helper that the test re-imports from
-    // PR-2's Task 4 work; until then, the test is RED.
-    // PR-2's Task 4 lands a `dispatch-token-usage.js` helper that the
-    // orchestrator imports for the missing-model hard-throw. PR-1 has
-    // not added it yet, so this dynamic import must fail. The grep
-    // pattern is the contract.
-    let mod: unknown = null;
-    try {
-      mod = await import(
-        // @ts-expect-error PR-2 lands this module; PR-1 stub holds the
-        // RED contract that the import does not yet resolve.
-        "../../src/orchestrator/dispatch-token-usage.js"
-      );
-    } catch {
-      mod = null;
-    }
-    expect(mod).not.toBeNull();
-    expect(
-      (mod as { dispatchTokenUsageOrThrow?: unknown } | null)?.dispatchTokenUsageOrThrow
-    ).toBeDefined();
+    // The orchestrator's dispatch wiring (Task 4) hard-throws when the
+    // agent has no model so a session never gets miscalibrated against
+    // the default 200_000 ceiling. An Opus 4.7 session has a 1M-token
+    // window — defaulting to 200k would mis-render the bar by 5x.
+    const { dispatchTokenUsageOrThrow } = await import(
+      "../../src/orchestrator/dispatch-token-usage.js"
+    );
+    expect(dispatchTokenUsageOrThrow).toBeDefined();
+
+    const pool = new SessionTrackerPool();
+    const agentNoModel = {
+      id: "agent-x",
+      name: "X",
+      provider: "claude" as const,
+      capability: { role: "implementer" as const, specialties: ["general" as const] },
+      run: async () => ({ summary: "n/a", evidence: [], proposedCommands: [], blockers: [] }),
+    };
+
+    expect(() =>
+      dispatchTokenUsageOrThrow({
+        pool,
+        agent: agentNoModel,
+        result: {
+          summary: "ok",
+          evidence: [],
+          proposedCommands: [],
+          blockers: [],
+          tokenUsage: { inputTokens: 100, outputTokens: 50 },
+        },
+        runId: "run-no-model",
+      })
+    ).toThrow(/missing model/);
+
+    await pool.closeAll();
   });
 });

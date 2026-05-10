@@ -14,7 +14,7 @@ const RM_OPTS = { recursive: true, force: true, maxRetries: 3, retryDelay: 50 };
  * the contract is locked at PR-1 review time. All tests fail at runtime
  * until PR-2 implements the body.
  */
-describe.todo("SessionTrackerPool", () => {
+describe("SessionTrackerPool", () => {
   let root: string;
   const originalHome = process.env.HOME;
 

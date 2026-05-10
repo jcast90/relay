@@ -1,4 +1,4 @@
-import type { AgentResult, FailureClassification, WorkRequest } from "../domain/agent.js";
+import type { Agent, AgentResult, FailureClassification, WorkRequest } from "../domain/agent.js";
 import {
   tierNeedsApproval,
   tierNeedsDesignDoc,
@@ -25,6 +25,9 @@ import { classifyRequest } from "./classifier.js";
 import { decomposePlanToTickets, buildTicketPlanFromPhases } from "./ticket-decomposer.js";
 import { checkApproval } from "./approval-gate.js";
 import { TicketScheduler } from "./ticket-scheduler.js";
+import { SessionTrackerPool } from "../budget/session-tracker-pool.js";
+import { dispatchTokenUsageOrThrow } from "./dispatch-token-usage.js";
+import { attachThresholdFeed } from "../budget/threshold-feed-bridge.js";
 
 /**
  * Anything the orchestrator can hook into for follow-up enqueueing (PR poller,
@@ -60,6 +63,13 @@ export interface OrchestratorV2Options {
    * calls would break the test path.
    */
   executor?: AgentExecutor;
+  /**
+   * Optional injection point for the per-run {@link SessionTrackerPool}.
+   * Tests may want to provide a pre-seeded pool or assert on the pool's
+   * tracker map directly; production callers should leave this undefined
+   * so the orchestrator constructs a fresh pool per instance.
+   */
+  trackerPool?: SessionTrackerPool;
 }
 
 export class OrchestratorV2 {
@@ -67,6 +77,24 @@ export class OrchestratorV2 {
   private pollerFactory: PollerFactory | null = null;
 
   private readonly executor: AgentExecutor | null;
+
+  /**
+   * Per-session token-budget pool (Phase 1, D-02). Lazily mints one
+   * {@link import("../budget/token-tracker.js").TokenTracker} per
+   * `run-<runId>` session id; each {@link dispatch} call hands the agent's
+   * `result.tokenUsage` to the matching tracker so `~/.relay/sessions/run-
+   * <runId>/budget.jsonl` accumulates a `kind: "run"` line per dispatch.
+   * Drained in {@link waitForPendingWrites} on run completion.
+   */
+  private readonly trackerPool: SessionTrackerPool;
+
+  /**
+   * Per-tracker unsubscribe handles for the threshold-feed bridge. Keyed
+   * by the same `run-<runId>` session id as {@link trackerPool}. Detached
+   * during {@link waitForPendingWrites} BEFORE the pool's `closeAll()` so
+   * a final-write listener doesn't fire after the channel store is gone.
+   */
+  private readonly thresholdFeedUnsubs = new Map<string, () => void>();
 
   /**
    * In-flight best-effort channel writes (postEntry / appendEvent) tracked so
@@ -91,6 +119,7 @@ export class OrchestratorV2 {
     options?: OrchestratorV2Options
   ) {
     this.executor = options?.executor ?? null;
+    this.trackerPool = options?.trackerPool ?? new SessionTrackerPool();
   }
 
   /**
@@ -501,6 +530,31 @@ export class OrchestratorV2 {
       try {
         const result = await agent.run(request);
 
+        // Phase 1 (Task 4 + 5): hand the adapter-extracted token usage to
+        // the per-session tracker pool, then attach the threshold-feed
+        // bridge so 75/90/95 crossings post `status_update` entries to
+        // the channel feed (Phase 2's handoff nudge subscribes to those).
+        // Best-effort EXCEPT for the missing-model assertion inside
+        // `dispatchTokenUsageOrThrow` — that re-throws so the test suite
+        // catches a silent default-200_000 miscalibration on Opus 4.7.
+        if (result.tokenUsage) {
+          try {
+            dispatchTokenUsageOrThrow({
+              pool: this.trackerPool,
+              agent,
+              result,
+              runId: run.id,
+            });
+            this.maybeAttachThresholdFeed(run, agent);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            if (message.includes("missing model")) throw err;
+            console.warn(
+              `[orchestrator] tracker.record failed (runId=${run.id}): ${message}`
+            );
+          }
+        }
+
         this.recordEvidence(run, {
           phaseId: input.phaseId,
           agentId: agent.id,
@@ -667,12 +721,50 @@ export class OrchestratorV2 {
    * Drain all tracked best-effort writes. Uses `allSettled` so a single
    * failure never short-circuits the drain. Clears the tracker on exit so
    * a second invocation doesn't re-await already-settled promises.
+   *
+   * Phase 1 extension (Task 4 + 5): also detach the threshold-feed bridge
+   * subscriptions and drain {@link trackerPool} so any pending
+   * `budget.jsonl` appends settle before the caller tears down the tmp
+   * artifacts dir. Detach order matters: we run the unsubscribes BEFORE
+   * `closeAll()` so a final write doesn't trip a listener that's about to
+   * lose its channel store.
    */
   private async waitForPendingWrites(): Promise<void> {
+    for (const unsub of this.thresholdFeedUnsubs.values()) {
+      try {
+        unsub();
+      } catch {
+        // Best-effort detach — a failing unsubscribe shouldn't block the
+        // drain. The pool's closeAll() removes all listeners anyway.
+      }
+    }
+    this.thresholdFeedUnsubs.clear();
+    await this.trackerPool.closeAll();
     if (this.pendingWrites.length === 0) return;
     const pending = this.pendingWrites;
     this.pendingWrites = [];
     await Promise.allSettled(pending);
+  }
+
+  /**
+   * Subscribe the run's session tracker to the channel-feed threshold
+   * bridge if (a) the run has a channelId, (b) the channel store is
+   * configured, and (c) we haven't already attached for this session.
+   * Idempotent — repeated dispatches against the same run reuse the
+   * existing subscription.
+   */
+  private maybeAttachThresholdFeed(run: HarnessRun, agent: Agent): void {
+    if (!run.channelId || !this.channelStore) return;
+    const sessionId = `run-${run.id}`;
+    if (this.thresholdFeedUnsubs.has(sessionId)) return;
+    if (!this.trackerPool.has(sessionId)) return;
+    const tracker = this.trackerPool.get(sessionId, 0); // ceiling unused on existing tracker
+    const cap = agent.capability as { model?: string } | undefined;
+    const modelName = cap?.model ?? (agent as unknown as { model?: string }).model;
+    const unsub = attachThresholdFeed(tracker, run.channelId, this.channelStore, {
+      modelName,
+    });
+    this.thresholdFeedUnsubs.set(sessionId, unsub);
   }
 }
 
