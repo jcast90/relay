@@ -1,5 +1,5 @@
 use harness_data as data;
-use relay_paths::augmented_child_path;
+use relay_paths::{augmented_child_path, cli_bin};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -1962,6 +1962,15 @@ fn start_chat(
         let mut final_session_id: Option<String> = None;
         let mut cancelled = false;
         let mut saw_any_stdout_line = false;
+        // D-04 chat-mode parity: capture the per-turn `usage` and `model`
+        // from claude's stream so we can shell out to
+        // `rly chat record-usage` after `child.wait()` resolves below. The
+        // `result` line carries the cumulative usage for the turn; the
+        // `system.init` line carries the model. Holding them in locals is
+        // cheaper than re-parsing the same lines twice.
+        let mut captured_input_tokens: u64 = 0;
+        let mut captured_output_tokens: u64 = 0;
+        let mut captured_model: Option<String> = None;
 
         for line in reader.lines() {
             // Rewind (and anything else that wants to abort a live stream)
@@ -2066,6 +2075,31 @@ fn start_chat(
                     if let Some(sid) = json.get("session_id").and_then(|v| v.as_str()) {
                         final_session_id = Some(sid.to_string());
                     }
+                    // Capture token usage for the chat-record-usage shell-out
+                    // after `child.wait()` resolves. Sum cache_read +
+                    // cache_creation + input_tokens into a single `input`
+                    // figure so the budget line matches what the orchestrator
+                    // adapter records (see `cli-agents-claude-usage.test.ts`).
+                    if let Some(usage) = json.get("usage").and_then(|u| u.as_object()) {
+                        let input = usage
+                            .get("input_tokens")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0)
+                            + usage
+                                .get("cache_read_input_tokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0)
+                            + usage
+                                .get("cache_creation_input_tokens")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                        let output = usage
+                            .get("output_tokens")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        captured_input_tokens = input;
+                        captured_output_tokens = output;
+                    }
                     if accum.is_empty() {
                         if let Some(text) = json.get("result").and_then(|v| v.as_str()) {
                             if !text.is_empty() {
@@ -2093,6 +2127,16 @@ fn start_chat(
                             "chat-event",
                             ChatEvent::Activity { stream_id, text },
                         );
+                    }
+                    // D-04 chat-mode parity: the `system.init` event carries
+                    // the model name. Capture it so the post-turn
+                    // `rly chat record-usage` shell-out can pass `--model`
+                    // and the budget pct is computed against the right
+                    // context-window ceiling.
+                    if json.get("subtype").and_then(|v| v.as_str()) == Some("init") {
+                        if let Some(model) = json.get("model").and_then(|v| v.as_str()) {
+                            captured_model = Some(model.to_string());
+                        }
                     }
                 }
                 Some("rate_limit_event") => {
@@ -2209,6 +2253,42 @@ fn start_chat(
                     claude_session_id: sid.clone(),
                 },
             );
+
+            // D-04 chat-mode parity: shell out to `rly chat record-usage`
+            // exactly once per Claude turn so the GUI's chat session
+            // populates `~/.relay/sessions/<sid>/budget.jsonl` with the
+            // same shape the orchestrator writes (kind="chat" being the
+            // discriminator). The TUI does the equivalent in
+            // `tui/src/main.rs` (Task 10b, PR-3). Fire-and-forget — a
+            // failed record-usage call shouldn't break the chat flow.
+            if captured_input_tokens > 0 || captured_output_tokens > 0 {
+                let input_str = captured_input_tokens.to_string();
+                let output_str = captured_output_tokens.to_string();
+                let mut record_args: Vec<&str> = vec![
+                    "chat",
+                    "record-usage",
+                    "--session",
+                    sid,
+                    "--input",
+                    &input_str,
+                    "--output",
+                    &output_str,
+                    "--kind",
+                    "chat",
+                    "--channel",
+                    &channel_id_thread,
+                ];
+                if let Some(ref m) = captured_model {
+                    record_args.push("--model");
+                    record_args.push(m);
+                }
+                let _ = std::process::Command::new(cli_bin())
+                    .args(&record_args)
+                    .env("PATH", augmented_child_path())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn();
+            }
         }
 
         let _ = app_handle.emit(

@@ -6,27 +6,29 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { handleChatRecordUsageCommand } from "../../src/cli/chat-record-usage.js";
+import { __resetRelayDirCacheForTests } from "../../src/cli/paths.js";
 
 const RM_OPTS = { recursive: true, force: true, maxRetries: 3, retryDelay: 50 };
 
 /**
- * RED tests for the `rly chat record-usage` CLI subcommand handler. The
- * stub throws in PR-1; PR-4 (Task 10) lands the real implementation that
- * mints/resumes a tracker, calls record(), and (when --channel is passed)
- * wires the threshold-feed bridge.
+ * GREEN in PR-4: real `handleChatRecordUsageCommand` mints a TokenTracker,
+ * calls record(), and (when --channel is passed) wires the threshold-feed
+ * bridge.
  */
-describe.todo("handleChatRecordUsageCommand", () => {
+describe("handleChatRecordUsageCommand", () => {
   let root: string;
   const originalHome = process.env.HOME;
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "relay-chat-record-"));
     process.env.HOME = root;
+    __resetRelayDirCacheForTests();
   });
 
   afterEach(async () => {
     if (originalHome) process.env.HOME = originalHome;
     else delete process.env.HOME;
+    __resetRelayDirCacheForTests();
     await rm(root, RM_OPTS);
   });
 

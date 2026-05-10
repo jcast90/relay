@@ -50,6 +50,7 @@ import { handleHandoffCommand } from "./cli/handoff.js";
 import { startDashboard } from "./tui/dashboard.js";
 import { SessionStore } from "./cli/session-store.js";
 import { buildSystemPrompt, resolveChannelRefs, findMcpConfig } from "./cli/chat-context.js";
+import { handleChatRecordUsageCommand } from "./cli/chat-record-usage.js";
 import { rewindApply, rewindSnapshot } from "./cli/chat-rewind.js";
 import { submitApproval } from "./orchestrator/approval-gate.js";
 import { getWorkspaceDir } from "./cli/workspace-registry.js";
@@ -2596,8 +2597,41 @@ async function handleChatCommand(
     return;
   }
 
+  if (sub === "record-usage") {
+    const sessionId = parseNamedArg(args, "--session");
+    const inputArg = parseNamedArg(args, "--input");
+    const outputArg = parseNamedArg(args, "--output");
+    const channelId = parseNamedArg(args, "--channel");
+    const model = parseNamedArg(args, "--model");
+    const kindArg = parseNamedArg(args, "--kind");
+
+    const input = inputArg !== undefined ? Number(inputArg) : NaN;
+    const output = outputArg !== undefined ? Number(outputArg) : NaN;
+
+    if (!sessionId || !Number.isFinite(input) || !Number.isFinite(output)) {
+      console.error(
+        "Usage: rly chat record-usage --session <id> --input <n> --output <n> [--kind chat|run|admin] [--channel <id>] [--model <name>]"
+      );
+      process.exitCode = 1;
+      return;
+    }
+
+    const kind: "chat" | "run" | "admin" =
+      kindArg === "run" || kindArg === "admin" ? kindArg : "chat";
+
+    await handleChatRecordUsageCommand({
+      session: sessionId,
+      input,
+      output,
+      kind,
+      channel: channelId,
+      model,
+    });
+    return;
+  }
+
   console.error(
-    "Usage: rly chat <system-prompt|resolve-refs|mcp-config|rewind|rewind-snapshot|rewind-apply>"
+    "Usage: rly chat <system-prompt|resolve-refs|mcp-config|rewind|rewind-snapshot|rewind-apply|record-usage>"
   );
   process.exitCode = 1;
 }

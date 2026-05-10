@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { handleChatRecordUsageCommand } from "../../src/cli/chat-record-usage.js";
+import { __resetRelayDirCacheForTests } from "../../src/cli/paths.js";
 import { SessionBudgetSchema } from "../../src/domain/session-budget.js";
 
 const RM_OPTS = { recursive: true, force: true, maxRetries: 3, retryDelay: 50 };
@@ -13,25 +14,24 @@ const RM_OPTS = { recursive: true, force: true, maxRetries: 3, retryDelay: 50 };
 /**
  * M6 — full-chain integration smoke. Wires the chat-record-usage entry
  * point through to the budget.jsonl on disk, then re-reads it via
- * `SessionBudgetSchema` to confirm the round-trip holds end-to-end.
- *
- * RED in PR-1 (handleChatRecordUsageCommand stub throws). Goes GREEN
- * once PR-4 (Task 10) lands the implementation. The Rust-side reader is
- * covered by `crates/harness-data/src/lib.rs::tests::session_budget_*`
- * (already GREEN from Task 6 in this PR).
+ * `SessionBudgetSchema` to confirm the round-trip holds end-to-end. The
+ * Rust-side reader is covered by `crates/harness-data/src/lib.rs::tests::
+ * session_budget_*` (Task 6).
  */
-describe.todo("Session-budget end-to-end (M6)", () => {
+describe("Session-budget end-to-end (M6)", () => {
   let root: string;
   const originalHome = process.env.HOME;
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "relay-e2e-budget-"));
     process.env.HOME = root;
+    __resetRelayDirCacheForTests();
   });
 
   afterEach(async () => {
     if (originalHome) process.env.HOME = originalHome;
     else delete process.env.HOME;
+    __resetRelayDirCacheForTests();
     await rm(root, RM_OPTS);
   });
 
