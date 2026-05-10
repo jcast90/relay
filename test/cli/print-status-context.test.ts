@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { __resetRelayDirCacheForTests } from "../../src/cli/paths.js";
 import {
   formatActiveSessionsBlock,
   loadActiveSessions,
@@ -13,10 +14,11 @@ import {
 const RM_OPTS = { recursive: true, force: true, maxRetries: 3, retryDelay: 50 };
 
 /**
- * RED tests for the `rly status` Active Sessions block. PR-1 ships the
- * stub-throwing formatters; PR-4 (Task 11) lands the implementations.
+ * GREEN in PR-4: real `formatActiveSessionsBlock` and `loadActiveSessions`
+ * implementations. The formatter is purely deterministic; the loader
+ * filters to `kind === "chat"` (M3 / M4) and isolates malformed files (L3).
  */
-describe.todo("formatActiveSessionsBlock", () => {
+describe("formatActiveSessionsBlock", () => {
   it("renders one line per session with model + ctx pct + used/total", () => {
     const rows: ActiveSessionRow[] = [
       {
@@ -42,18 +44,20 @@ describe.todo("formatActiveSessionsBlock", () => {
   });
 });
 
-describe.todo("loadActiveSessions", () => {
+describe("loadActiveSessions", () => {
   let root: string;
   const originalHome = process.env.HOME;
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "relay-status-"));
     process.env.HOME = root;
+    __resetRelayDirCacheForTests();
   });
 
   afterEach(async () => {
     if (originalHome) process.env.HOME = originalHome;
     else delete process.env.HOME;
+    __resetRelayDirCacheForTests();
     await rm(root, RM_OPTS);
   });
 

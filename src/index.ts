@@ -51,6 +51,7 @@ import { startDashboard } from "./tui/dashboard.js";
 import { SessionStore } from "./cli/session-store.js";
 import { buildSystemPrompt, resolveChannelRefs, findMcpConfig } from "./cli/chat-context.js";
 import { handleChatRecordUsageCommand } from "./cli/chat-record-usage.js";
+import { formatActiveSessionsBlock, loadActiveSessions } from "./cli/print-status-context.js";
 import { rewindApply, rewindSnapshot } from "./cli/chat-rewind.js";
 import { submitApproval } from "./orchestrator/approval-gate.js";
 import { getWorkspaceDir } from "./cli/workspace-registry.js";
@@ -2807,6 +2808,17 @@ async function printStatus(artifactStore: LocalArtifactStore, cwd: string): Prom
   }
 
   console.log("");
+
+  // Active chat sessions block (Phase 1 — REQ-1.6). Reads
+  // `~/.relay/sessions/<id>/budget.jsonl` files filtered to `kind: "chat"`
+  // and surfaces the worst-percent first. Skipped silently when no chat
+  // sessions exist so non-chat operators don't see an empty block.
+  const activeSessions = loadActiveSessions();
+  const activeBlock = formatActiveSessionsBlock(activeSessions);
+  if (activeBlock) {
+    console.log(activeBlock);
+    console.log("");
+  }
 
   if (summary.recentRuns.length === 0) {
     console.log("Recent runs: none");
