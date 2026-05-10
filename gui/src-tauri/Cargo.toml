@@ -19,6 +19,7 @@ serde_json = "1"
 notify = "6"
 chrono = "0.4"
 harness-data = { path = "../../crates/harness-data" }
+relay-paths = { path = "../../crates/relay-paths" }
 
 [dev-dependencies]
 tempfile = "3"

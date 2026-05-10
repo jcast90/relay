@@ -10,6 +10,7 @@ import type {
   ChannelEntry,
   ChannelRunLink,
   ChatSession,
+  ChatSessionBudget,
   Decision,
   GuiSettings,
   PendingPlan,
@@ -253,6 +254,15 @@ export const api = {
     invoke<void>("set_default_provider_profile", { id }),
   setChannelProviderProfile: (channelId: string, profileId: string | null) =>
     invoke<void>("set_channel_provider_profile", { channelId, profileId }),
+
+  // Phase 1 — per-session token-usage telemetry. Both commands proxy
+  // to `harness_data::load_session_budget` /
+  // `harness_data::list_session_budgets`; the Rust side filters
+  // `kind == "chat"` for `listChatSessionBudgets` so the worst-session
+  // chip never surfaces admin/run sessions.
+  getChatSessionBudget: (sessionId: string, total: number) =>
+    invoke<ChatSessionBudget>("get_chat_session_budget", { sessionId, total }),
+  listChatSessionBudgets: () => invoke<ChatSessionBudget[]>("list_chat_session_budgets"),
 };
 
 export type ChatEvent =

@@ -3365,3 +3365,90 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   font-weight: var(--font-weight-regular, 400);
   margin-top: var(--space-1);
 }
+
+/* ------------------------------------------------------------------ */
+/* Phase 1 PR-3 / Task 7: chat-mode context-window bar + worst-       */
+/* session chip. Reuses the existing `.metric--tokens-*` color tier   */
+/* tokens (see AutonomousSessionHeader CSS above) so the visual       */
+/* language stays consistent across surfaces.                         */
+/* ------------------------------------------------------------------ */
+.context-window-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3, 8px);
+  padding: var(--space-1, 4px) var(--space-3, 12px);
+  font-size: var(--font-size-xs, 12px);
+  color: var(--color-text-muted);
+  background: var(--color-surface-low, transparent);
+  border-bottom: 1px solid var(--color-border-subtle, transparent);
+}
+.context-window-bar__label {
+  font-weight: var(--font-weight-semibold, 600);
+  color: var(--color-text-primary);
+}
+.context-window-bar__counts {
+  font-variant-numeric: tabular-nums;
+}
+.context-window-bar__model {
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+}
+.context-window-bar__rail {
+  flex: 1;
+  height: 4px;
+  background: var(--color-border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 2px;
+  overflow: hidden;
+}
+.context-window-bar__fill {
+  height: 100%;
+  background: var(--color-accent-sky);
+  transition: width 0.3s ease-out;
+}
+.context-window-bar.metric--tokens-warn .context-window-bar__fill {
+  background: var(--color-accent-amber);
+}
+.context-window-bar.metric--tokens-hot .context-window-bar__fill {
+  background: var(--color-accent-coral);
+}
+.context-window-bar.metric--tokens-overrun .context-window-bar__fill {
+  background: var(--color-status-failed);
+}
+.context-window-bar.metric--tokens-warn .context-window-bar__label {
+  color: var(--color-accent-amber);
+}
+.context-window-bar.metric--tokens-hot .context-window-bar__label {
+  color: var(--color-accent-coral);
+}
+.context-window-bar.metric--tokens-overrun .context-window-bar__label {
+  color: var(--color-status-failed);
+  font-weight: var(--font-weight-bold, 700);
+}
+
+/* Worst-session chip — sits beside the UpdateBanner at the top of the
+ * app shell. Only renders when at least one chat session crosses 75%
+ * (the M3/M4 filter is enforced backend-side). */
+.worst-session-chip {
+  align-self: flex-end;
+  margin: var(--space-2, 6px) var(--space-3, 12px);
+  padding: var(--space-1, 4px) var(--space-3, 10px);
+  font-size: var(--font-size-xs, 12px);
+  font-weight: var(--font-weight-semibold, 600);
+  background: transparent;
+  color: var(--color-accent-amber);
+  border: 1px solid var(--color-accent-amber);
+  border-radius: var(--radius-sm, 4px);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.worst-session-chip:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.worst-session-chip.metric--tokens-hot {
+  color: var(--color-accent-coral);
+  border-color: var(--color-accent-coral);
+}
+.worst-session-chip.metric--tokens-overrun {
+  color: var(--color-status-failed);
+  border-color: var(--color-status-failed);
+}

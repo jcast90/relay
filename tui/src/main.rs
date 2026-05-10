@@ -2,6 +2,7 @@ mod install_drift;
 mod ui;
 
 use harness_data as data;
+use relay_paths::{augmented_child_path, cli_bin};
 
 use crossterm::{
     event::{
@@ -21,11 +22,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use data::*;
-
-/// Resolve the Relay CLI binary path (env: RELAY_BIN; default "rly")
-fn cli_bin() -> String {
-    std::env::var("RELAY_BIN").unwrap_or_else(|_| "rly".to_string())
-}
 
 /// Call the Relay CLI with given args and parse JSON output.
 /// Returns None if the command fails or output isn't valid JSON.
@@ -2700,6 +2696,16 @@ fn spawn_claude_worker_with_session(
                     let stdout = child.stdout.take().unwrap();
                     let reader = BufReader::new(stdout);
                     let mut got_assistant_text = false;
+                    // Phase 1 PR-3 / Task 10b: capture the per-turn token usage
+                    // emitted in the `result` event so we can shell out to
+                    // `rly chat record-usage` after `child.wait()` resolves.
+                    // Mid-stream `assistant.message.usage` snapshots are
+                    // intentionally ignored — the CLI's stream-json contract
+                    // marks the `result` event as the authoritative end-of-turn
+                    // usage record. Using mid-stream values would double-count.
+                    let mut captured_usage: bool = false;
+                    let mut captured_input_total: u64 = 0;
+                    let mut captured_output_total: u64 = 0;
 
                     for line in reader.lines() {
                         match line {
@@ -2756,6 +2762,35 @@ fn spawn_claude_worker_with_session(
                                                 session_id = Some(sid.to_string());
                                                 let _ = evt_tx.send(WorkerEvent::ClaudeSessionId(sid.to_string()));
                                             }
+                                            // Task 10b: record the end-of-turn usage
+                                            // payload. Sum prompt + cache reads + cache
+                                            // creates into a single "input" tally because
+                                            // that's how the orchestrator-side
+                                            // TokenTracker accounts for context-window
+                                            // consumption (cached prompt tokens still
+                                            // occupy the window).
+                                            if let Some(usage) = json
+                                                .get("usage")
+                                                .and_then(|u| u.as_object())
+                                            {
+                                                captured_input_total = usage
+                                                    .get("input_tokens")
+                                                    .and_then(|v| v.as_u64())
+                                                    .unwrap_or(0)
+                                                    + usage
+                                                        .get("cache_read_input_tokens")
+                                                        .and_then(|v| v.as_u64())
+                                                        .unwrap_or(0)
+                                                    + usage
+                                                        .get("cache_creation_input_tokens")
+                                                        .and_then(|v| v.as_u64())
+                                                        .unwrap_or(0);
+                                                captured_output_total = usage
+                                                    .get("output_tokens")
+                                                    .and_then(|v| v.as_u64())
+                                                    .unwrap_or(0);
+                                                captured_usage = true;
+                                            }
                                             if !got_assistant_text {
                                                 if let Some(text) =
                                                     json.get("result").and_then(|v| v.as_str())
@@ -2777,6 +2812,54 @@ fn spawn_claude_worker_with_session(
                     }
 
                     let _ = child.wait();
+
+                    // Phase 1 PR-3 / Task 10b — H1 dispatch parity:
+                    // persist the captured per-turn usage via
+                    // `rly chat record-usage` so this TUI-launched session
+                    // writes to the same `~/.relay/sessions/<sid>/budget.jsonl`
+                    // pipeline the GUI and OrchestratorV2 use. Fire-and-
+                    // forget; the spawn_result is logged but never aborts
+                    // the chat loop. `--model` is intentionally omitted —
+                    // chat-mode's model is currently not plumbed through
+                    // the worker thread, and the CLI side resolves to a
+                    // sane default context window when absent. When chat-
+                    // mode gains explicit per-session model selection, add
+                    // a `model_owned: Option<String>` capture above and
+                    // an `--model <name>` arg here.
+                    if captured_usage {
+                        if let Some(ref sid) = session_id {
+                            let mut args: Vec<String> = vec![
+                                "chat".into(),
+                                "record-usage".into(),
+                                "--session".into(),
+                                sid.clone(),
+                                "--input".into(),
+                                captured_input_total.to_string(),
+                                "--output".into(),
+                                captured_output_total.to_string(),
+                                "--kind".into(),
+                                "chat".into(),
+                            ];
+                            if let Some(ref ch_id) = channel_id_owned {
+                                args.push("--channel".into());
+                                args.push(ch_id.clone());
+                            }
+                            let arg_refs: Vec<&str> =
+                                args.iter().map(|s| s.as_str()).collect();
+                            let spawn_result = Command::new(cli_bin())
+                                .args(&arg_refs)
+                                .env("PATH", augmented_child_path())
+                                .stdout(Stdio::null())
+                                .stderr(Stdio::null())
+                                .spawn();
+                            if let Err(e) = spawn_result {
+                                eprintln!(
+                                    "[budget] rly chat record-usage shell-out failed: {e}"
+                                );
+                            }
+                        }
+                    }
+
                     let _ = evt_tx.send(WorkerEvent::Done(session_id.clone()));
                 }
                 Err(e) => {

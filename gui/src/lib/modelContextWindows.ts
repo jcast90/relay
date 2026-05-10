@@ -18,3 +18,30 @@ export function resolveContextWindow(modelName?: string | null): number {
   if (!modelName) return DEFAULT_CONTEXT_WINDOW;
   return MODEL_CONTEXT_WINDOWS[modelName] ?? DEFAULT_CONTEXT_WINDOW;
 }
+
+/**
+ * Return a structured summary of the context-window resolution for
+ * the given model name. Used by the GUI worst-session chip's tooltip
+ * (Phase 1 PR-3 / Task 7) so the user can tell when the chip is
+ * working off the default ceiling vs a model-specific value.
+ *
+ * - `key` echoes the looked-up model name (or "default" when none was
+ *   provided / no entry matched).
+ * - `value` is the resolved context-window size, in tokens.
+ * - `isDefault` is true when the result fell back to
+ *   `DEFAULT_CONTEXT_WINDOW`.
+ */
+export function getModelContextWindowSummary(modelName?: string | null): {
+  key: string;
+  value: number;
+  isDefault: boolean;
+} {
+  if (!modelName) {
+    return { key: "default", value: DEFAULT_CONTEXT_WINDOW, isDefault: true };
+  }
+  const direct = MODEL_CONTEXT_WINDOWS[modelName];
+  if (direct !== undefined) {
+    return { key: modelName, value: direct, isDefault: false };
+  }
+  return { key: "default", value: DEFAULT_CONTEXT_WINDOW, isDefault: true };
+}

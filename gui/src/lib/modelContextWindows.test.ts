@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { MODEL_CONTEXT_WINDOWS } from "./modelContextWindows";
+import {
+  DEFAULT_CONTEXT_WINDOW,
+  MODEL_CONTEXT_WINDOWS,
+  getModelContextWindowSummary,
+} from "./modelContextWindows";
 
 /**
  * M9 — model-table drift guard. The canonical TS-side table at
@@ -30,15 +34,34 @@ describe("modelContextWindows GUI mirror (M9 drift guard)", () => {
     }
   });
 
-  // PR-3 (Task 7) extracts a shared `tokenSeverity` util and adds a
-  // re-export from this module so consumers have one import. The
-  // `resolveContextWindow` helper is mirrored too — this assertion
-  // pins the mirror is exposing it. RED until PR-3 lands the
-  // re-export.
-  // PR-3 (Task 7) will add a `getModelContextWindowSummary` helper that
-  // returns `{ key, value, isDefault }` for the GUI worst-session chip's
-  // tooltip. Marked todo until PR-3 lands the re-export.
-  it.todo(
-    "re-exports a `getModelContextWindowSummary` helper for the GUI worst-session chip (PR-3 wiring)"
-  );
+  it("getModelContextWindowSummary returns the canonical row for known models", () => {
+    expect(getModelContextWindowSummary("claude-opus-4-7")).toEqual({
+      key: "claude-opus-4-7",
+      value: 1_000_000,
+      isDefault: false,
+    });
+    expect(getModelContextWindowSummary("claude-sonnet-4-5")).toEqual({
+      key: "claude-sonnet-4-5",
+      value: 200_000,
+      isDefault: false,
+    });
+  });
+
+  it("getModelContextWindowSummary falls back to the default ceiling for unknown / missing models", () => {
+    expect(getModelContextWindowSummary(undefined)).toEqual({
+      key: "default",
+      value: DEFAULT_CONTEXT_WINDOW,
+      isDefault: true,
+    });
+    expect(getModelContextWindowSummary(null)).toEqual({
+      key: "default",
+      value: DEFAULT_CONTEXT_WINDOW,
+      isDefault: true,
+    });
+    expect(getModelContextWindowSummary("not-a-real-model")).toEqual({
+      key: "default",
+      value: DEFAULT_CONTEXT_WINDOW,
+      isDefault: true,
+    });
+  });
 });

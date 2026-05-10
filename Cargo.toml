@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/harness-data",
+    "crates/relay-paths",
     "tui",
     "gui/src-tauri",
 ]

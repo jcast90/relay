@@ -331,3 +331,20 @@ export type AutonomousSessionState = {
 
 // AL-10 previously defined `SessionApproval` here. Dropped — AL-8 owns the
 // GUI approvals surface via `ApprovalQueueRecord` above.
+
+// Phase 1 (per-session token-usage telemetry). Mirrors `SessionKind`
+// + `SessionBudget` in `crates/harness-data/src/lib.rs` and
+// `src/domain/session-budget.ts`. The Tauri commands `get_chat_session_budget`
+// and `list_chat_session_budgets` return rows in this shape.
+export type SessionKind = "chat" | "run" | "admin";
+
+export interface ChatSessionBudget {
+  schemaVersion: 1;
+  kind: SessionKind;
+  sessionId: string;
+  used: number;
+  total: number;
+  pct: number;
+  lastUpdated?: string | null;
+  modelName?: string | null;
+}

@@ -1,4 +1,5 @@
 use harness_data as data;
+use relay_paths::augmented_child_path;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -653,152 +654,14 @@ fn rly_invocation_debug(settings: &data::GuiSettings) -> String {
     }
 }
 
-/// Build a PATH for child processes that augments the inherited PATH
-/// with well-known node / user-bin install dirs.
-///
-/// `resolve_rly_bin` fixes finding the `rly` binary from a Finder-
-/// launched GUI (PR #129), but the pnpm-generated shim itself then runs
-/// `exec node …`. That second hop inherits the same minimal launchd
-/// PATH and fails with `node: not found`. Augmenting the child's PATH
-/// here fixes the whole chain — shim → node → rly.mjs — without having
-/// to patch every shim on every user's machine.
-///
-/// Extras are **appended** in highest→lowest priority order. The
-/// inherited parent PATH stays first so terminal-launched sessions keep
-/// using the user's own ordering; launchd-launched GUIs get nvm, the
-/// homebrew prefixes, and the usual user-local bins tacked on. Nvm
-/// leads the extras so its modern node wins over a stale
-/// `/usr/local/bin/node` (observed during testing — a crusty old node
-/// installed at `/usr/local/bin` crashed with
-/// `ERR_UNKNOWN_BUILTIN_MODULE: node:readline/promises` before being
-/// shadowed by nvm).
-///
-/// Thin wrapper — recomputes on each call. The work is a handful of
-/// `read_dir` + `is_dir` probes, dwarfed by the child-process spawn
-/// that consumes the result. Previous versions cached with `OnceLock`,
-/// but cargo-test runs multiple tests in the same process and a cache
-/// poisoned by early test env would leak into later tests.
-fn augmented_child_path() -> String {
-    let home = std::env::var_os("HOME").unwrap_or_default();
-    // Prefer the user's login-shell PATH over the process's inherited
-    // PATH when available. macOS Finder launches inherit launchd's
-    // stripped `/usr/bin:/bin:/usr/sbin:/sbin` — the user's `.zprofile`
-    // / `.profile` / brew/pnpm/nvm init never runs, so even the
-    // explicit candidate dirs we add below can miss unusual install
-    // layouts (mise, volta with custom root, brew on a non-default
-    // prefix, corporate /opt installs). Sourcing the shell once gives
-    // us the same environment the user sees in their terminal.
-    let parent: std::ffi::OsString = match resolve_shell_path() {
-        Some(s) => s.into(),
-        None => std::env::var_os("PATH").unwrap_or_default(),
-    };
-    compute_augmented_path(&parent, &home)
-}
-
-/// Capture the PATH the user's login shell would set.
-///
-/// On macOS, GUI apps launched from Finder inherit launchd's stripped
-/// PATH. iTerm / Warp / VS Code all work around this by running the
-/// user's `$SHELL` once to source their dotfiles and harvest the
-/// resulting PATH; we do the same.
-///
-/// Intentionally `-l -c` (login, non-interactive). `-i` would also
-/// source `.zshrc` and friends, but interactive rc files commonly
-/// print prompts, read from stdin, or take seconds — unacceptable on
-/// the GUI startup path. Any PATH set only in `.zshrc` (not
-/// `.zprofile`) still gets caught by the per-tool candidate probes in
-/// [`compute_augmented_path`].
-///
-/// Bounded by a 2-second wall clock. If the shell hangs (broken rc,
-/// unusual login dance) the spawned thread leaks harmlessly and we
-/// fall back to the process PATH so the app still boots.
-fn resolve_shell_path() -> Option<String> {
-    static RESOLVED: OnceLock<Option<String>> = OnceLock::new();
-    RESOLVED
-        .get_or_init(|| {
-            let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty())?;
-            use std::sync::mpsc;
-            let (tx, rx) = mpsc::channel();
-            std::thread::spawn(move || {
-                let out = Command::new(&shell)
-                    .args(["-l", "-c", "printenv PATH"])
-                    .stdin(Stdio::null())
-                    .stderr(Stdio::null())
-                    .output();
-                let _ = tx.send(out);
-            });
-            let out = match rx.recv_timeout(std::time::Duration::from_secs(2)) {
-                Ok(Ok(o)) => o,
-                Ok(Err(e)) => {
-                    eprintln!("[path] $SHELL -l -c 'printenv PATH' failed: {e}");
-                    return None;
-                }
-                Err(_) => {
-                    eprintln!("[path] $SHELL -l -c 'printenv PATH' timed out after 2s; falling back to inherited PATH");
-                    return None;
-                }
-            };
-            if !out.status.success() {
-                return None;
-            }
-            let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if path.is_empty() {
-                None
-            } else {
-                Some(path)
-            }
-        })
-        .clone()
-}
-
-/// Pure helper — `augmented_child_path` reads from process env, this
-/// takes the parent PATH and HOME as inputs so tests can exercise it
-/// without mutating process-wide state.
-fn compute_augmented_path(parent_path: &std::ffi::OsStr, home: &std::ffi::OsStr) -> String {
-    let home_path = PathBuf::from(home);
-    let mut parts: Vec<PathBuf> = std::env::split_paths(parent_path).collect();
-    let mut seen: HashSet<PathBuf> = parts.iter().cloned().collect();
-
-    let mut extras: Vec<PathBuf> = Vec::new();
-
-    // nvm first (highest priority). Newest version wins.
-    let nvm_root = home_path.join(".nvm/versions/node");
-    if let Ok(entries) = std::fs::read_dir(&nvm_root) {
-        let mut versions: Vec<PathBuf> = entries
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.is_dir())
-            .collect();
-        versions.sort_by(|a, b| b.cmp(a)); // newest first
-        for v in versions {
-            extras.push(v.join("bin"));
-        }
-    }
-
-    // Homebrew prefixes + misc user-local install dirs.
-    extras.push(PathBuf::from("/opt/homebrew/bin"));
-    extras.push(PathBuf::from("/usr/local/bin"));
-    for rel in [
-        "Library/pnpm",
-        ".local/share/pnpm",
-        ".npm-global/bin",
-        ".volta/bin",
-        ".asdf/shims",
-        ".cargo/bin",
-        ".local/bin",
-    ] {
-        extras.push(home_path.join(rel));
-    }
-
-    for dir in extras {
-        if dir.is_dir() && seen.insert(dir.clone()) {
-            parts.push(dir);
-        }
-    }
-
-    std::env::join_paths(parts)
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default()
-}
+// `augmented_child_path`, `compute_augmented_path`, and the underlying
+// `resolve_shell_path` helpers were hoisted into the shared
+// `relay-paths` crate in Phase 1 PR-3 (Task 10b) so the TUI's chat
+// worker can shell out to `rly chat record-usage` with the same
+// launchd-PATH-strip workaround the GUI uses. See
+// `crates/relay-paths/src/lib.rs` for the implementation; consumers
+// here call `augmented_child_path()` and `compute_augmented_path()`
+// imported at the top of this file.
 
 fn cli_run(args: &[&str]) -> CliResult {
     // `rly_command()` prefers `Direct { node, mjs }` so we bypass the
@@ -3238,6 +3101,46 @@ fn get_session_state(session_id: String) -> Result<Option<AutonomousSessionState
     }))
 }
 
+/// Phase 1 — per-session token-usage telemetry (Task 7).
+///
+/// Resolve a single chat session's budget snapshot from
+/// `~/.relay/sessions/<sessionId>/budget.jsonl`. Missing file returns
+/// `SessionBudget::empty(...)` — the GUI uses `used == 0` to decide
+/// whether to render the bar at all.
+///
+/// `total` is the model-resolved context-window ceiling (the GUI side
+/// computes it via `gui/src/lib/modelContextWindows.ts::resolveContextWindow`)
+/// so the same budget file can drive different bars depending on the
+/// model the chat session is talking to.
+#[tauri::command]
+fn get_chat_session_budget(
+    session_id: String,
+    total: u64,
+) -> Result<data::SessionBudget, String> {
+    validate_id_segment(&session_id, "sessionId")?;
+    Ok(data::load_session_budget(&session_id, total))
+}
+
+/// Phase 1 — per-session token-usage telemetry (Task 7, M4 filter).
+///
+/// Walk every session under `~/.relay/sessions/` and return its
+/// budget snapshot, **filtered to `kind == SessionKind::Chat`**. The
+/// admin keyspace (Relay's own meta-prompts) and the run keyspace
+/// (orchestrator runs) MUST stay out of the worst-session chip — the
+/// chip is a chat-mode user-attention surface, and lighting it up for
+/// an admin background batch would be misleading.
+///
+/// Filter happens here (not in the frontend) so any future Tauri
+/// caller — `rly status`, a CLI mirror — gets the same M3/M4 contract
+/// without re-implementing the predicate.
+#[tauri::command]
+fn list_chat_session_budgets() -> Vec<data::SessionBudget> {
+    data::list_session_budgets()
+        .into_iter()
+        .filter(|b| matches!(b.kind, data::SessionKind::Chat))
+        .collect()
+}
+
 /// Optional `current.json` reader. The autonomous loop may write a pointer
 /// to the ticket a worker is currently processing; the shape is
 /// `{"ticketId": "<id>"}`. Returns `None` when the file is missing or
@@ -3392,81 +3295,12 @@ mod tests {
     }
 
     // --- compute_augmented_path ---
-
-    #[test]
-    fn compute_augmented_path_prepends_nvm_ahead_of_local_prefixes() {
-        // Fake HOME containing two nvm node versions; the newest must
-        // appear ahead of /usr/local/bin in the resulting PATH so the
-        // shim's `exec node` doesn't pick up a stale system node.
-        let home_dir = tempfile::tempdir().expect("tempdir");
-        let home = home_dir.path().as_os_str().to_owned();
-        for v in ["v18.0.0", "v22.14.0"] {
-            let bin = home_dir.path().join(".nvm/versions/node").join(v).join("bin");
-            std::fs::create_dir_all(&bin).expect("mkdir nvm");
-        }
-        // /usr/local/bin must exist on the host for the ordering assertion
-        // to fire — if missing, the test passes vacuously. That's fine: the
-        // comparison we care about (nvm before /usr/local/bin) is only
-        // meaningful when both are present, and the newest-vs-older-nvm
-        // assertion still covers the sort-order invariant unconditionally.
-        let parent = std::ffi::OsString::from("/usr/bin:/bin");
-        let result = compute_augmented_path(&parent, &home);
-
-        let segments: Vec<&str> = result.split(':').collect();
-        let home_str = home.to_str().unwrap();
-        let newest_nvm = format!("{home_str}/.nvm/versions/node/v22.14.0/bin");
-        let older_nvm = format!("{home_str}/.nvm/versions/node/v18.0.0/bin");
-        let idx_newest = segments.iter().position(|s| *s == newest_nvm);
-        let idx_older = segments.iter().position(|s| *s == older_nvm);
-        assert!(idx_newest.is_some(), "expected newest nvm in PATH: {result}");
-        assert!(idx_older.is_some(), "expected older nvm in PATH: {result}");
-        assert!(
-            idx_newest.unwrap() < idx_older.unwrap(),
-            "newest nvm must precede older: {result}"
-        );
-        if let Some(idx_usr_local) = segments.iter().position(|s| *s == "/usr/local/bin") {
-            assert!(
-                idx_newest.unwrap() < idx_usr_local,
-                "nvm must precede /usr/local/bin so a stale system node is shadowed: {result}"
-            );
-        }
-    }
-
-    #[test]
-    fn compute_augmented_path_preserves_parent_entries_first() {
-        // Terminal-launched sessions already have nvm at the top of PATH;
-        // the helper must not reorder the parent's entries, only append
-        // fallbacks.
-        let home_dir = tempfile::tempdir().expect("tempdir");
-        let home = home_dir.path().as_os_str().to_owned();
-        let parent = std::ffi::OsString::from("/custom/user/bin:/usr/bin");
-        let result = compute_augmented_path(&parent, &home);
-
-        let segments: Vec<&str> = result.split(':').collect();
-        assert_eq!(
-            segments.first().copied(),
-            Some("/custom/user/bin"),
-            "parent PATH must lead the result: {result}"
-        );
-        assert_eq!(
-            segments.get(1).copied(),
-            Some("/usr/bin"),
-            "parent PATH order must be preserved: {result}"
-        );
-    }
-
-    #[test]
-    fn compute_augmented_path_deduplicates() {
-        // If /opt/homebrew/bin is already in the parent PATH, we must not
-        // append a second copy.
-        let home_dir = tempfile::tempdir().expect("tempdir");
-        let home = home_dir.path().as_os_str().to_owned();
-        let parent = std::ffi::OsString::from("/opt/homebrew/bin:/usr/bin");
-        let result = compute_augmented_path(&parent, &home);
-
-        let count = result.split(':').filter(|s| *s == "/opt/homebrew/bin").count();
-        assert_eq!(count, 1, "duplicate /opt/homebrew/bin in PATH: {result}");
-    }
+    //
+    // Phase 1 PR-3 (Task 10b) hoisted these helpers into the shared
+    // `relay-paths` crate. The full unit-test suite (parent-first
+    // ordering, deduplication, nvm-version sort) lives there now —
+    // keeping a copy here would just duplicate coverage. See
+    // `crates/relay-paths/src/lib.rs::tests`.
 
     // --- check_run_cli_allowed ---
 
@@ -4039,6 +3873,88 @@ mod tests {
             Some("rate limit · five_hour · throttled"),
         );
     }
+
+    // --- Phase 1 PR-3 / Task 7 — chat session budget Tauri commands ---
+    //
+    // Drive the GUI Tauri-side reader against a hand-crafted
+    // `~/.relay/sessions/<sid>/budget.jsonl` so the GUI bar's data
+    // pipeline is end-to-end exercised in CI. Mirrors the harness-data
+    // unit tests but anchors the contract at the Tauri command surface
+    // since that's what `gui/src/api.ts::getChatSessionBudget` actually
+    // calls.
+
+    fn write_chat_budget_fixture(
+        root: &std::path::Path,
+        session_id: &str,
+        cumulative_used: u64,
+        kind: &str,
+    ) {
+        let dir = root.join("sessions").join(session_id);
+        fs::create_dir_all(&dir).unwrap();
+        let line = serde_json::json!({
+            "ts": "2026-05-09T00:00:00Z",
+            "kind": kind,
+            "inputTokens": cumulative_used,
+            "outputTokens": 0,
+            "cumulativeUsed": cumulative_used,
+        });
+        fs::write(dir.join("budget.jsonl"), format!("{}\n", line)).unwrap();
+    }
+
+    #[test]
+    fn get_chat_session_budget_reads_last_cumulative_used_from_jsonl() {
+        with_fake_relay_root(|root| {
+            write_chat_budget_fixture(root, "sess-bar", 150_000, "chat");
+            let budget = get_chat_session_budget("sess-bar".into(), 200_000).unwrap();
+            assert_eq!(budget.session_id, "sess-bar");
+            assert_eq!(budget.used, 150_000);
+            assert_eq!(budget.total, 200_000);
+            // 150_000 / 200_000 = 75%
+            assert!((budget.pct - 75.0).abs() < 0.01);
+            assert!(matches!(budget.kind, data::SessionKind::Chat));
+        });
+    }
+
+    #[test]
+    fn get_chat_session_budget_returns_empty_for_missing_file() {
+        with_fake_relay_root(|_| {
+            let budget = get_chat_session_budget("ghost".into(), 200_000).unwrap();
+            assert_eq!(budget.used, 0);
+            assert_eq!(budget.total, 200_000);
+            assert_eq!(budget.pct, 0.0);
+        });
+    }
+
+    #[test]
+    fn get_chat_session_budget_rejects_unsafe_session_id() {
+        with_fake_relay_root(|_| {
+            assert!(get_chat_session_budget("../escape".into(), 200_000).is_err());
+            assert!(get_chat_session_budget("with/slash".into(), 200_000).is_err());
+        });
+    }
+
+    #[test]
+    fn list_chat_session_budgets_filters_to_chat_kind_only() {
+        with_fake_relay_root(|root| {
+            // Three sessions: one chat (should appear), one admin, one
+            // run (both excluded by the M3/M4 filter).
+            write_chat_budget_fixture(root, "chat-a", 120_000, "chat");
+            write_chat_budget_fixture(root, "admin-b", 190_000, "admin");
+            write_chat_budget_fixture(root, "run-c", 50_000, "run");
+            let mut budgets = list_chat_session_budgets();
+            budgets.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+            assert_eq!(budgets.len(), 1, "expected only the chat session");
+            assert_eq!(budgets[0].session_id, "chat-a");
+            assert_eq!(budgets[0].used, 120_000);
+        });
+    }
+
+    #[test]
+    fn list_chat_session_budgets_empty_on_missing_root() {
+        with_fake_relay_root(|_| {
+            assert!(list_chat_session_budgets().is_empty());
+        });
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -4109,6 +4025,9 @@ pub fn run() {
             // earlier (AL-9 owner); AL-10's duplicate was dropped.
             list_autonomous_sessions,
             get_session_state,
+            // Phase 1 per-session token-usage telemetry (Task 7).
+            get_chat_session_budget,
+            list_chat_session_budgets,
             // Provider profiles (PR 3 of multi-provider series).
             list_provider_profiles,
             get_default_provider_profile_id,

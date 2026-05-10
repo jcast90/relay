@@ -1,0 +1,12 @@
+[package]
+name = "relay-paths"
+version = "0.7.0"
+edition = "2021"
+
+# Single-source the launchd-PATH-strip workaround + the `rly` resolver so
+# both `tui` and `gui-src-tauri` consume one implementation. See
+# `crates/relay-paths/src/lib.rs` for the full rationale.
+
+[dependencies]
+# No runtime deps beyond std — the augmented-PATH probes only use
+# `std::fs` / `std::env` / `std::process::Command`.

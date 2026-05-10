@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 import { maybeSeedFirstRun } from "./lib/firstRun";
 import { useAppearance } from "./lib/appearance";
-import type { Channel, GuiSettings } from "./types";
+import { tokenPctSeverity } from "./lib/tokenSeverity";
+import type { Channel, ChatSessionBudget, GuiSettings } from "./types";
 import { CenterPane } from "./components/CenterPane";
 import { NewChannelModal } from "./components/NewChannelModal";
 import { NewDmModal } from "./components/NewDmModal";
@@ -107,6 +108,37 @@ export function App() {
       .catch(() => setSessionCounts({}));
   }, [refreshTick]);
 
+  // Phase 1 PR-3 / Task 7 — worst-session chip.
+  //
+  // Polls `list_chat_session_budgets` (Tauri backend filters
+  // `kind === "chat"` so admin/run sessions are already excluded) and
+  // surfaces the highest-pct chat session as a chip beside the update
+  // banner whenever it crosses 75%. The chip is purely informational —
+  // clicking it would require mapping sid → channelId, which we don't
+  // currently expose; surfacing it is enough to drive the user back to
+  // the relevant channel via the Sidebar.
+  const [chatBudgets, setChatBudgets] = useState<ChatSessionBudget[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listChatSessionBudgets()
+      .then((bs) => {
+        if (!cancelled) setChatBudgets(bs);
+      })
+      .catch(() => {
+        if (!cancelled) setChatBudgets([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshTick]);
+  const worstChatBudget = chatBudgets.reduce<ChatSessionBudget | null>((worst, current) => {
+    if (current.used <= 0) return worst;
+    if (!worst || current.pct > worst.pct) return current;
+    return worst;
+  }, null);
+  const worstChipVisible = !!worstChatBudget && worstChatBudget.pct >= 75;
+
   // Atomic setter for the active channel + session pair. The kickoff
   // path sets both at once; manual channel switches default `sessionId`
   // back to null so CenterPane loads the right channel history. Doing
@@ -125,9 +157,42 @@ export function App() {
 
   const selected = channels.find((c) => c.channelId === selectedId) ?? null;
 
+  const onClickWorstChip = useCallback(async () => {
+    if (!worstChatBudget) return;
+    // Best-effort sid → channel resolver: scan channels' sessions
+    // until we find the one whose `claudeSessionIds` map contains our
+    // sid. Bounded by O(channels), each call is one Tauri round-trip.
+    // Silent failures land back on a no-op so the chip never crashes
+    // the app shell.
+    for (const ch of channels) {
+      try {
+        const sessions = await api.listSessions(ch.channelId);
+        const match = sessions.find((s) =>
+          Object.values(s.claudeSessionIds).includes(worstChatBudget.sessionId)
+        );
+        if (match) {
+          selectChannel(ch.channelId, match.sessionId);
+          return;
+        }
+      } catch {
+        /* swallow — try the next channel */
+      }
+    }
+  }, [worstChatBudget, channels]);
+
   return (
     <div className="app-shell">
       <UpdateBanner />
+      {worstChipVisible && worstChatBudget && (
+        <button
+          type="button"
+          className={`worst-session-chip metric--tokens-${tokenPctSeverity(worstChatBudget.pct)}`}
+          onClick={onClickWorstChip}
+          title={`Jump to chat session ${worstChatBudget.sessionId}`}
+        >
+          ctx {worstChatBudget.pct.toFixed(0)}% — {worstChatBudget.sessionId.slice(0, 12)}
+        </button>
+      )}
       <div className={`app density-${appearance.density} ${rightRailOpen ? "" : "rail-collapsed"}`}>
         {settingsOpen && settings ? (
           <div style={{ gridColumn: "1 / -1", display: "flex", minHeight: 0 }}>

@@ -2,6 +2,16 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { AutonomousSessionState } from "../types";
 
+// NOTE (Phase 1 PR-3 / Task 7): the shared `tokenPctSeverity` util at
+// `gui/src/lib/tokenSeverity.ts` uses the 75/90/100 chat-context
+// ladder (matches `ContextWindowBar` and the worst-session chip). The
+// autonomous-loop header below intentionally retains its OWN
+// 60/85/100 ladder — those crossings are tied to AL-1's
+// `TokenTracker.threshold` events and asserted by
+// `AutonomousSessionHeader.test.tsx`. The two ladders are different
+// surfaces with different alerting semantics, so they DO NOT share
+// the import.
+
 type Props = {
   sessionId: string;
   refreshTick: number;

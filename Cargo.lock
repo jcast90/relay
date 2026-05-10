@@ -3130,6 +3130,7 @@ dependencies = [
  "chrono",
  "harness-data",
  "notify",
+ "relay-paths",
  "serde",
  "serde_json",
  "tauri",
@@ -3138,6 +3139,10 @@ dependencies = [
  "tauri-plugin-shell",
  "tempfile",
 ]
+
+[[package]]
+name = "relay-paths"
+version = "0.7.0"
 
 [[package]]
 name = "relay-tui"
@@ -3149,6 +3154,7 @@ dependencies = [
  "dirs",
  "harness-data",
  "ratatui",
+ "relay-paths",
  "serde",
  "serde_json",
 ]

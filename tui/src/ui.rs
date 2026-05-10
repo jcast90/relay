@@ -1,9 +1,50 @@
+use harness_data as data;
 use ratatui::{
     prelude::*,
     widgets::*,
 };
 
 use crate::{App, ChatRole, CompletionKind, FocusPanel, InputMode, RepoSelectStep, Tab, TextSelection};
+
+/// Phase 1 PR-3 / Task 9: map a context-window percent (0–100+) to a
+/// ratatui [`Color`] matching the GUI's `tokenPctSeverity` ladder
+/// (`gui/src/lib/tokenSeverity.ts`). Pure function — unit-tested below.
+///
+/// Note: the ladder pivots are deliberately the same crossings the
+/// orchestrator's `TokenTracker` fires `threshold` events at; the
+/// dashboard's color tier matches what the bridge logs.
+pub(crate) fn severity_color(pct: f64) -> Color {
+    if pct >= 100.0 {
+        Color::Magenta
+    } else if pct >= 90.0 {
+        Color::Red
+    } else if pct >= 75.0 {
+        Color::Yellow
+    } else if pct >= 50.0 {
+        Color::Cyan
+    } else {
+        Color::Green
+    }
+}
+
+#[cfg(test)]
+mod severity_color_tests {
+    use super::*;
+
+    #[test]
+    fn maps_each_tier() {
+        assert_eq!(severity_color(0.0), Color::Green);
+        assert_eq!(severity_color(49.9), Color::Green);
+        assert_eq!(severity_color(50.0), Color::Cyan);
+        assert_eq!(severity_color(74.9), Color::Cyan);
+        assert_eq!(severity_color(75.0), Color::Yellow);
+        assert_eq!(severity_color(89.9), Color::Yellow);
+        assert_eq!(severity_color(90.0), Color::Red);
+        assert_eq!(severity_color(99.9), Color::Red);
+        assert_eq!(severity_color(100.0), Color::Magenta);
+        assert_eq!(severity_color(150.0), Color::Magenta);
+    }
+}
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let size = frame.area();
@@ -328,8 +369,64 @@ fn draw_chat(frame: &mut Frame, app: &mut App, area: Rect) {
         .title_style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
         .title_bottom(tab_bar_line(app));
 
-    let inner = inner_block.inner(area);
+    let inner_full = inner_block.inner(area);
     frame.render_widget(inner_block, area);
+
+    // Phase 1 PR-3 / Task 9: per-session context-window LineGauge.
+    //
+    // Reads `~/.relay/sessions/<claude_session_id>/budget.jsonl` via
+    // `harness_data::load_session_budget`. The on-disk file is populated
+    // by Task 10b's shell-out (`rly chat record-usage`) after each
+    // Claude turn the worker sees. Missing file → no bar (returns 0%
+    // budget, which we elide entirely so the messages area doesn't lose
+    // a line for nothing).
+    //
+    // `total` is hard-coded to 200_000 — the Sonnet/Haiku/GPT default.
+    // Chat-mode does not yet plumb the active model into App state; once
+    // it does, swap this for a model-keyed lookup matching the GUI's
+    // `resolveContextWindow`. Documented as a TODO until Task 10's
+    // chat-mode CLI hook lands the model field.
+    let claude_session_id = app
+        .active_session
+        .as_ref()
+        .and_then(|s| {
+            // Prefer the worker-alias mapping that just streamed; fall
+            // back to "_general" (the chat-mode key used by the worker
+            // started in `App::start_chat_worker`).
+            app.active_worker_alias
+                .as_ref()
+                .and_then(|alias| s.claude_session_ids.get(alias).cloned())
+                .or_else(|| s.claude_session_ids.get("_general").cloned())
+                .or_else(|| s.claude_session_ids.values().next().cloned())
+        });
+
+    let inner = if let Some(ref sid) = claude_session_id {
+        let total = 200_000u64;
+        let budget = data::load_session_budget(sid, total);
+        if budget.used > 0 && inner_full.height > 1 {
+            let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)])
+                .split(inner_full);
+            let bar_area = chunks[0];
+            let messages_area = chunks[1];
+            let pct_clamped = (budget.pct / 100.0).clamp(0.0, 1.0);
+            let label = format!(
+                "ctx {:.0}% ({}K / {}K)",
+                budget.pct,
+                budget.used / 1000,
+                budget.total / 1000
+            );
+            let gauge = LineGauge::default()
+                .filled_style(Style::default().fg(severity_color(budget.pct)))
+                .label(label)
+                .ratio(pct_clamped);
+            frame.render_widget(gauge, bar_area);
+            messages_area
+        } else {
+            inner_full
+        }
+    } else {
+        inner_full
+    };
 
     if app.chat_messages.is_empty() {
         let empty = Paragraph::new(Line::from(vec![

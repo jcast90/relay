@@ -5,12 +5,15 @@ import type {
   Channel,
   ChannelEntry,
   ChatSession,
+  ChatSessionBudget,
   Decision,
   GuiSettings,
   PersistedChatMessage,
   TicketLedgerEntry,
 } from "../types";
+import { resolveContextWindow } from "../lib/modelContextWindows";
 import { AutonomousSessionHeader } from "./AutonomousSessionHeader";
+import { ContextWindowBar } from "./ContextWindowBar";
 import { BoardView } from "./BoardView";
 import { ChannelHeader, type ChannelTab } from "./ChannelHeader";
 import { ChannelSettingsDrawer } from "./ChannelSettingsDrawer";
@@ -114,6 +117,42 @@ export function CenterPane({
         (s) => s.channelId === channel.channelId && s.state !== "done" && s.state !== "killed"
       ) ?? null)
     : null;
+
+  // Phase 1 — chat-mode context-window bar. Resolve the claude session
+  // id (the keyspace under `~/.relay/sessions/<sid>/`) from the active
+  // chat session's `claudeSessionIds` map. Picks the first available
+  // mapping; chat-mode normally only stores `_general`, but a
+  // multi-worker session would still surface the most-recent burner.
+  const activeChatSession = sessions.find((s) => s.sessionId === sessionId) ?? null;
+  const activeClaudeSessionId = activeChatSession
+    ? (activeChatSession.claudeSessionIds["_general"] ??
+      Object.values(activeChatSession.claudeSessionIds)[0] ??
+      null)
+    : null;
+  const [chatBudget, setChatBudget] = useState<ChatSessionBudget | null>(null);
+  useEffect(() => {
+    if (!activeClaudeSessionId) {
+      setChatBudget(null);
+      return;
+    }
+    let cancelled = false;
+    // `total` is currently fixed at the default ceiling — chat-mode
+    // doesn't yet plumb the per-session model into the GUI's session
+    // record. When it does, swap to `resolveContextWindow(model)`.
+    const total = resolveContextWindow(undefined);
+    api
+      .getChatSessionBudget(activeClaudeSessionId, total)
+      .then((b) => {
+        if (!cancelled) setChatBudget(b);
+      })
+      .catch(() => {
+        // Swallow — bar just won't render. The CLI/Tauri pipeline is
+        // best-effort and a stale read shouldn't surface as an error.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeClaudeSessionId, refreshTick]);
 
   useEffect(() => {
     if (!channel) return;
@@ -252,6 +291,18 @@ export function CenterPane({
               sessionId={activeAutonomousSession.sessionId}
               refreshTick={refreshTick}
               onStopped={onRefresh}
+            />
+          )}
+          {tab === "chat" && chatBudget && (
+            // Phase 1 PR-3 / Task 7: chat-mode context-window bar.
+            // Renders only on the Chat tab — the budget is per-Claude-
+            // session and the Board / Decisions tabs are channel-wide
+            // surfaces where a per-session bar would be misleading.
+            <ContextWindowBar
+              used={chatBudget.used}
+              total={chatBudget.total}
+              sessionId={chatBudget.sessionId}
+              model={chatBudget.modelName ?? undefined}
             />
           )}
         </>
