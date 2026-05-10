@@ -12,13 +12,19 @@ import { getRelayDir } from "../cli/paths.js";
  * Exported as a const tuple so callers (AL-3 scheduler, tests) can iterate
  * the canonical list instead of re-declaring it.
  *
- * The `60` entry exists primarily for AL-15's "memory-shed" cycle trigger:
- * each repo-admin session owns its own tracker and subscribes to the 60%
- * crossing to recycle its child process before the context window fills.
- * Other subsystems are free to listen for 60 too; semantics are identical
- * to the other tiers (single emit per upward crossing per tracker).
+ * Subscribers (Phase 1, D-01):
+ *   - `60` → `RepoAdminSession.handleThresholdEvent` (memory-shed cycle,
+ *     AL-15). Unchanged from pre-Phase-1.
+ *   - `75 / 90 / 95` → {@link ../budget/threshold-feed-bridge.ts attachThresholdFeed}
+ *     posts these to the channel feed for chat sessions; Phase 2's handoff
+ *     nudge subscribes to `90` from the feed.
+ *   - `100` → existing overrun signal.
+ *
+ * The Phase-1 widening (D-01) added `75` and `90` so the chat-session feed
+ * has rising-edge events for the GUI / TUI bar's warn (75) and hot (90)
+ * tiers without re-deriving them from `pct` snapshots downstream.
  */
-export const THRESHOLDS = [50, 60, 85, 95, 100] as const;
+export const THRESHOLDS = [50, 60, 75, 85, 90, 95, 100] as const;
 
 export type ThresholdEvent = {
   sessionId: string;

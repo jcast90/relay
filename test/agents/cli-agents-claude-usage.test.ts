@@ -8,7 +8,7 @@ import { processStreamLine, type StreamParseState } from "../../src/agents/proce
  * closure body in `cli-agents.ts::invokeStreaming` into this function
  * and adds the `obj.usage` capture on the `result` arm.
  */
-describe.todo("processStreamLine — Claude streaming usage capture", () => {
+describe("processStreamLine — Claude streaming usage capture", () => {
   function freshState(): StreamParseState {
     return { accumText: "", resultText: null, capturedUsage: null };
   }

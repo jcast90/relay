@@ -124,6 +124,13 @@ export function roleForWork(kind: WorkKind): AgentRole {
   }
 }
 
+export const TokenUsageSchema = z.object({
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  cacheReadTokens: z.number().int().nonnegative().optional(),
+  cacheWriteTokens: z.number().int().nonnegative().optional(),
+});
+
 export const AgentResultSchema = z.object({
   summary: z.string().min(1),
   evidence: z.array(z.string()),
@@ -131,6 +138,7 @@ export const AgentResultSchema = z.object({
   blockers: z.array(z.string()),
   failureClassification: FailureClassificationSchema.optional(),
   phasePlan: z.unknown().optional(),
+  tokenUsage: TokenUsageSchema.optional(),
 });
 
 export const agentResultJsonSchema = {

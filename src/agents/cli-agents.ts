@@ -9,11 +9,17 @@ import {
   type AgentCapability,
   type FailureClassification,
   type AgentProvider,
+  type TokenUsage,
   type WorkRequest,
 } from "../domain/agent.js";
 import { parsePhasePlan, type PhasePlan } from "../domain/phase-plan.js";
 import { getDisallowedBuiltinsForRole, type AgentRoleName } from "../mcp/role-allowlist.js";
 import type { CommandInvoker } from "./command-invoker.js";
+import {
+  normalizeClaudeUsage,
+  processStreamLine,
+  type StreamParseState,
+} from "./process-stream-line.js";
 
 interface CliAgentOptions {
   id: string;
@@ -90,7 +96,50 @@ interface ParsedProviderResult {
     blockers: string[];
     failureClassification?: FailureClassification;
     phasePlan?: PhasePlan;
+    /**
+     * Per-call token usage extracted by the adapter (Phase 1, Task 3). Set
+     * by the provider-specific parsing path (`obj.usage` on the Claude
+     * `result` event, top-level `usage` on the Codex `response.json`); never
+     * set from the model's response body even if the model echoes a usage
+     * field. Missing usage is non-fatal — callers MUST guard with
+     * `if (result.tokenUsage) { ... }`.
+     */
+    tokenUsage?: TokenUsage;
   };
+}
+
+/**
+ * Stable warning string for the M2 INCONCLUSIVE-branch fallback. Kept as a
+ * module-level constant so the `cli-agents-codex-usage-spike.test.ts` snapshot
+ * test can grep it deterministically and so re-spike work that flips the
+ * branch can repoint the warning at the new failure mode without hunting
+ * through string fragments.
+ */
+const CODEX_USAGE_UNAVAILABLE_WARNING =
+  "[budget] Codex usage extraction unavailable; bar will not update for this session. " +
+  "Re-run the A1 spike with codex installed to enable telemetry.";
+
+/**
+ * Normalize Codex's `response.json` `usage` block (Branch A from the A1
+ * spike). Mirrors {@link normalizeClaudeUsage} but for the OpenAI/Codex
+ * field names — `cached_input_tokens` is the cache hit accounting field.
+ * Cached tokens still occupy the context window, so they sum into
+ * `inputTokens` (same convention as the Claude path).
+ */
+function normalizeCodexUsage(usage: Record<string, unknown>): TokenUsage {
+  const input = numFromUnknown(usage.input_tokens);
+  const cached = numFromUnknown(usage.cached_input_tokens);
+  const result: TokenUsage = {
+    inputTokens: input + cached,
+    outputTokens: numFromUnknown(usage.output_tokens),
+  };
+  if (cached > 0) result.cacheReadTokens = cached;
+  return result;
+}
+
+function numFromUnknown(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return 0;
+  return Math.trunc(value);
 }
 
 /**
@@ -330,11 +379,26 @@ export class CodexCliAgent extends CliAgentBase {
       }
 
       const rawResponse = await readFile(outputPath, "utf8");
+      const responseBody = JSON.parse(rawResponse) as Record<string, unknown>;
 
-      return {
-        rawResponse,
-        parsed: this.normalizePayload(JSON.parse(rawResponse)),
-      };
+      // A1 spike branch INCONCLUSIVE (per `01-SPIKE-A1.md`): Branch A only —
+      // parse a top-level `usage` block from `response.json`. If the field
+      // is absent (older Codex versions, or the spike's documented gap),
+      // emit ONE stderr warning so operators see why the bar is stuck. The
+      // orchestrator (Task 4) guards on `if (result.tokenUsage)` so a
+      // missing usage is a no-op for downstream consumers.
+      const rawUsage = responseBody.usage;
+      let tokenUsage: TokenUsage | undefined;
+      if (rawUsage && typeof rawUsage === "object") {
+        tokenUsage = normalizeCodexUsage(rawUsage as Record<string, unknown>);
+      } else {
+        console.warn(CODEX_USAGE_UNAVAILABLE_WARNING);
+      }
+
+      const parsed = this.normalizePayload(responseBody);
+      if (tokenUsage) parsed.tokenUsage = tokenUsage;
+
+      return { rawResponse, parsed };
     } finally {
       await rm(tempDir, {
         recursive: true,
@@ -409,10 +473,17 @@ export class ClaudeCliAgent extends CliAgentBase {
       throw new Error(result.stderr || result.stdout || "Claude execution failed.");
     }
 
-    return {
-      rawResponse: result.stdout,
-      parsed: this.normalizePayload(JSON.parse(result.stdout)),
-    };
+    const responseBody = JSON.parse(result.stdout) as Record<string, unknown>;
+    const parsed = this.normalizePayload(responseBody);
+    // Claude's `--output-format json` body carries the same `usage` shape as
+    // the streaming `result` event (Anthropic Messages API parity). Treating
+    // it as opaque key/value soup so the parser doesn't break if the API
+    // evolves a new cache-tier field.
+    const rawUsage = responseBody.usage;
+    if (rawUsage && typeof rawUsage === "object") {
+      parsed.tokenUsage = normalizeClaudeUsage(rawUsage as Record<string, unknown>);
+    }
+    return { rawResponse: result.stdout, parsed };
   }
 
   /**
@@ -453,37 +524,14 @@ export class ClaudeCliAgent extends CliAgentBase {
 
     let stdoutBuf = "";
     let stderrBuf = "";
-    let accumText = "";
-    let resultText: string | null = null;
     const onLine = this.onStreamLine!;
-
-    const processLine = (line: string) => {
-      if (!line) return;
-      onLine(line);
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line);
-      } catch {
-        return;
-      }
-      if (!parsed || typeof parsed !== "object") return;
-      const obj = parsed as Record<string, unknown>;
-      if (obj.type === "assistant") {
-        const msg = obj.message as { content?: unknown } | undefined;
-        const blocks = Array.isArray(msg?.content) ? msg?.content : null;
-        if (!blocks) return;
-        for (const block of blocks) {
-          if (block && typeof block === "object") {
-            const b = block as Record<string, unknown>;
-            if (b.type === "text" && typeof b.text === "string") {
-              accumText += b.text;
-            }
-          }
-        }
-      } else if (obj.type === "result" && typeof obj.result === "string") {
-        resultText = obj.result;
-      }
+    const state: StreamParseState = {
+      accumText: "",
+      resultText: null,
+      capturedUsage: null,
     };
+
+    const consume = (line: string) => processStreamLine(line, state, onLine);
 
     handle.onStdout((chunk) => {
       stdoutBuf += chunk;
@@ -491,7 +539,7 @@ export class ClaudeCliAgent extends CliAgentBase {
       while ((newlineIdx = stdoutBuf.indexOf("\n")) >= 0) {
         const line = stdoutBuf.slice(0, newlineIdx).trim();
         stdoutBuf = stdoutBuf.slice(newlineIdx + 1);
-        if (line) processLine(line);
+        if (line) consume(line);
       }
     });
     handle.onStderr((chunk) => {
@@ -503,20 +551,19 @@ export class ClaudeCliAgent extends CliAgentBase {
       handle.onExit((code) => resolve(code ?? 1));
     });
     const tail = stdoutBuf.trim();
-    if (tail) processLine(tail);
+    if (tail) consume(tail);
 
     if (exitCode !== 0) {
       throw new Error(stderrBuf || stdoutBuf || "Claude execution failed.");
     }
 
-    const raw = resultText ?? accumText;
+    const raw = state.resultText ?? state.accumText;
     if (!raw) {
       throw new Error("Claude stream produced no parseable JSON body.");
     }
-    return {
-      rawResponse: raw,
-      parsed: this.normalizePayload(JSON.parse(raw)),
-    };
+    const parsed = this.normalizePayload(JSON.parse(raw));
+    if (state.capturedUsage) parsed.tokenUsage = state.capturedUsage;
+    return { rawResponse: raw, parsed };
   }
 }
 

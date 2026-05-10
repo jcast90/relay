@@ -148,12 +148,13 @@ describe("TokenTracker", () => {
       // Replaying does not re-emit 50.
       expect(events).toEqual([]);
 
-      // But a new crossing (to 85) still emits. The resumed state was
+      // But fresh crossings (to 90%) still emit. The resumed state was
       // already at 60%, so 50 and 60 were both marked fired on replay —
-      // only 85 is a fresh crossing this run.
+      // only 75, 85, and 90 are fresh crossings this run (post-D-01 the
+      // canonical THRESHOLDS list includes 75 and 90).
       second.record(300, 0); // now at 900 = 90%
       await second.flush();
-      expect(events.map((e) => e.threshold)).toEqual([85]);
+      expect(events.map((e) => e.threshold)).toEqual([75, 85, 90]);
 
       await second.close();
     });
@@ -206,8 +207,9 @@ describe("TokenTracker", () => {
 
       await second.flush();
 
-      // 50 and 85 already fired in the prior lifetime; they must not fire
-      // again on resume. 95 has not been crossed yet (we're at 90.5%).
+      // Every threshold up through 90 already fired in the prior lifetime
+      // (resumed pct = 90%); they must not re-fire on resume. 95 has not
+      // been crossed yet (we're at 90.5%).
       expect(events).toEqual([]);
       expect(second.used).toBe(905);
 
@@ -304,8 +306,10 @@ describe("TokenTracker", () => {
       };
 
       try {
-        // Cross 50, 60, and 85 in a single record. record() is void and
-        // must not throw even though a listener throws on every dispatch.
+        // Cross 50, 60, 75, 85, and 90 in a single record. record() is
+        // void and must not throw even though a listener throws on every
+        // dispatch. (Post-D-01 the canonical THRESHOLDS list includes 75
+        // and 90 — see token-tracker.ts.)
         expect(() => tracker.record(900, 0)).not.toThrow();
         await tracker.flush();
       } finally {
@@ -313,8 +317,8 @@ describe("TokenTracker", () => {
       }
 
       // Every crossed threshold reached the healthy listeners.
-      expect(secondListenerSeen).toEqual([50, 60, 85]);
-      expect(seen).toEqual([50, 60, 85]);
+      expect(secondListenerSeen).toEqual([50, 60, 75, 85, 90]);
+      expect(seen).toEqual([50, 60, 75, 85, 90]);
 
       // The throwing listener was logged per-threshold (at least one warn
       // per crossed threshold, with the threshold number + error message).
@@ -325,7 +329,7 @@ describe("TokenTracker", () => {
       // A later crossing still fires the remaining thresholds exactly once.
       tracker.record(100, 0); // 1000 → 100%, crosses 95 and 100
       await tracker.flush();
-      expect(secondListenerSeen).toEqual([50, 60, 85, 95, 100]);
+      expect(secondListenerSeen).toEqual([50, 60, 75, 85, 90, 95, 100]);
 
       await tracker.close();
     });

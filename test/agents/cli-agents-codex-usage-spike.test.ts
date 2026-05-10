@@ -23,7 +23,7 @@ const ADAPTER_PATH = join(process.cwd(), "src", "agents", "cli-agents.ts");
  * Until then, the adapter has no usage parsing at all and the grep
  * fails.
  */
-describe.todo("Codex --output-schema spike snapshot", () => {
+describe("Codex --output-schema spike snapshot", () => {
   it("01-SPIKE-A1.md exists with the 5-line machine-readable header", () => {
     expect(existsSync(SPIKE_PATH)).toBe(true);
     const head = readFileSync(SPIKE_PATH, "utf8").split("\n").slice(0, 5);
