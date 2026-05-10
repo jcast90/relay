@@ -4,12 +4,14 @@ Status: Stable as of Phase 1 (2026-05-09)
 Owner: Relay core
 Target version: 0.7.x
 Related code paths:
+Related docs: [`handoff-brief.md`](./handoff-brief.md) — Phase 2 `rly handoff` planner is the contract's first consumer; its threshold listener subscribes to the 90 % entry shape documented below.
 
 - `src/budget/threshold-feed-bridge.ts`
 - `src/budget/token-tracker.ts`
 - `src/budget/session-tracker-pool.ts`
 - `src/orchestrator/orchestrator-v2.ts`
 - `src/channels/channel-store.ts`
+- `src/orchestrator/handoff/threshold-listener.ts` (Phase 2 subscriber)
 - `crates/harness-data/src/lib.rs` (Rust mirror — `SessionBudget`, `SessionKind`)
 
 ## Problem
@@ -137,4 +139,4 @@ Phase 1 PR-4 (later) adds the chat-mode `record-usage` CLI handler that reuses t
 
 ## Sign-off
 
-Pending Phase 2 plan-phase confirmation that the documented filter (`type === "status_update" && metadata.kind === "context_threshold" && metadata.threshold === "90"`) matches what the handoff planner subscribes to.
+Confirmed by Phase 2 (PR-3, #222 — `src/orchestrator/handoff/threshold-listener.ts`). The handoff threshold listener subscribes to exactly the filter documented above and dedups on `(sessionId, threshold)` per the D-03 contract. See [`handoff-brief.md`](./handoff-brief.md) for the consumer-side design.
