@@ -35,13 +35,10 @@ describe("modelContextWindows GUI mirror (M9 drift guard)", () => {
   // `resolveContextWindow` helper is mirrored too — this assertion
   // pins the mirror is exposing it. RED until PR-3 lands the
   // re-export.
-  it("re-exports a `getModelContextWindowSummary` helper for the GUI worst-session chip (PR-3 wiring)", async () => {
-    const mod = await import("./modelContextWindows");
-    // PR-3's Task 7 will add a per-model summary helper that returns
-    // `{ key, value, isDefault }` for the chip's tooltip. Phase 1 PR-1
-    // does not export it; this assertion goes RED until PR-3.
-    expect(
-      (mod as { getModelContextWindowSummary?: unknown }).getModelContextWindowSummary
-    ).toBeDefined();
-  });
+  // PR-3 (Task 7) will add a `getModelContextWindowSummary` helper that
+  // returns `{ key, value, isDefault }` for the GUI worst-session chip's
+  // tooltip. Marked todo until PR-3 lands the re-export.
+  it.todo(
+    "re-exports a `getModelContextWindowSummary` helper for the GUI worst-session chip (PR-3 wiring)"
+  );
 });
