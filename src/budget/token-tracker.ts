@@ -35,7 +35,17 @@ export type ThresholdEvent = {
   threshold: number;
 };
 
-export type ThresholdListener = (evt: ThresholdEvent) => void;
+/**
+ * Threshold subscriber contract. Return value is ignored UNLESS it is a
+ * thenable, in which case the tracker awaits it inside its write chain so
+ * `flush()` drains async side-effects (e.g. the threshold-feed bridge's
+ * `channelStore.postEntry`). Returning a non-promise value (e.g. an arrow
+ * `() => array.push(...)` that yields the new length) is still permitted
+ * for back-compat with synchronous in-process subscribers like
+ * `RepoAdminSession.handleThresholdEvent` — the value is dropped on the
+ * floor.
+ */
+export type ThresholdListener = (evt: ThresholdEvent) => unknown;
 
 /**
  * One line in `budget.jsonl`. Each `record()` call appends exactly one line
@@ -183,7 +193,9 @@ export class TokenTracker {
       // Fire threshold events before the disk write so listeners observe
       // crossings in the same order they happen in `_used`. Each dispatch
       // is isolated so a throwing listener can't abort the loop or take
-      // down the tracker (record() is a documented void hot path).
+      // down the tracker (record() is a documented void hot path). Async
+      // listeners (e.g. the threshold-feed bridge) are awaited so their
+      // side-effects drain as part of `flush()`.
       for (const threshold of crossed) {
         this.firedThresholds.add(threshold);
         const evt: ThresholdEvent = {
@@ -193,7 +205,7 @@ export class TokenTracker {
           pct: this.pct,
           threshold,
         };
-        this.safeEmitThreshold(evt);
+        await this.safeEmitThreshold(evt);
       }
 
       try {
@@ -338,15 +350,25 @@ export class TokenTracker {
 
   /**
    * Dispatch a threshold event to each subscriber individually. A listener
-   * that throws is logged to `console.warn` and the remaining listeners
-   * still fire — a single bad subscriber can't abort the emit loop or kill
-   * the tracker's void hot path.
+   * that throws (sync) or rejects (async) is logged to `console.warn` and
+   * the remaining listeners still fire — a single bad subscriber can't
+   * abort the emit loop or kill the tracker's void hot path.
+   *
+   * Awaits any `Promise<void>` returned by a listener so async work the
+   * subscriber kicks off (e.g. {@link ../budget/threshold-feed-bridge.js
+   * attachThresholdFeed}'s `channelStore.postEntry`) drains as part of the
+   * tracker's `record()` write-chain. This means {@link flush} drains
+   * those side-effects too — tests and the orchestrator's
+   * `waitForPendingWrites` rely on that ordering.
    */
-  private safeEmitThreshold(evt: ThresholdEvent): void {
+  private async safeEmitThreshold(evt: ThresholdEvent): Promise<void> {
     const listeners = this.emitter.listeners("threshold") as ThresholdListener[];
     for (const listener of listeners) {
       try {
-        listener(evt);
+        const maybe = listener(evt);
+        if (maybe && typeof (maybe as { then?: unknown }).then === "function") {
+          await maybe;
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.warn(`TokenTracker: threshold ${evt.threshold} listener threw: ${msg}`);

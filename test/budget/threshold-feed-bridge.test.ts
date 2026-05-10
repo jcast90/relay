@@ -29,7 +29,7 @@ async function readFeed(channelsDir: string, channelId: string): Promise<FeedEnt
  * stub-throwing `attachThresholdFeed` so this file fails at runtime; PR-2
  * (Task 5) lands the implementation that makes them GREEN.
  */
-describe.todo("attachThresholdFeed", () => {
+describe("attachThresholdFeed", () => {
   let root: string;
   let channelsDir: string;
 

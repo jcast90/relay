@@ -55,9 +55,8 @@ describe("OrchestratorV2 dispatch — token-usage wiring", () => {
     // agent has no model so a session never gets miscalibrated against
     // the default 200_000 ceiling. An Opus 4.7 session has a 1M-token
     // window — defaulting to 200k would mis-render the bar by 5x.
-    const { dispatchTokenUsageOrThrow } = await import(
-      "../../src/orchestrator/dispatch-token-usage.js"
-    );
+    const { dispatchTokenUsageOrThrow } =
+      await import("../../src/orchestrator/dispatch-token-usage.js");
     expect(dispatchTokenUsageOrThrow).toBeDefined();
 
     const pool = new SessionTrackerPool();

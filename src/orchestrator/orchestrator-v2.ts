@@ -549,9 +549,7 @@ export class OrchestratorV2 {
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             if (message.includes("missing model")) throw err;
-            console.warn(
-              `[orchestrator] tracker.record failed (runId=${run.id}): ${message}`
-            );
+            console.warn(`[orchestrator] tracker.record failed (runId=${run.id}): ${message}`);
           }
         }
 
