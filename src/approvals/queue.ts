@@ -3,6 +3,7 @@ import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises
 import { join } from "node:path";
 
 import { getRelayDir } from "../cli/paths.js";
+import type { HandoffPromptPayload } from "../domain/handoff.js";
 
 /**
  * Kinds of ack-requiring actions AL-7 queues under supervised trust mode.
@@ -18,8 +19,20 @@ import { getRelayDir } from "../cli/paths.js";
  *  - `create-ticket`: produced by AL-6's audit-proposal hook. Payload carries
  *    the proposed ticket body that would otherwise be written directly into
  *    the channel ticket board under god mode.
+ *  - `handoff-prompt`: produced by Phase 2's threshold listener
+ *    (`src/orchestrator/handoff/threshold-listener.ts`) when Phase 1 emits
+ *    a `context_threshold` feed entry with `metadata.threshold === "90"`.
+ *    Payload is `HandoffPromptPayload` from `src/domain/handoff.ts` —
+ *    `thresholdPct` is the parsed-NUMBER form of Phase 1's STRING wire
+ *    field; conversion happens exactly once at the listener boundary (M1).
+ *    Cross-dashboard audit (M10): TUI's `ui.rs` and the GUI's
+ *    `RightPane.tsx` render `record.kind` as an opaque label string and
+ *    pretty-print the payload — neither switches on kind, so widening this
+ *    union is safe without dashboard code changes. The Rust mirror
+ *    (`crates/harness-data/src/lib.rs::ApprovalQueueRecord.kind`) is
+ *    `String`, not an enum, so no Rust widening is needed either.
  */
-export type ApprovalKind = "merge-pr" | "create-ticket";
+export type ApprovalKind = "merge-pr" | "create-ticket" | "handoff-prompt";
 
 /**
  * Approval lifecycle states. Queue records start `pending`; the CLI surface
@@ -68,7 +81,8 @@ export interface CreateTicketPayload {
 /** Union of all payload variants, discriminated by the record's `kind`. */
 export type ApprovalPayload =
   | { kind: "merge-pr"; payload: MergePrPayload }
-  | { kind: "create-ticket"; payload: CreateTicketPayload };
+  | { kind: "create-ticket"; payload: CreateTicketPayload }
+  | { kind: "handoff-prompt"; payload: HandoffPromptPayload };
 
 /**
  * On-disk record shape written to `~/.relay/approvals/<sessionId>/queue.jsonl`.
@@ -92,7 +106,7 @@ export interface ApprovalRecord {
   /** Action kind — see {@link ApprovalKind}. */
   kind: ApprovalKind;
   /** Action payload, discriminated by {@link ApprovalKind}. */
-  payload: MergePrPayload | CreateTicketPayload;
+  payload: MergePrPayload | CreateTicketPayload | HandoffPromptPayload;
   /** ISO-8601 timestamp the record was enqueued. */
   createdAt: string;
   /** Current lifecycle state. */
@@ -116,7 +130,7 @@ export interface ApprovalRecord {
 export interface EnqueueInput {
   sessionId: string;
   kind: ApprovalKind;
-  payload: MergePrPayload | CreateTicketPayload;
+  payload: MergePrPayload | CreateTicketPayload | HandoffPromptPayload;
 }
 
 /**
@@ -129,7 +143,7 @@ export interface EnqueueInput {
 export interface EnqueueAutoApprovedInput {
   sessionId: string;
   kind: ApprovalKind;
-  payload: MergePrPayload | CreateTicketPayload;
+  payload: MergePrPayload | CreateTicketPayload | HandoffPromptPayload;
   /** Who / what auto-approved. Today only `"god-mode"` is defined. */
   autoApprovedBy: "god-mode";
 }
@@ -168,6 +182,39 @@ function assertValidSessionId(sessionId: string): void {
     throw new Error(
       `approvals queue: invalid sessionId ${JSON.stringify(sessionId)}; ` +
         `expected /^[A-Za-z0-9_-]+$/`
+    );
+  }
+}
+
+/**
+ * Lightweight per-kind payload shape validator. Per Phase 2 PLAN Task 3.1
+ * Step 1: "Add a Zod-or-equivalent validator for `handoff-prompt` payloads
+ * matching `HandoffPromptPayload` shape. Reject unknown payload shapes
+ * loudly." We hand-roll it to avoid pulling Zod into this hot path; the
+ * shape is small and stable. `merge-pr` and `create-ticket` shapes are
+ * left to existing call-site type-checking — this guard exists so that
+ * a misbehaved handoff caller (or a payload that survived a string→number
+ * boundary mistake) blows up at the queue boundary instead of going to
+ * disk and then surprising the dashboards / `rly approve` flow.
+ */
+function assertValidPayloadForKind(
+  kind: ApprovalKind,
+  payload: MergePrPayload | CreateTicketPayload | HandoffPromptPayload
+): void {
+  if (kind !== "handoff-prompt") return;
+  const p = payload as Partial<HandoffPromptPayload>;
+  if (
+    p.schemaVersion !== 1 ||
+    typeof p.channelId !== "string" ||
+    typeof p.sessionId !== "string" ||
+    typeof p.thresholdPct !== "number" ||
+    typeof p.used !== "number" ||
+    typeof p.total !== "number"
+  ) {
+    throw new Error(
+      `approvals queue: invalid handoff-prompt payload ${JSON.stringify(payload)}; ` +
+        `expected { schemaVersion:1, channelId:string, sessionId:string, ` +
+        `thresholdPct:number, used:number, total:number, promptText?:string }`
     );
   }
 }
@@ -248,6 +295,7 @@ export class ApprovalsQueue {
    */
   async enqueue(input: EnqueueInput): Promise<ApprovalRecord> {
     assertValidSessionId(input.sessionId);
+    assertValidPayloadForKind(input.kind, input.payload);
     const record: ApprovalRecord = {
       id: this.idFactory(),
       sessionId: input.sessionId,
@@ -281,6 +329,7 @@ export class ApprovalsQueue {
    */
   async enqueueAutoApproved(input: EnqueueAutoApprovedInput): Promise<ApprovalRecord> {
     assertValidSessionId(input.sessionId);
+    assertValidPayloadForKind(input.kind, input.payload);
     const stamp = new Date(this.clock()).toISOString();
     const record: ApprovalRecord = {
       id: this.idFactory(),
