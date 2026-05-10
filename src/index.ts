@@ -46,6 +46,7 @@ import { createPrWatcherFactory, getActiveWatcher } from "./cli/pr-watcher-facto
 import type { HarnessPR } from "./integrations/scm.js";
 import { fetchLinearProject, mirrorLinearProject } from "./integrations/linear-mirror.js";
 import { handleCrosslinkCommand } from "./crosslink/cli.js";
+import { handleHandoffCommand } from "./cli/handoff.js";
 import { startDashboard } from "./tui/dashboard.js";
 import { SessionStore } from "./cli/session-store.js";
 import { buildSystemPrompt, resolveChannelRefs, findMcpConfig } from "./cli/chat-context.js";
@@ -217,6 +218,17 @@ export async function main(): Promise<void> {
 
   if (command === "crosslink") {
     await handleCrosslinkCommand(args[0] ?? "status", args.slice(1));
+    return;
+  }
+
+  if (command === "handoff") {
+    const result = await handleHandoffCommand({
+      argv: args,
+      stdout: process.stdout,
+      stderr: process.stderr,
+      env: process.env,
+    });
+    process.exitCode = result.exitCode;
     return;
   }
 
@@ -2946,6 +2958,8 @@ async function printTopLevelHelp(): Promise<void> {
     "  decisions <channelId>    List decisions with rationale",
     "  chat <subcommand>        Chat plumbing (rewind, system-prompt, resolve-refs, mcp-config)",
     "  crosslink <subcommand>   Cross-session discovery + messaging (status)",
+    "  handoff <channelId> [--to <profile|adapter|alias>] [--save] [--resume <briefId|latest>] [--max-tokens <n>] [--force] [--wait-gap <ms>] [--json]",
+    "                          Generate a handoff brief from channel artifacts and (optionally) seed a new session in the destination provider. See docs/cli/rly-handoff.md.",
     "",
     "Runs & approval:",
     "  run <request>            Classify + plan + execute a feature request",

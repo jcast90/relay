@@ -212,6 +212,96 @@ export async function readLatestGapFill(
   return newest;
 }
 
+/**
+ * Read the gap-fill JSON associated with a specific `briefId` (Wave 4 /
+ * `--resume <briefId>`, M7).
+ *
+ * Per M7, the `--resume` path consumes ONLY the gap.json — the brief.md is a
+ * snapshot, never re-fed into `buildBrief`. The synthesizer regenerates the
+ * deterministic skeleton from the channel's current state.
+ *
+ * Returns `null` if the file is missing, unparseable, fails the structural
+ * shape check, or has a `schemaVersion !== 1` (M9 fail-closed).
+ */
+export async function readGapFillByBriefId(
+  channelId: string,
+  briefId: string
+): Promise<GapFillBlock | null> {
+  assertSafeSegment(channelId, "channelId");
+  assertValidBriefId(briefId);
+
+  const dir = join(getRelayDir(), "channels", channelId, "handoffs");
+  const filePath = join(dir, `${briefId}.gap.json`);
+
+  let raw: string;
+  try {
+    raw = await readFile(filePath, "utf8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return null;
+    throw err;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  if (!isGapFillBlock(parsed)) return null;
+  if (parsed.schemaVersion !== HANDOFF_BRIEF_SCHEMA_VERSION) return null;
+
+  return parsed;
+}
+
+/**
+ * List existing brief ids in `~/.relay/channels/<id>/handoffs/`, newest-first
+ * by the embedded `<unix-ms>` segment of `brief-<unix-ms>-<base36>`. Used by
+ * `--resume latest` to pick the most recently saved brief without reading
+ * any `<briefId>.md` (M7 — the brief markdown is a snapshot, not consumed).
+ *
+ * Returns an empty array if the directory doesn't exist.
+ */
+export async function listBriefIds(channelId: string): Promise<string[]> {
+  assertSafeSegment(channelId, "channelId");
+  const dir = join(getRelayDir(), "channels", channelId, "handoffs");
+
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return [];
+    throw err;
+  }
+
+  const briefIds = new Set<string>();
+  // We accept either a `.md` or a `.gap.json` as evidence of a brief —
+  // `--save` mode writes both; raw-MCP-tool calls write only the gap.json.
+  for (const name of entries) {
+    if (name.endsWith(".gap.json")) {
+      const id = name.slice(0, -".gap.json".length);
+      if (BRIEF_ID_REGEX.test(id)) briefIds.add(id);
+      continue;
+    }
+    if (name.endsWith(".md")) {
+      const id = name.slice(0, -".md".length);
+      if (BRIEF_ID_REGEX.test(id)) briefIds.add(id);
+    }
+  }
+
+  return [...briefIds].sort((a, b) => extractMsFromBriefId(b) - extractMsFromBriefId(a));
+}
+
+/** Pull the `<unix-ms>` segment out of `brief-<unix-ms>-<base36>`. */
+function extractMsFromBriefId(briefId: string): number {
+  const match = /^brief-([0-9]+)-/.exec(briefId);
+  if (!match) return 0;
+  const ms = Number(match[1]);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
 /** Structural type guard for `GapFillBlock`. Tolerant of unknown JSON. */
 function isGapFillBlock(value: unknown): value is GapFillBlock {
   if (!value || typeof value !== "object") return false;
