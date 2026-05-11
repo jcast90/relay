@@ -99,7 +99,7 @@ Scoped for the current milestone (M01). Hypotheses until shipped and validated.
 
 ### Per-task worker tier (WORKER) — Phase 5 / AL-14
 
-- [ ] **WORKER-01**: `src/agents/repo-admin.ts:201` `spawnWorkerStub` is replaced by a real `spawnWorker` handler in `src/mcp/server.ts`.
+- [ ] **WORKER-01**: `src/agents/repo-admin.ts:229` `spawnWorkerStub` is replaced by a real `spawnWorker` handler in `src/mcp/server.ts`.
 - [ ] **WORKER-02**: Worker lifecycle reuses the READY-* primitive — workers transition spawning → onboarding → ready, with the same channel event shape.
 - [ ] **WORKER-03**: Each worker boots into an isolated git worktree (uses existing git-worktree-sandbox machinery).
 - [ ] **WORKER-04**: Worker progress (planning → build → review → PR) is observable on the channel feed; admin re-reads the board per existing memory policy.
