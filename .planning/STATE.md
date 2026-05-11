@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: trust-and-delegation
 milestone_name: M01 — Trust-stack + cross-repo delegation
 status: executing
-stopped_at: Phases 1-3 shipped; Phase 4 not yet planned
-last_updated: "2026-05-11T00:00:00.000Z"
-last_activity: 2026-05-11 -- PROJECT.md formalized; milestone container being created
+stopped_at: Phases 1-3 fully shipped (Phase 3 SUMMARY merged #221); Phase 4 not yet planned
+last_updated: "2026-05-11T15:30:00.000Z"
+last_activity: 2026-05-11 -- PROJECT.md + M01 milestone formalized; Phase 3 SUMMARY #221 merged; Phase 4 unblocked
 progress:
   total_phases: 5
   completed_phases: 3
@@ -21,7 +21,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-11)
 
 **Core value:** Cross-repo agent-to-agent delegation in a single delegation tree — one orchestrator the user talks to, reaching into every repo they own.
-**Current focus:** Phase 4 (project readiness surface) — not yet planned. Phases 1-3 shipped; Phase 3 SUMMARY in draft PR #221.
+**Current focus:** Phase 4 (project readiness surface) — ready to plan. Phases 1-3 shipped; Phase 3 SUMMARY merged via #221.
 
 ## Current Position
 
@@ -46,7 +46,7 @@ Progress: [██████░░░░] 60%
 |-------|--------|-----|---------------|
 | 1 — Token-usage telemetry | Shipped | #218, #223, #225, #227, #228 | 2026-05-10 |
 | 2 — Handoff command + brief | Shipped | #219, #220, #222, #224, #226 | 2026-05-10 |
-| 3 — Repo-admin readiness handshake | Shipped (SUMMARY draft #221) | #216 | 2026-05-10 |
+| 3 — Repo-admin readiness handshake | Shipped (SUMMARY merged #221) | #216, #221 | 2026-05-11 |
 | 4 — Project readiness surface | Not started | — | — |
 | 5 — Per-task worker (`spawn_worker`, AL-14) | Not started | — | — |
 
@@ -67,13 +67,14 @@ Recent decisions affecting current work:
 
 [From .planning/todos/pending/]
 
-- Phase 2 SUMMARY missing — Phase 1 has one; Phase 2 doesn't.
-- Phase 3 SUMMARY in draft PR #221, unmerged. Manual smoke (live `rly claude`) deferred.
+- Phase 2 SUMMARY (PR #230 open as of 2026-05-11) — mirrors Phase 1 structure; pending review.
+- Phase 3 manual smoke (live `rly claude` exercise of agent → `agent_ready` → disk + feed flow) still deferred per #221 SUMMARY. Run when convenient; not blocking.
+- Codex A1 spike re-run when `codex` CLI lands in CI (low priority).
 
 ### Blockers/Concerns
 
-- Phase 4 depends on Phase 3 readiness primitive. Primitive is live in code but SUMMARY hasn't merged — should land before Phase 4 planning starts so the contract is locked.
 - Codex usage extraction branch (Branch A vs Branch B) still INCONCLUSIVE per Phase 1 SUMMARY — Codex chat sessions silently no-op the budget tracker today. Deferred until `codex` CLI is installed in CI.
+- Phase 4 has no remaining hard blockers — readiness primitive shipped (#216), contract documented (#221), and `crates/harness-data::load_crosslink_sessions()` is the consumer entry point.
 
 ## Deferred Items
 

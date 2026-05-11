@@ -24,7 +24,7 @@ Inferred from shipped behaviour (`git log`, `ROADMAP.md` Phase 1-3, README pitch
 - ✓ **`rly install` + drift manifest** — one-command install with TUI/GUI startup nudge when the installed bits drift from the running version. — pre-GSD-init era
 - ✓ **Per-session token-usage telemetry + context-window bar** — TUI / GUI / CLI all surface live `% of context window consumed`; threshold events at 75/90/95% land on the channel feed. — Phase 1 (#218→#228, 2026-05-10)
 - ✓ **`rly handoff` brief synthesizer + 90% nudge** — departing agent authors gap-fill section; new session seeded with structured brief from `~/.relay/` artifacts. — Phase 2 (#219→#226, 2026-05-10)
-- ✓ **Repo-admin readiness handshake (`agent_ready`)** — explicit boot-readiness signal distinct from heartbeat liveness, exposed via `harness-data` to dashboards. — Phase 3 (#216, 2026-05-09; SUMMARY in draft #221)
+- ✓ **Repo-admin readiness handshake (`agent_ready`)** — explicit boot-readiness signal distinct from heartbeat liveness, exposed via `harness-data` to dashboards. — Phase 3 (#216, 2026-05-09; SUMMARY merged #221, 2026-05-11)
 
 ### Active
 
