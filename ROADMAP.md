@@ -1,10 +1,28 @@
 # Relay Roadmap
 
-> Lightweight roadmap scaffolded by `/gsd-explore` on 2026-05-09. Relay predates GSD initialization; this file captures phases as they're identified. Run `/gsd-map-codebase` and `/gsd-new-milestone` to formalize a milestone container around these.
+> Brownfield roadmap. Relay predates GSD initialization (2026-05-09). PROJECT.md and the M01 milestone container were formalized on 2026-05-11 — Phases 1-3 had already shipped by then. See `.planning/PROJECT.md` for north star and `.planning/REQUIREMENTS.md` for REQ-ID traceability.
+
+---
+
+## Milestone M01 — Trust-stack + cross-repo delegation
+
+**Outcome.** A user running `rly claude` in a multi-repo workspace can: (a) see live context-window usage and hand off cleanly when a session is exhausted [shipped], (b) trust dashboards that distinguish "alive" from "ready" without lying [shipped], (c) see a single project-rooted view of which repos are connected and which admin agents are ready, and (d) have repo-admins dispatch real per-task workers that execute in isolated worktrees and report progress on the channel feed.
+
+**Why this milestone.** The cross-repo delegation tree (PROJECT.md Core Value) is the moat, but today users can't trust what the system is doing. The five phases below collapse to "make the delegation tree observable and actually executable end-to-end." Phases 1-3 ship the trust signals (telemetry, handoff, readiness); Phase 4 surfaces them honestly; Phase 5 lands the missing depth tier (`spawn_worker`) so admins can actually dispatch.
+
+**Phases:** 5 total — Phase 1 ✓ shipped, Phase 2 ✓ shipped (SUMMARY pending), Phase 3 ✓ shipped (SUMMARY draft #221), Phase 4 not started, Phase 5 not started.
+
+**Status:** 3 of 5 phases shipped (60 %). See `.planning/STATE.md` for live progress.
+
+**Out of this milestone.** Chat-first workflow surface (strategic direction; future milestone candidate). L0-L6 learning layer (strategic direction; deferred until trust-stack lands). Cost guardrails (dollar-based budget caps). See PROJECT.md "Strategic Directions" and REQUIREMENTS.md "Out of Scope (this milestone)."
+
+---
 
 ## Phases
 
 ### Phase 1: Per-session token-usage telemetry + context-window bar
+
+**Status:** ✓ Shipped 2026-05-10 (PRs #218, #223, #225, #227, #228). SUMMARY: `.planning/phases/01-token-usage-telemetry-context-bar/01-SUMMARY.md`.
 
 **Goal.** Surface a live "% of context window consumed" indicator per session, visible in TUI, GUI, and CLI status. Foundation for the handoff feature's 90% nudge.
 
@@ -35,6 +53,8 @@
 ---
 
 ### Phase 2: Handoff command + brief synthesizer
+
+**Status:** ✓ Shipped 2026-05-10 (PRs #219, #220, #222, #224, #226). SUMMARY pending — open follow-up.
 
 **Goal.** `rly handoff <channelId> --to <alias|--provider>` produces a structured brief from `~/.relay/` artifacts, lets the departing agent fill in working-memory gaps, and seeds a fresh session in the new provider with the brief — instead of replaying the raw transcript.
 
@@ -67,6 +87,8 @@
 ---
 
 ### Phase 3: Repo-admin readiness handshake
+
+**Status:** ✓ Shipped 2026-05-09 (implementation merged via #216). SUMMARY in draft PR #221 — manual smoke (live `rly claude` run) deferred.
 
 **Goal.** Add an explicit `agent-ready` state (and channel event) that fires when a repo-admin finishes its onboarding turn — distinct from heartbeat liveness, so consumers can honestly distinguish "process is alive" from "agent is ready to receive tasks."
 
@@ -103,6 +125,8 @@ The existing `repo-ready` typed coordination message means _"my PR merged, your 
 
 ### Phase 4: Project readiness surface
 
+**Status:** Not started. Next phase to plan. Depends on Phase 3 readiness primitive (already shipped).
+
 **Goal.** Give the user a single, honest view per project of: which repos are connected, which repo-admin sessions are alive, which are ready (per Phase 3), and what's flowing on the channel feed. Visible in three places: in-session (Claude/Codex via SessionStart hook), TUI, and GUI — all reading the same state from `~/.relay/`.
 
 **Why.** The user's three trust pains all collapse to "I can't see what state the system is in": _Are the right repos wired up? Have agents finished onboarding? Is anything actually working?_ Today the answer requires opening the GUI, asking the agent, or grepping `~/.relay/`. The fix is to make the system _announce_ its state at every surface the user already touches. This is what makes Relay's multi-repo value proposition feel real instead of theoretical.
@@ -136,6 +160,8 @@ This is also the surface that downstream work (slash commands, hook-based intent
 ---
 
 ### Phase 5: Per-task worker tier (AL-14 — `spawn_worker`)
+
+**Status:** Not started. Depends on Phase 3 readiness primitive (already shipped); Phase 4 helpful but not strictly blocking.
 
 **Goal.** Land the real `spawn_worker` handler so repo-admins can dispatch ephemeral per-task workers into isolated worktrees. Workers handle planning → build → review → PR, reporting back up to the spawning admin.
 
