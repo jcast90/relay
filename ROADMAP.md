@@ -150,12 +150,20 @@ This is also the surface that downstream work (slash commands, hook-based intent
 
 **Dependencies.** Phase 3 (readiness handshake — without it, the surface conflates alive with ready and lies to users).
 
-**Open questions for plan-phase.**
+**Plans:** 5 plans
 
-- Exact format of the hook-injected context (token budget vs information density).
-- Whether the hook also injects a diff since last turn (unread events) or only current state.
-- Whether "project" is an explicit first-class concept in `~/.relay/` already, or whether this phase needs to formalise it.
-- Codex hook surface parity with Claude Code's `SessionStart` — may differ; document the gap.
+- [ ] 04-01-PLAN.md — RepoAdminState enum (TS zod + Rust serde kebab-case), `derive_state` + `group_by_admin` in `harness-data`, `_state → _processState` rename closes Phase 3 follow-up #1.
+- [ ] 04-02-PLAN.md — SessionStart hook generator + pure formatter `formatSessionStartContext` + `lastSeenFeedIdx` watermark on CrosslinkSession.
+- [ ] 04-03-PLAN.md — `rly install` wires SessionStart hooks for Claude + Codex (idempotent merge, atomic rename); Codex `[features].hooks = true` via comment-preserving TOML helper; manifest `hooks` block + drift detection.
+- [ ] 04-04-PLAN.md — TUI state column on channel drill-in; GUI Tauri command `load_repo_admin_states` + `load_channel_admins_grouped` (WORKER-06 forward-compat); React state-badge row with D-07 CSS classes.
+- [ ] 04-05-PLAN.md — `rly status` channel-states block + `rly channel show <id|name>` subcommand + `rly project show` alias + manual smoke checkpoint + 04-SUMMARY.
+
+**Open questions answered in plan-phase.**
+
+- Hook context shape — terse 5-15 line snapshot per D-03; pure formatter testable in isolation.
+- Snapshot only — no diff machinery; optional `Feed: N new entries` count via per-session `lastSeenFeedIdx` watermark.
+- "Project" is NOT a new entity — channel IS the project per D-01.
+- Codex hook parity — VERIFIED achievable via Codex CLI v0.130+; `rly install` writes config unconditionally and logs a friendly note on older versions.
 
 ---
 
