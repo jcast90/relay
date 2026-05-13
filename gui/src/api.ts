@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AdminWithWorkers,
   AgentBinaryTestResult,
   AgentNameEntry,
   ApprovalQueueRecord,
@@ -16,6 +17,7 @@ import type {
   PendingPlan,
   PersistedChatMessage,
   ProviderProfile,
+  RepoAdminState,
   RewindResult,
   RewindSnapshot,
   RunIndexEntry,
@@ -214,6 +216,16 @@ export const api = {
   // the same `rly approve` / `rly reject` paths the CLI uses so approval
   // records are written through a single code path.
   listTrackedPrs: (channelId: string) => invoke<TrackedPrRow[]>("list_tracked_prs", { channelId }),
+  // Phase 4 plan 04 / SURFACE-04: per-repo state badges for the
+  // selected channel. Tuple shape matches the Rust command (alias,
+  // state) so the frontend can iterate in channel-record order.
+  loadRepoAdminStates: (channelId: string) =>
+    invoke<Array<[string, RepoAdminState]>>("load_repo_admin_states", { channelId }),
+  // Forward-compat for Phase 5 / WORKER-06: today's workers Vec per
+  // admin is always empty; frontends can render the nested structure
+  // already.
+  loadChannelAdminsGrouped: (channelId: string) =>
+    invoke<AdminWithWorkers[]>("load_channel_admins_grouped", { channelId }),
   listPendingPlans: () => invoke<PendingPlan[]>("list_pending_plans"),
   approvePlan: (runId: string) => invoke<unknown>("approve_plan", { runId }),
   rejectPlan: (runId: string, feedback?: string) =>
