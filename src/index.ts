@@ -51,6 +51,7 @@ import { startDashboard } from "./tui/dashboard.js";
 import { SessionStore } from "./cli/session-store.js";
 import { buildSystemPrompt, resolveChannelRefs, findMcpConfig } from "./cli/chat-context.js";
 import { handleChatRecordUsageCommand } from "./cli/chat-record-usage.js";
+import { COMMANDS } from "./cli/channel-show.js";
 import {
   formatActiveSessionsBlock,
   formatChannelStatesBlock,
@@ -199,7 +200,29 @@ export async function main(): Promise<void> {
   }
 
   if (command === "channel") {
+    // Intercept `rly channel show <id>` so it dispatches to the same
+    // handler as the `rly project show` alias (D-01). Other channel
+    // subcommands (create, archive, post, etc.) flow through the legacy
+    // `handleChannelCommand` switch.
+    if (args[0] === "show") {
+      process.exitCode = await COMMANDS.channel.show(args.slice(1));
+      return;
+    }
     await handleChannelCommand(args);
+    return;
+  }
+
+  // `rly project show <id>` — alias for `rly channel show <id>` (D-01:
+  // channel IS the project). Routes through the SAME function reference
+  // as COMMANDS.channel.show so the alias-equivalence test in
+  // test/cli/channel-show.test.ts can verify byte-identical behavior.
+  if (command === "project") {
+    if (args[0] === "show") {
+      process.exitCode = await COMMANDS.project.show(args.slice(1));
+      return;
+    }
+    console.error("Usage: rly project show <channelId|name> [--json] [--feed-tail=N]");
+    process.exitCode = 2;
     return;
   }
 
