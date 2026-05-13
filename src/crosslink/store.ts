@@ -2,6 +2,7 @@ import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { getRelayDir } from "../cli/paths.js";
+import { STALE_HEARTBEAT_MS } from "../domain/repo-admin-state.js";
 import { buildHarnessStore } from "../storage/factory.js";
 import { STORE_NS } from "../storage/namespaces.js";
 import type { HarnessStore } from "../storage/store.js";
@@ -16,7 +17,6 @@ import {
   type ReadyKind,
 } from "./types.js";
 
-const STALE_HEARTBEAT_MS = 120_000;
 const MESSAGE_EXPIRY_MS = 3_600_000;
 
 /**
