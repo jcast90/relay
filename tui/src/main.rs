@@ -348,6 +348,18 @@ pub struct App {
     pub update_nudge: Option<String>,
     pub approvals_cursor: usize,
     pub approvals_scroll: usize,
+
+    // Phase 4 plan 04 (SURFACE-03 / WORKER-06): per-channel admin sessions
+    // grouped by `harness_data::group_by_admin`. Sidebar renderer iterates
+    // `admin → admin.workers` so when Phase 5 starts writing
+    // `ready_kind: "worker"` sessions they auto-nest under the spawning
+    // admin without a renderer change. Today workers is always empty.
+    //
+    // Stores SESSIONS (grouped), not pre-computed state strings — the
+    // renderer computes state per-tick via `harness_data::derive_state`
+    // so cache-write vs render lag never causes a stale state badge.
+    // Map key is `channel_id`.
+    pub admins_by_channel: HashMap<String, Vec<harness_data::AdminWithWorkers>>,
 }
 
 #[derive(Clone, Debug)]
@@ -415,6 +427,7 @@ impl App {
             approvals_cursor: 0,
             approvals_scroll: 0,
             update_nudge: install_drift::detect_drift_footer(),
+            admins_by_channel: HashMap::new(),
         }
     }
 
@@ -645,6 +658,24 @@ impl App {
 
         self.channels = load_channels();
         self.agents = load_agent_names();
+
+        // Phase 4 plan 04: refresh per-channel grouped admin cache via
+        // harness_data::group_by_admin so the sidebar renderer can show a
+        // state badge per repo assignment. Reads ALL crosslink sessions
+        // once per tick, then groups by channel_id. SURFACE-07: no
+        // cache of derived state — sessions are stored, states are
+        // computed in the renderer.
+        let all_sessions = data::load_crosslink_sessions();
+        self.admins_by_channel.clear();
+        for ch in &self.channels {
+            let ch_sessions: Vec<data::CrosslinkSession> = all_sessions
+                .iter()
+                .filter(|s| s.channel_id.as_deref() == Some(ch.channel_id.as_str()))
+                .cloned()
+                .collect();
+            let grouped = data::group_by_admin(&ch_sessions);
+            self.admins_by_channel.insert(ch.channel_id.clone(), grouped);
+        }
 
         let selected = self.channels.get(self.selected_channel);
 

@@ -260,6 +260,71 @@ fn list_tracked_prs(channel_id: String) -> Result<Vec<data::TrackedPrRow>, Strin
     Ok(data::load_tracked_prs(&channel_id))
 }
 
+// --- Phase 4 plan 04 / SURFACE-04: per-channel repo-admin state ------------
+//
+// Both commands route through `harness_data::derive_state` /
+// `harness_data::group_by_admin` — the SAME Rust functions the TUI
+// consumes (see `tui/src/main.rs::refresh` + `tui/src/ui.rs::draw_sidebar`).
+// Single source of truth across surfaces (D-06).
+//
+// Phase 4 commands read via harness_data::load_crosslink_sessions which
+// targets the current `~/.relay/crosslink-session/` path (Phase 3
+// SUMMARY follow-up #2 covers the legacy `~/.relay/crosslink/sessions/`
+// path bug in `try_sigterm_matching_session` separately — out of scope
+// for this plan).
+
+/// Wire-shape tuple matching the TS API: `[alias, state]`. Returned in
+/// the same order as `Channel.repo_assignments` so the frontend can
+/// render a chip row that lines up with the existing repo chips.
+#[tauri::command]
+fn load_repo_admin_states(
+    channel_id: String,
+) -> Result<Vec<(String, data::RepoAdminState)>, String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    let channel = data::load_channel(&channel_id)
+        .ok_or_else(|| format!("channel not found: {}", channel_id))?;
+    let sessions = data::load_crosslink_sessions();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let mut out: Vec<(String, data::RepoAdminState)> =
+        Vec::with_capacity(channel.repo_assignments.len());
+    for ra in &channel.repo_assignments {
+        // Match the TUI's predicate: a CrosslinkSession belongs to a
+        // RepoAssignment when their `repo_path` matches AND the session
+        // is on this channel.
+        let sess = sessions.iter().find(|s| {
+            s.channel_id.as_deref() == Some(channel_id.as_str())
+                && s.ready_kind.as_deref() != Some("worker")
+                && s.repo_path == ra.repo_path
+        });
+        let state = match sess {
+            Some(s) => data::derive_state(s, now_ms),
+            None => data::RepoAdminState::Disconnected,
+        };
+        out.push((ra.alias.clone(), state));
+    }
+    Ok(out)
+}
+
+/// Forward-compat for Phase 5 / WORKER-06: returns admins grouped with
+/// their (today empty) worker Vec, so frontends can begin rendering the
+/// nested structure now and get worker rendering "for free" when Phase
+/// 5 starts emitting `ready_kind: "worker"` sessions.
+#[tauri::command]
+fn load_channel_admins_grouped(
+    channel_id: String,
+) -> Result<Vec<data::AdminWithWorkers>, String> {
+    validate_id_segment(&channel_id, "channelId")?;
+    let all = data::load_crosslink_sessions();
+    let filtered: Vec<data::CrosslinkSession> = all
+        .into_iter()
+        .filter(|s| s.channel_id.as_deref() == Some(channel_id.as_str()))
+        .collect();
+    Ok(data::group_by_admin(&filtered))
+}
+
 /// Entries returned from `list_pending_plans`. Optional `channel_id` is
 /// surfaced so the GUI can filter per-channel without re-reading the runs
 /// index.
@@ -4086,6 +4151,11 @@ pub fn run() {
             kill_spawned_agent,
             list_spawns,
             list_tracked_prs,
+            // Phase 4 plan 04 / SURFACE-04: per-channel repo-admin state.
+            // Both consume harness_data::derive_state — same Rust path
+            // the TUI uses, so dashboards never drift.
+            load_repo_admin_states,
+            load_channel_admins_grouped,
             list_pending_plans,
             approve_plan,
             reject_plan,

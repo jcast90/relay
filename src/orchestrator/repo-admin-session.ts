@@ -93,9 +93,10 @@ export const CYCLE_THRESHOLD_PCT = 60;
  * been spawned and the tracker is wired (mechanically alive). The
  * agent-asserted "I have finished onboarding and can be addressed"
  * signal lives on `CrosslinkSession.readyAt` (Phase 3) — populated only
- * when the agent calls the `agent_ready` MCP tool. Renaming this enum
- * (e.g. `processState` / `_processState`) would remove the lexical
- * collision but is out of scope for Phase 3; flagged as a follow-up.
+ * when the agent calls the `agent_ready` MCP tool. The backing field
+ * was renamed `_processState` in Phase 4 (Plan 01 Task 3) to remove the
+ * lexical collision with `RepoAdminState.ready` from
+ * `src/domain/repo-admin-state.ts`.
  */
 export type RepoAdminSessionState = "booting" | "ready" | "dead" | "stopped";
 
@@ -392,7 +393,8 @@ export class RepoAdminSession {
    */
   private _spawnCount = 0;
   private _currentSessionId: string = "";
-  private _state: RepoAdminSessionState = "booting";
+  /** Process spawn state (booting | ready | dead | stopped). NOT the agent-asserted readiness signal — for that, see CrosslinkSession.readyAt and RepoAdminState in src/domain/repo-admin-state.ts. */
+  private _processState: RepoAdminSessionState = "booting";
   private child: SpawnedProcess | null = null;
 
   /**
@@ -487,7 +489,7 @@ export class RepoAdminSession {
 
   /** Current lifecycle state. Use for assertions; drives no logic itself. */
   get state(): RepoAdminSessionState {
-    return this._state;
+    return this._processState;
   }
 
   /**
@@ -569,7 +571,7 @@ export class RepoAdminSession {
    * a dead admin. Mirrors the guard on {@link dispatchTicket}.
    */
   takeNextPendingTicket(): TicketLedgerEntry | null {
-    if (this._state === "stopped") {
+    if (this._processState === "stopped") {
       throw new Error(
         `RepoAdminSession(${this.alias}): cannot takeNextPendingTicket after stop(); ` +
           `route through a fresh session.`
@@ -598,7 +600,7 @@ export class RepoAdminSession {
    * handshake).
    */
   async start(): Promise<void> {
-    if (this._state === "stopped") {
+    if (this._processState === "stopped") {
       throw new Error(
         `RepoAdminSession(${this.alias}): cannot start() after stop(); ` +
           `create a new instance or let the pool handle respawns.`
@@ -617,7 +619,7 @@ export class RepoAdminSession {
     this.pendingNextSessionId = null;
     this._currentSessionId = nextId;
     this._spawnCount += 1;
-    this._state = "booting";
+    this._processState = "booting";
     this.recentStderr = [];
 
     await mkdir(this.logDir, { recursive: true });
@@ -682,7 +684,7 @@ export class RepoAdminSession {
     // Once the child is wired, mark ready. The "did it successfully boot"
     // question is semantic (AL-13 will ping the agent); mechanically, the
     // process is live as soon as spawn returns.
-    this._state = "ready";
+    this._processState = "ready";
     this.emit({ kind: "booted", sessionId: nextId });
   }
 
@@ -694,7 +696,7 @@ export class RepoAdminSession {
    * gone.
    */
   async stop(reason: string): Promise<void> {
-    if (this._state === "stopped") return;
+    if (this._processState === "stopped") return;
     if (this.stopRequested) {
       // A second caller overlapping the first: wait for it rather than
       // double-signalling.
@@ -708,7 +710,7 @@ export class RepoAdminSession {
     if (!this.child) {
       // Not running (e.g. booting failed synchronously). Transition
       // directly to stopped so callers observe terminality.
-      this._state = "stopped";
+      this._processState = "stopped";
       this.detachTokenTracker();
       this.emit({
         kind: "exited-expected",
@@ -737,7 +739,7 @@ export class RepoAdminSession {
     // goes down cleanly.
     this.killTimer = setTimeout(() => {
       this.killTimer = null;
-      if (this._state !== "stopped" && this.child) {
+      if (this._processState !== "stopped" && this.child) {
         try {
           this.child.kill("SIGKILL");
         } catch {
@@ -760,10 +762,10 @@ export class RepoAdminSession {
    * won't try to signal a non-existent process.
    */
   markStopped(reason: string): void {
-    if (this._state === "stopped") return;
+    if (this._processState === "stopped") return;
     this.stopRequested = true;
     this.stopReason = reason;
-    this._state = "stopped";
+    this._processState = "stopped";
     this.child = null;
     this.clearKillTimer();
     this.detachTokenTracker();
@@ -793,7 +795,7 @@ export class RepoAdminSession {
    * `pool.getSession(alias)`.
    */
   async dispatchTicket(ticket: TicketLedgerEntry): Promise<void> {
-    if (this._state === "stopped") {
+    if (this._processState === "stopped") {
       throw new Error(
         `RepoAdminSession(${this.alias}): cannot dispatchTicket after stop(); ` +
           `route through a fresh session.`
@@ -835,7 +837,7 @@ export class RepoAdminSession {
    * resurrection.
    */
   async cycle(reason: CycleReason): Promise<void> {
-    if (this._state === "stopped") {
+    if (this._processState === "stopped") {
       throw new Error(
         `RepoAdminSession(${this.alias}): cannot cycle() after stop(); ` +
           `cycle is a mid-life operation.`
@@ -1041,7 +1043,7 @@ export class RepoAdminSession {
    */
   private handleThresholdEvent(evt: ThresholdEvent): void {
     if (evt.threshold !== CYCLE_THRESHOLD_PCT) return;
-    if (this._state === "stopped") return;
+    if (this._processState === "stopped") return;
     if (this.cyclePromise) return;
     void this.cycle("budget-60pct").catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1058,7 +1060,7 @@ export class RepoAdminSession {
   ): void {
     this.clearKillTimer();
     const previousSessionId = this._currentSessionId;
-    const previousState = this._state;
+    const previousState = this._processState;
     this.child = null;
 
     if (expected) {
@@ -1077,7 +1079,7 @@ export class RepoAdminSession {
         });
         return;
       }
-      this._state = "stopped";
+      this._processState = "stopped";
       this.detachTokenTracker();
       this.emit({
         kind: "exited-expected",
@@ -1092,7 +1094,7 @@ export class RepoAdminSession {
     // `dead` so an observer can distinguish "process running" from
     // "process gone, waiting on restart decision".
     if (previousState === "stopped") return; // already terminal
-    this._state = "dead";
+    this._processState = "dead";
     this.emit({
       kind: "exited-unexpected",
       previousSessionId,
@@ -1129,7 +1131,7 @@ export class RepoAdminSession {
   }
 
   private async awaitStopped(): Promise<void> {
-    if (this._state === "stopped") return;
+    if (this._processState === "stopped") return;
     await new Promise<void>((resolve) => {
       const off = this.onEvent((evt) => {
         if (evt.kind === "exited-expected") {

@@ -1,7 +1,9 @@
+import { useEffect, useState } from "react";
+
 import { api } from "../api";
 import { agentAvatar } from "../lib/agents";
 import { useAppearance } from "../lib/appearance";
-import type { Channel, ChannelTier } from "../types";
+import type { Channel, ChannelTier, RepoAdminState } from "../types";
 import { RepoChipRow } from "./RepoChipRow";
 
 export type ChannelTab = "chat" | "board" | "decisions";
@@ -39,6 +41,37 @@ export function ChannelHeader({
 }: Props) {
   const isDm = channel.kind === "dm";
   const [appearance] = useAppearance();
+
+  // Phase 4 plan 04 / SURFACE-04: per-repo state badges sourced from
+  // harness_data::derive_state via the load_repo_admin_states Tauri
+  // command. Refresh interval matches App.tsx (5s) so all surfaces
+  // tick in lockstep. SURFACE-07: backend re-reads disk on every
+  // call — no in-process cache here.
+  const [repoStates, setRepoStates] = useState<Array<[string, RepoAdminState]>>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const states = await api.loadRepoAdminStates(channel.channelId);
+        if (!cancelled) setRepoStates(states);
+      } catch (err) {
+        // Best-effort: a missing channel or transient IO failure
+        // shouldn't crash the header. Empty list degrades gracefully
+        // (no badges rendered).
+        if (!cancelled) {
+          console.warn("[channel-header] loadRepoAdminStates failed:", err);
+          setRepoStates([]);
+        }
+      }
+    };
+    tick();
+    const id = setInterval(tick, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [channel.channelId]);
+
   const toggleStar = async () => {
     try {
       await api.setChannelStarred(channel.channelId, !channel.starred);
@@ -110,6 +143,20 @@ export function ChannelHeader({
             <span className="agent-avatar agent-overflow">+{channel.members.length - 4}</span>
           )}
         </div>
+        {repoStates.length > 0 && (
+          <div className="repo-state-stack">
+            {repoStates.map(([alias, state]) => (
+              <span
+                key={alias}
+                className={`repo-state-badge state-${state}`}
+                title={`${alias}: ${state}`}
+                data-state={state}
+              >
+                {alias}
+              </span>
+            ))}
+          </div>
+        )}
         <button
           className={`rail-toggle ${rightRailOpen ? "active" : ""}`}
           onClick={onToggleRail}
