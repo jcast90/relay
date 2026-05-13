@@ -68,13 +68,15 @@ describe("manifest hooks block (Phase 4 Plan 04-03 Task 2)", () => {
   });
 
   it("markHookInstalled writes the record and re-read sees it", async () => {
-    await markHookInstalled("claude", "deadbeef", "/home/u/.relay/crosslink/hooks/session-start.sh");
+    await markHookInstalled(
+      "claude",
+      "deadbeef",
+      "/home/u/.relay/crosslink/hooks/session-start.sh"
+    );
 
     const manifest = await readManifest();
     expect(manifest.hooks?.claude?.sha).toBe("deadbeef");
-    expect(manifest.hooks?.claude?.command).toBe(
-      "/home/u/.relay/crosslink/hooks/session-start.sh"
-    );
+    expect(manifest.hooks?.claude?.command).toBe("/home/u/.relay/crosslink/hooks/session-start.sh");
     expect(typeof manifest.hooks?.claude?.installedAt).toBe("string");
     // ISO timestamp shape — Y-M-DTH:M:S.sssZ
     expect(manifest.hooks?.claude?.installedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
@@ -94,28 +96,22 @@ describe("manifest hooks block (Phase 4 Plan 04-03 Task 2)", () => {
     expect(second.hooks?.claude?.sha).toBe("abc123");
     expect(second.hooks?.claude?.command).toBe("/p");
     // Shape preserved, no extra keys.
-    expect(Object.keys(second.hooks?.claude ?? {}).sort()).toEqual(
-      ["command", "installedAt", "sha"]
-    );
+    expect(Object.keys(second.hooks?.claude ?? {}).sort()).toEqual([
+      "command",
+      "installedAt",
+      "sha",
+    ]);
     // installedAt monotonically non-decreasing (string ISO sort works).
-    expect(
-      (second.hooks?.claude?.installedAt ?? "") >= (firstAt ?? "")
-    ).toBe(true);
+    expect((second.hooks?.claude?.installedAt ?? "") >= (firstAt ?? "")).toBe(true);
   });
 
   it("diffHook returns 'fresh' when no record, 'current' on sha match, 'behind' on sha mismatch", () => {
     expect(diffHook(undefined, { sha: "abc" })).toBe("fresh");
     expect(
-      diffHook(
-        { sha: "abc", installedAt: "2025-01-01T00:00:00Z", command: "/p" },
-        { sha: "abc" }
-      )
+      diffHook({ sha: "abc", installedAt: "2025-01-01T00:00:00Z", command: "/p" }, { sha: "abc" })
     ).toBe("current");
     expect(
-      diffHook(
-        { sha: "abc", installedAt: "2025-01-01T00:00:00Z", command: "/p" },
-        { sha: "def" }
-      )
+      diffHook({ sha: "abc", installedAt: "2025-01-01T00:00:00Z", command: "/p" }, { sha: "def" })
     ).toBe("behind");
   });
 

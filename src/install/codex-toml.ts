@@ -67,9 +67,7 @@ export async function ensureCodexFeatureFlag(
   // line triggers the warning. We do NOT block the write — losing comments
   // inside [features] is the documented trade.
   if (hasCommentsInFeatures(raw)) {
-    log(
-      `[rly install] Note: comments in [features] section of ${target} may be reformatted.`
-    );
+    log(`[rly install] Note: comments in [features] section of ${target} may be reformatted.`);
   }
 
   let parsed: Record<string, unknown>;
@@ -81,11 +79,10 @@ export async function ensureCodexFeatureFlag(
     );
   }
 
-  const features = (
+  const features =
     parsed.features && typeof parsed.features === "object" && !Array.isArray(parsed.features)
       ? (parsed.features as Record<string, unknown>)
-      : {}
-  );
+      : {};
 
   if (features[flag] === value) {
     return { changed: false, path: target };

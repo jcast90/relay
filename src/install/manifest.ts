@@ -291,10 +291,7 @@ export async function markHookInstalled(
  * drift in the same column / vocabulary as surface drift, so users only
  * have to learn one set of words ("current" / "behind" / "fresh").
  */
-export function diffHook(
-  record: HookRecord | undefined,
-  source: { sha: string }
-): SurfaceState {
+export function diffHook(record: HookRecord | undefined, source: { sha: string }): SurfaceState {
   if (!record) return "fresh";
   return record.sha === source.sha ? "current" : "behind";
 }

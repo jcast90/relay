@@ -104,11 +104,7 @@ enabled = false
   });
 
   it("legacy codex_hooks key is NOT touched", async () => {
-    await writeFile(
-      target,
-      `[features]\ncodex_hooks = true\n`,
-      "utf8"
-    );
+    await writeFile(target, `[features]\ncodex_hooks = true\n`, "utf8");
 
     await ensureCodexFeatureFlag("hooks", true, { path: target });
 
@@ -192,4 +188,3 @@ timeout_ms = 30000
     expect(parsed.model?.runtime?.timeout_ms).toBe(30000);
   });
 });
-
