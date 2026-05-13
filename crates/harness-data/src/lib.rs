@@ -763,7 +763,7 @@ fn parse_rfc3339_to_ms(s: &str) -> Option<i64> {
 /// when Phase 5 emits `readyKind: "worker"` sessions, `group_by_admin`
 /// will start populating this Vec without a schema change. Consumers
 /// that render only admins today can ignore the field.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AdminWithWorkers {
     pub admin: CrosslinkSession,
     pub workers: Vec<CrosslinkSession>,
