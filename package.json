@@ -79,6 +79,7 @@
     "@aoagents/ao-plugin-scm-github": "0.2.5",
     "@aoagents/ao-plugin-tracker-github": "0.2.5",
     "@aoagents/ao-plugin-tracker-linear": "0.2.5",
+    "@iarna/toml": "^2.2.5",
     "pg": "^8.20.0",
     "tsx": "^4.20.6",
     "zod": "^3.24.4"
