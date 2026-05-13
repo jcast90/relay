@@ -51,7 +51,12 @@ import { startDashboard } from "./tui/dashboard.js";
 import { SessionStore } from "./cli/session-store.js";
 import { buildSystemPrompt, resolveChannelRefs, findMcpConfig } from "./cli/chat-context.js";
 import { handleChatRecordUsageCommand } from "./cli/chat-record-usage.js";
-import { formatActiveSessionsBlock, loadActiveSessions } from "./cli/print-status-context.js";
+import {
+  formatActiveSessionsBlock,
+  formatChannelStatesBlock,
+  loadActiveSessions,
+  loadChannelStates,
+} from "./cli/print-status-context.js";
 import { rewindApply, rewindSnapshot } from "./cli/chat-rewind.js";
 import { submitApproval } from "./orchestrator/approval-gate.js";
 import { getWorkspaceDir } from "./cli/workspace-registry.js";
@@ -2817,6 +2822,16 @@ async function printStatus(artifactStore: LocalArtifactStore, cwd: string): Prom
   const activeBlock = formatActiveSessionsBlock(activeSessions);
   if (activeBlock) {
     console.log(activeBlock);
+    console.log("");
+  }
+
+  // Phase 4 Plan 05 (SURFACE-05): per-channel repo-admin states. Mirrors
+  // the active-sessions block: empty-list → no block at all so non-channel
+  // operators don't see a dangling header.
+  const channelStates = loadChannelStates();
+  const channelBlock = formatChannelStatesBlock(channelStates);
+  if (channelBlock) {
+    console.log(channelBlock);
     console.log("");
   }
 
