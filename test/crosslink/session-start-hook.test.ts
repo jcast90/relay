@@ -171,7 +171,10 @@ describe("generateSessionStartHookScripts (Phase 4 Plan 02 Task 2)", () => {
           })
         );
       }
-      await writeFile(join(relayDir, "channels", opts.channelId, "feed.jsonl"), lines.join("\n") + "\n");
+      await writeFile(
+        join(relayDir, "channels", opts.channelId, "feed.jsonl"),
+        lines.join("\n") + "\n"
+      );
     }
 
     return relayDir;
@@ -265,7 +268,9 @@ describe("generateSessionStartHookScripts (Phase 4 Plan 02 Task 2)", () => {
     const relayDir = await seedRelayDir({
       channelId: "oauth2",
       channelName: "oauth2",
-      repoAssignments: [{ alias: "sdk-repo", workspaceId: "ws-sdk", repoPath: "/tmp/sdk-repo-fixture" }],
+      repoAssignments: [
+        { alias: "sdk-repo", workspaceId: "ws-sdk", repoPath: "/tmp/sdk-repo-fixture" },
+      ],
       sessions: [
         {
           sessionId: "sid-sdk",
@@ -426,7 +431,11 @@ describe("generateSessionStartHookScripts (Phase 4 Plan 02 Task 2)", () => {
     const fixtures: FixtureEntry[] = [
       { label: "no session → disconnected", session: null, expectedState: "disconnected" },
       { label: "alive+fresh+ready → ready", session: aliveFreshReady, expectedState: "ready" },
-      { label: "alive+fresh+no-ready → booting", session: aliveFreshNoReady, expectedState: "booting" },
+      {
+        label: "alive+fresh+no-ready → booting",
+        session: aliveFreshNoReady,
+        expectedState: "booting",
+      },
       { label: "alive+aged-heartbeat → stale", session: aliveAged, expectedState: "stale" },
       {
         label: "dead-pid+ready → stale (stale wins over ready)",
@@ -437,18 +446,14 @@ describe("generateSessionStartHookScripts (Phase 4 Plan 02 Task 2)", () => {
 
     for (const fix of fixtures) {
       // 1. TS reference
-      const tsState = deriveRepoAdminState(
-        fix.session,
-        now,
-        (pid) => {
-          try {
-            process.kill(pid, 0);
-            return true;
-          } catch {
-            return false;
-          }
+      const tsState = deriveRepoAdminState(fix.session, now, (pid) => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
         }
-      );
+      });
       expect(tsState).toBe(fix.expectedState);
 
       // 2. Inlined .mjs reference — drive via the generated script.
@@ -509,8 +514,17 @@ describe("generateSessionStartHookScripts (Phase 4 Plan 02 Task 2)", () => {
       // Per-repo line: `  <glyph> <alias-padded> <state>...`
       const repoLine = stdout
         .split("\n")
-        .find((l) => l.trimStart().startsWith("●") || l.trimStart().startsWith("○") || l.trimStart().startsWith("×") || l.trimStart().startsWith("·"));
-      expect(repoLine, `[${fix.label}] expected a repo line in stdout, got: ${JSON.stringify(stdout)}`).toBeTruthy();
+        .find(
+          (l) =>
+            l.trimStart().startsWith("●") ||
+            l.trimStart().startsWith("○") ||
+            l.trimStart().startsWith("×") ||
+            l.trimStart().startsWith("·")
+        );
+      expect(
+        repoLine,
+        `[${fix.label}] expected a repo line in stdout, got: ${JSON.stringify(stdout)}`
+      ).toBeTruthy();
       // The state word is the third whitespace-separated token after trim.
       // Example: "  ● r              ready (admin: ...)"
       //   tokens: ["●", "r", "ready", "(admin:", ...] OR with multiple spaces inside padEnd we split on /\s+/.

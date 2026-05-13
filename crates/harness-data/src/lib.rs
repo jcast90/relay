@@ -618,6 +618,20 @@ pub struct CrosslinkSession {
     pub ready_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ready_kind: Option<String>,
+    /// Phase 4 Plan 02 (D-04) — per-session watermark for the
+    /// "Feed: N new entries" count rendered by the SessionStart hook.
+    /// Holds the feed-line index this session has already been shown;
+    /// the hook subtracts this from `feed.jsonl`'s line count to derive
+    /// the "new" delta, then advances the field via
+    /// `CrosslinkStore.advanceFeedWatermark` (monotonic, atomic).
+    ///
+    /// Additive optional field — no schemaVersion bump. Sessions written
+    /// before Phase 4 deserialize cleanly with `None` (the
+    /// `#[serde(default)]` makes the field a no-op in the back-compat
+    /// fixture). Skipped on serialization when absent so we don't churn
+    /// existing files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_feed_idx: Option<u64>,
 }
 
 /// Read every crosslink-session record from
@@ -2878,6 +2892,67 @@ mod tests {
         assert_eq!(session.ready_kind, None);
     }
 
+    // --- Phase 4 Plan 02: lastSeenFeedIdx watermark serde ------------------
+    //
+    // Mirrors `src/crosslink/types.ts CrosslinkSessionSchema.lastSeenFeedIdx`.
+    // Additive optional field — sessions written before Phase 4 (without
+    // this field) MUST still deserialize cleanly so the Rust readers in
+    // `load_crosslink_sessions` don't poison the list when an older record
+    // is encountered. Sessions written after Phase 4 (with the field)
+    // round-trip the integer value.
+
+    #[test]
+    fn parses_session_with_watermark() {
+        // Phase 4+ shape — lastSeenFeedIdx present.
+        let json = r#"{
+            "sessionId": "session-phase4",
+            "pid": 1234,
+            "repoPath": "/tmp/repo",
+            "description": "Phase 4 watermark",
+            "capabilities": ["general"],
+            "agentProvider": "claude",
+            "registeredAt": "2026-05-13T10:00:00Z",
+            "lastHeartbeat": "2026-05-13T10:00:30Z",
+            "status": "active",
+            "readyAt": "2026-05-13T10:00:15Z",
+            "readyKind": "admin",
+            "lastSeenFeedIdx": 7
+        }"#;
+        let session: CrosslinkSession = serde_json::from_str(json).expect("parse");
+        assert_eq!(session.session_id, "session-phase4");
+        assert_eq!(session.last_seen_feed_idx, Some(7));
+    }
+
+    #[test]
+    fn parses_session_without_watermark() {
+        // Pre-Phase-4 (and pre-Phase-3) shape — lastSeenFeedIdx absent.
+        // Both legacy shapes MUST deserialize cleanly so a watermark-less
+        // session.json on disk doesn't break the readers when the field
+        // lands. `#[serde(default)]` carries this guarantee.
+        let json = r#"{
+            "sessionId": "session-pre-phase4",
+            "pid": 4321,
+            "repoPath": "/tmp/repo",
+            "description": "back-compat",
+            "capabilities": [],
+            "agentProvider": "claude",
+            "registeredAt": "2026-04-01T10:00:00Z",
+            "lastHeartbeat": "2026-04-01T10:00:30Z",
+            "status": "active"
+        }"#;
+        let session: CrosslinkSession = serde_json::from_str(json).expect("parse");
+        assert_eq!(session.session_id, "session-pre-phase4");
+        assert_eq!(session.last_seen_feed_idx, None);
+        // Round-trip back to JSON — the field is skipped when None so the
+        // serialized output doesn't churn existing files with a noisy
+        // "lastSeenFeedIdx": null.
+        let round_trip = serde_json::to_string(&session).expect("serialize");
+        assert!(
+            !round_trip.contains("lastSeenFeedIdx"),
+            "skip_serializing_if=Option::is_none must omit absent watermark; got: {round_trip}"
+        );
+    }
+
     #[test]
     fn load_crosslink_sessions_returns_valid_rows_skips_malformed() {
         let _root = scoped_root();
@@ -3098,6 +3173,11 @@ mod tests {
             status: "active".into(),
             ready_at: ready_at.map(String::from),
             ready_kind: ready_kind.map(String::from),
+            // Phase 4 Plan 02: fixture default is None — derive_state and
+            // group_by_admin don't read the watermark; this keeps the
+            // existing test bodies untouched while the struct field is
+            // mandatory at construction.
+            last_seen_feed_idx: None,
         }
     }
 
