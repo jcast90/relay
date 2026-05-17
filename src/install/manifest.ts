@@ -9,6 +9,21 @@ export type Surface = "cli" | "tui" | "gui";
 
 export const SURFACES: readonly Surface[] = ["cli", "tui", "gui"] as const;
 
+/**
+ * Targets for the Phase 4 SessionStart hook install (Plan 04-03).
+ *
+ * Each `HookTarget` corresponds to one external config file that `rly install`
+ * writes a Relay-tagged entry into:
+ *   - `claude` → `~/.claude/settings.json` (`SessionStart` hook array)
+ *   - `codex`  → `~/.codex/hooks.json` (same shape, same matcher tag); the
+ *               companion `[features].hooks = true` flag in `~/.codex/config.toml`
+ *               is written separately (see `src/install/codex-toml.ts`) and
+ *               not tracked in the manifest — its drift is a TOML-level concern.
+ */
+export type HookTarget = "claude" | "codex";
+
+export const HOOK_TARGETS: readonly HookTarget[] = ["claude", "codex"] as const;
+
 export interface SurfaceRecord {
   /** Semver from package.json at install time. */
   version: string;
@@ -18,9 +33,34 @@ export interface SurfaceRecord {
   installedAt: string;
 }
 
-interface InstallManifest {
+/**
+ * Manifest record for a SessionStart hook install (Plan 04-03 Task 2).
+ *
+ * `sha` is the SHA-256 of the GENERATED node-script body — deterministic
+ * given a fixed `relayDir`, so drift on either external hook config file
+ * (`~/.claude/settings.json` or `~/.codex/hooks.json`) registers as
+ * "behind" against the current source. `command` is the absolute path
+ * written into the config — typically `~/.relay/crosslink/hooks/session-start.sh`.
+ */
+export interface HookRecord {
+  /** SHA-256 (hex) of the generated session-start node-script body. */
+  sha: string;
+  /** ISO 8601 UTC timestamp. */
+  installedAt: string;
+  /** Absolute path written into the agent config's `command` field. */
+  command: string;
+}
+
+export interface InstallManifest {
+  /**
+   * Schema version. The Phase 4 `hooks` field is an ADDITIVE optional —
+   * old (Phase 3) manifests parse without modification, so the version
+   * stays at 1.
+   */
   schemaVersion: 1;
   surfaces: Partial<Record<Surface, SurfaceRecord>>;
+  /** Phase 4 Plan 04-03 — optional, absent on legacy manifests. */
+  hooks?: Partial<Record<HookTarget, HookRecord>>;
 }
 
 const MANIFEST_FILE = "installed.json";
@@ -36,7 +76,15 @@ function emptyManifest(): InstallManifest {
 function isManifest(value: unknown): value is InstallManifest {
   if (!value || typeof value !== "object") return false;
   const m = value as InstallManifest;
-  return m.schemaVersion === 1 && typeof m.surfaces === "object" && m.surfaces !== null;
+  if (m.schemaVersion !== 1) return false;
+  if (typeof m.surfaces !== "object" || m.surfaces === null) return false;
+  // `hooks` is optional and additive (Phase 4 Plan 04-03). Accept missing,
+  // empty object, or partial-target shapes. We do not deeply validate the
+  // HookRecord shape here — `readManifest` falls back to empty on JSON.parse
+  // errors, and downstream consumers (`getHookRecord`, `diffHook`) tolerate
+  // undefined records.
+  if (m.hooks !== undefined && (typeof m.hooks !== "object" || m.hooks === null)) return false;
+  return true;
 }
 
 /**
@@ -194,4 +242,86 @@ export async function reportDrift(): Promise<DriftReport> {
 /** Test helper — clear the source-version cache so tests can vary it. */
 export function __resetSourceVersionCacheForTests(): void {
   sourceVersionCache = null;
+}
+
+// =========================================================================
+// Phase 4 Plan 04-03 Task 2 — SessionStart hook drift tracking
+// =========================================================================
+//
+// Mirrors the surface-record vocabulary (`fresh` / `current` / `behind`)
+// against the same `SurfaceState` type — the user-facing meaning is
+// identical, so reusing the type keeps `rly install --check` output
+// uniform across surfaces and hooks. Drift detection is per-target
+// (`claude` and `codex` independently) so a partial install (`--skip-codex`)
+// reports honestly without polluting the surface drift report.
+
+/** Read a single hook record from the manifest. Undefined when not installed. */
+export function getHookRecord(
+  manifest: InstallManifest,
+  target: HookTarget
+): HookRecord | undefined {
+  return manifest.hooks?.[target];
+}
+
+/**
+ * Stamp a hook target as installed at the given source SHA + command path.
+ * Atomic read-modify-write through the same `writeManifest` path used for
+ * surface records. Safe within a single `rly install` invocation; do not
+ * run two installers concurrently.
+ */
+export async function markHookInstalled(
+  target: HookTarget,
+  sha: string,
+  command: string
+): Promise<void> {
+  const manifest = await readManifest();
+  manifest.hooks ??= {};
+  manifest.hooks[target] = {
+    sha,
+    installedAt: new Date().toISOString(),
+    command,
+  };
+  await writeManifest(manifest);
+}
+
+/**
+ * Compare an installed hook record against the current source SHA.
+ *
+ * Reuses `SurfaceState` deliberately — `rly install --check` reports hook
+ * drift in the same column / vocabulary as surface drift, so users only
+ * have to learn one set of words ("current" / "behind" / "fresh").
+ */
+export function diffHook(record: HookRecord | undefined, source: { sha: string }): SurfaceState {
+  if (!record) return "fresh";
+  return record.sha === source.sha ? "current" : "behind";
+}
+
+export interface HookDriftEntry {
+  target: HookTarget;
+  record: HookRecord | undefined;
+  state: SurfaceState;
+}
+
+/**
+ * Per-target drift snapshot for the install-manifest's hook block. Callers
+ * (e.g. `rly install --check`) pass the source SHAs they would write if
+ * `rly install` were invoked right now; the function returns one entry per
+ * target the caller asked about.
+ *
+ * Targets the caller omits from `sources` are skipped — letting
+ * `--skip-codex` users see Claude drift without a phantom "codex: fresh"
+ * row that doesn't reflect what they actually configured.
+ */
+export function reportHookDrift(
+  manifest: InstallManifest,
+  sources: Partial<Record<HookTarget, { sha: string }>>
+): HookDriftEntry[] {
+  const out: HookDriftEntry[] = [];
+  for (const target of HOOK_TARGETS) {
+    const source = sources[target];
+    if (!source) continue;
+    const record = getHookRecord(manifest, target);
+    out.push({ target, record, state: diffHook(record, source) });
+  }
+  return out;
 }

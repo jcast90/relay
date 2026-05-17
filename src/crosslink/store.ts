@@ -2,6 +2,7 @@ import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { getRelayDir } from "../cli/paths.js";
+import { STALE_HEARTBEAT_MS } from "../domain/repo-admin-state.js";
 import { buildHarnessStore } from "../storage/factory.js";
 import { STORE_NS } from "../storage/namespaces.js";
 import type { HarnessStore } from "../storage/store.js";
@@ -16,7 +17,6 @@ import {
   type ReadyKind,
 } from "./types.js";
 
-const STALE_HEARTBEAT_MS = 120_000;
 const MESSAGE_EXPIRY_MS = 3_600_000;
 
 /**
@@ -226,6 +226,57 @@ export class CrosslinkStore {
 
     await this.store.putDoc(STORE_NS.crosslinkSession, sessionId, updated);
     return { readyAt, alreadyReady: false };
+  }
+
+  /**
+   * Phase 4 Plan 02 (D-04) — monotonic feed-watermark advance.
+   *
+   * Sibling to {@link updateReadiness}: writes a single optional field on
+   * the existing `CrosslinkSession` record without disturbing any other
+   * field. Used by the generated SessionStart hook (and future surfaces)
+   * to remember "this session has already been shown feed entries up to
+   * idx N". The hook then renders `Feed: total - lastSeenFeedIdx new
+   * entries` and advances the field after a successful render.
+   *
+   * Semantics:
+   *   - Returns `null` for unknown sessionId (same shape as
+   *     `updateHeartbeat` / `updateReadiness`).
+   *   - Monotonic: `newIdx = max(idx, current ?? 0)`. Calling with a
+   *     smaller idx is a no-op write that returns the current value.
+   *   - Idempotent: calling with the same or smaller idx never advances
+   *     and never re-writes disk (skips the atomic-rename roundtrip).
+   *     Same-value calls are common when the hook re-runs without new
+   *     feed entries since the previous render.
+   *   - Atomic via the underlying `HarnessStore.putDoc`, which writes
+   *     tmp-then-rename in the file backend. Matches the Phase 3
+   *     `updateReadiness` durability contract.
+   *
+   * Does NOT touch `lastHeartbeat` — the watermark is a presentation-
+   * layer signal, not session liveness. (Compare to `updateReadiness`,
+   * which DOES bump heartbeat because readiness IS activity.)
+   */
+  async advanceFeedWatermark(
+    sessionId: string,
+    idx: number
+  ): Promise<{ ok: boolean; idx: number } | null> {
+    const session = await this.readSession(sessionId);
+    if (!session) return null;
+
+    const current = session.lastSeenFeedIdx ?? 0;
+    if (idx <= current) {
+      // Idempotent + monotonic: no-op when caller is at or behind the
+      // current watermark. No disk write, return current value so the
+      // caller can observe the actual high-water mark.
+      return { ok: false, idx: current };
+    }
+
+    const updated: CrosslinkSession = {
+      ...session,
+      lastSeenFeedIdx: idx,
+    };
+
+    await this.store.putDoc(STORE_NS.crosslinkSession, sessionId, updated);
+    return { ok: true, idx };
   }
 
   async deregisterSession(sessionId: string): Promise<void> {

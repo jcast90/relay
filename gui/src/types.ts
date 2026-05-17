@@ -348,3 +348,37 @@ export interface ChatSessionBudget {
   lastUpdated?: string | null;
   modelName?: string | null;
 }
+
+// --- Phase 4 plan 04 / SURFACE-04: repo-admin state -----------------------
+//
+// Canonical four-string state vocabulary per Phase 4 D-06. Wire format
+// is kebab-case and must match the Rust mirror in
+// `crates/harness-data/src/lib.rs::RepoAdminState` byte-for-byte.
+
+export type RepoAdminState = "disconnected" | "booting" | "ready" | "stale";
+
+// Mirrors `harness_data::CrosslinkSession` (serde rename_all = camelCase).
+// `readyAt` / `readyKind` are Phase 3 fields, optional for back-compat
+// with pre-Phase-3 sessions on disk.
+export interface CrosslinkSession {
+  sessionId: string;
+  pid: number;
+  repoPath: string;
+  description: string;
+  displayName?: string;
+  channelId?: string;
+  capabilities: string[];
+  agentProvider: string;
+  registeredAt: string;
+  lastHeartbeat: string;
+  status: string;
+  readyAt?: string;
+  readyKind?: string;
+}
+
+// Forward-compat for Phase 5 / WORKER-06: workers nest under their
+// spawning admin. Today the workers array is always empty.
+export interface AdminWithWorkers {
+  admin: CrosslinkSession;
+  workers: CrosslinkSession[];
+}

@@ -41,6 +41,21 @@ export const CrosslinkSessionSchema = z.object({
   status: SessionStatusSchema,
   readyAt: z.string().optional(),
   readyKind: ReadyKindSchema.optional(),
+  /**
+   * Phase 4 Plan 02 (D-04): per-session watermark for the "Feed: N new
+   * entries" count in the SessionStart hook output. Holds the feed-line
+   * index this session has already been shown; the hook computes
+   * `total_lines - lastSeenFeedIdx` after rendering and advances the
+   * field via `CrosslinkStore.advanceFeedWatermark`.
+   *
+   * Optional (additive — no schema-version bump). Sessions written before
+   * this field landed deserialize with `lastSeenFeedIdx` undefined; the
+   * hook treats undefined as 0 (everything is new). The Rust mirror in
+   * `crates/harness-data/src/lib.rs::CrosslinkSession.last_seen_feed_idx`
+   * uses `#[serde(default, skip_serializing_if = "Option::is_none")]` to
+   * preserve back-compat on the read side.
+   */
+  lastSeenFeedIdx: z.number().int().nonnegative().optional(),
 });
 
 export type CrosslinkSession = z.infer<typeof CrosslinkSessionSchema>;
