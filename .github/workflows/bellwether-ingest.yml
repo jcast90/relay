@@ -1,0 +1,35 @@
+# Bellwether — Test Failure Ingest
+#
+# This workflow listens for completed runs of OTHER workflows in this repo
+# and forwards failed-test artifacts to Bellwether so they can be classified
+# (real regression vs flake vs infra vs test bug).
+#
+# Created automatically by Bellwether on first install (BEL-90). Safe to
+# customize the `branches` filter, the `if` predicate, or the composite
+# action version — Bellwether reads from whatever workflow is named
+# `bellwether-ingest.yml`.
+#
+# Manage your install at https://bellwether.run
+
+name: Bellwether Ingest
+
+on:
+  workflow_run:
+    workflows: ["*"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  ingest:
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'failure' ||
+          github.event.workflow_run.conclusion == 'cancelled' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: bellwether-run/ingest-action@v1
+        with:
+          bellwether_token: ${{ secrets.BELLWETHER_TOKEN }}
+          workflow_run_id: ${{ github.event.workflow_run.id }}
