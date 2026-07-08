@@ -25,6 +25,25 @@ function call(partial: Partial<TaskCostCall>): TaskCostCall {
 }
 
 describe("cost-report", () => {
+  it("keeps same-id tickets from different runs as distinct tasks", () => {
+    // Ticket ids are only run-scoped (ticket_01, ticket_02, …), so the same id
+    // recurs across runs. Rollup must key on (runId, ticketId), not ticketId.
+    const rollups = rollupTasks([
+      call({ runId: "run-a", ticketId: "ticket_01", costUsd: 1 }),
+      call({ runId: "run-b", ticketId: "ticket_01", costUsd: 2 }),
+    ]);
+    expect(rollups).toHaveLength(2);
+    expect(rollups.map((r) => r.costUsd).sort()).toEqual([1, 2]);
+
+    // …and the report counts them as two tasks, not one merged $3 task.
+    const report = buildCostReport([
+      call({ runId: "run-a", ticketId: "ticket_01", taskType: "bugfix", costUsd: 1 }),
+      call({ runId: "run-b", ticketId: "ticket_01", taskType: "bugfix", costUsd: 2 }),
+    ]);
+    expect(report.taskCount).toBe(2);
+    expect(report.byTaskType[0]!.meanUsd).toBeCloseTo(1.5, 6);
+  });
+
   it("rolls up a task's cost across retries and picks the costliest model", () => {
     const rollups = rollupTasks([
       call({
