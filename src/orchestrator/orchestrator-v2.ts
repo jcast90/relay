@@ -29,6 +29,7 @@ import { SessionTrackerPool } from "../budget/session-tracker-pool.js";
 import { TaskCostLedger } from "../budget/task-cost-ledger.js";
 import { dispatchTokenUsageOrThrow } from "./dispatch-token-usage.js";
 import { attachThresholdFeed } from "../budget/threshold-feed-bridge.js";
+import { ModelRouter, buildRoutingStats, type ModelRouterOptions } from "../agents/model-router.js";
 
 /**
  * Anything the orchestrator can hook into for follow-up enqueueing (PR poller,
@@ -78,6 +79,15 @@ export interface OrchestratorV2Options {
    * orchestrator constructs one writing to `~/.relay/task-costs.jsonl`.
    */
   costLedger?: TaskCostLedger;
+  /**
+   * Cost-aware model routing. When set, ticket dispatches route to the model
+   * with the lowest measured cost-per-task for the run's tier (falling back to
+   * headline per-token price during cold-start). Omitted → no routing; agents
+   * keep their statically-configured model (today's behavior). Opt-in because
+   * routing among a candidate set assumes the caller's auth covers all of
+   * them — the production entrypoint gates it behind `RELAY_COST_ROUTING`.
+   */
+  modelRouting?: ModelRouterOptions;
 }
 
 export class OrchestratorV2 {
@@ -103,6 +113,15 @@ export class OrchestratorV2 {
    * completion so `rly cost` sees the run's costs immediately after it ends.
    */
   private readonly costLedger: TaskCostLedger;
+
+  /**
+   * Cost-aware router config (candidates + minSamples), if routing is on.
+   * The {@link ModelRouter} itself is built lazily on first ticket dispatch
+   * from a one-time ledger snapshot — see {@link ensureModelRouter}.
+   */
+  private readonly modelRoutingOptions: ModelRouterOptions | null;
+  private modelRouter: ModelRouter | null = null;
+  private modelRouterLoaded = false;
 
   /**
    * Per-tracker unsubscribe handles for the threshold-feed bridge. Keyed
@@ -137,6 +156,7 @@ export class OrchestratorV2 {
     this.executor = options?.executor ?? null;
     this.trackerPool = options?.trackerPool ?? new SessionTrackerPool();
     this.costLedger = options?.costLedger ?? new TaskCostLedger();
+    this.modelRoutingOptions = options?.modelRouting ?? null;
   }
 
   /**
@@ -518,11 +538,44 @@ export class OrchestratorV2 {
     }
   }
 
+  /**
+   * Resolve the routed model for a run's tier, or undefined when routing is
+   * off or the run isn't classified yet. Builds the {@link ModelRouter} once
+   * per orchestrator from a single ledger snapshot (loaded lazily so a
+   * routing-off run never reads the file).
+   */
+  private async resolveRoutedModel(run: HarnessRun): Promise<string | undefined> {
+    if (!this.modelRoutingOptions || !run.classification) return undefined;
+    if (!this.modelRouterLoaded) {
+      this.modelRouterLoaded = true;
+      try {
+        const lines = await this.costLedger.readAll();
+        this.modelRouter = new ModelRouter(buildRoutingStats(lines), this.modelRoutingOptions);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[cost] routing disabled — ledger read failed: ${message}`);
+        this.modelRouter = null;
+      }
+    }
+    return this.modelRouter?.chooseModel(run.classification.tier).model;
+  }
+
   private async dispatch(run: HarnessRun, input: Omit<WorkRequest, "runId">): Promise<AgentResult> {
     let lastError: Error | null = null;
 
+    // Cost-aware routing: once the run is classified, pick the model with the
+    // lowest measured cost-per-task for this tier (headline price at cold-
+    // start). Only applies when routing is configured; planning calls that
+    // precede classification keep the agent's default model.
+    const routedModel = await this.resolveRoutedModel(run);
+
     for (let attempt = 1; attempt <= input.maxAttempts; attempt += 1) {
-      const request: WorkRequest = { runId: run.id, ...input, attempt };
+      const request: WorkRequest = {
+        runId: run.id,
+        ...input,
+        attempt,
+        ...(routedModel ? { model: routedModel } : {}),
+      };
       const agent = this.registry.resolve(request);
 
       this.recordEvent(run, "AgentDispatched", input.phaseId, {
@@ -530,6 +583,7 @@ export class OrchestratorV2 {
         provider: agent.provider,
         workKind: input.kind,
         attempt: String(attempt),
+        ...(routedModel ? { model: routedModel } : {}),
       });
 
       if (run.channelId && this.channelStore) {

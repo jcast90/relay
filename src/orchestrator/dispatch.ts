@@ -1,5 +1,6 @@
 import { AgentRegistry } from "../agents/registry.js";
 import { createLiveAgents, registerAgentNames } from "../agents/factory.js";
+import { defaultCandidatesForProvider } from "../agents/model-router.js";
 import { NodeCommandInvoker } from "../agents/command-invoker.js";
 import type { ProviderProfile, ProviderProfileLookup } from "../agents/provider-profile-lookup.js";
 import { ProviderProfileStore } from "../storage/provider-profile-store.js";
@@ -122,6 +123,18 @@ export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
 
   const verificationRunner = new VerificationRunner(new NodeCommandInvoker(), artifactStore);
 
+  // Cost-aware model routing is opt-in (RELAY_COST_ROUTING) because routing
+  // among a provider's tier family assumes the caller's auth covers all of
+  // them. When on, the orchestrator routes each task's model by measured
+  // cost-per-task for its tier, falling back to headline price at cold-start.
+  const costRoutingEnabled =
+    process.env.RELAY_COST_ROUTING === "1" ||
+    process.env.RELAY_COST_ROUTING === "true" ||
+    process.env.RELAY_COST_ROUTING === "yes";
+  const modelRouting = costRoutingEnabled
+    ? { candidates: defaultCandidatesForProvider(defaultProvider) }
+    : undefined;
+
   const orchestrator = new OrchestratorV2(
     registry,
     repoPath,
@@ -129,7 +142,8 @@ export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
     artifactStore,
     artifactsDir,
     channelStore,
-    workspaceId
+    workspaceId,
+    modelRouting ? { modelRouting } : undefined
   );
   // Auto-attach PR watcher. No-op without GITHUB_TOKEN; safe to always call.
   orchestrator.attachPoller(

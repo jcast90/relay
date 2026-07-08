@@ -280,15 +280,18 @@ abstract class CliAgentBase implements Agent {
   }
 
   async run(request: WorkRequest) {
-    const response = await this.invokeProvider(buildPrompt(this.name, request));
+    // Per-call routed model (cost-aware router) wins over the statically
+    // configured model; fall back to `this.model` when routing is off.
+    const effectiveModel = request.model ?? this.model;
+    const response = await this.invokeProvider(buildPrompt(this.name, request), effectiveModel);
 
     return {
       ...response.parsed,
       rawResponse: response.rawResponse,
-      // Tag the result with the configured model so per-task cost accounting
-      // can price the call. Omitted when the agent has no model pinned (the
-      // call then bills at $0 with a `[cost]` warning).
-      ...(this.model ? { model: this.model } : {}),
+      // Tag the result with the model that actually ran so per-task cost
+      // accounting prices the call. Omitted when neither routing nor config
+      // pinned a model (the call then bills at $0 with a `[cost]` warning).
+      ...(effectiveModel ? { model: effectiveModel } : {}),
     };
   }
 
@@ -305,11 +308,17 @@ abstract class CliAgentBase implements Agent {
     };
   }
 
-  protected abstract invokeProvider(prompt: string): Promise<ParsedProviderResult>;
+  protected abstract invokeProvider(
+    prompt: string,
+    model: string | undefined
+  ): Promise<ParsedProviderResult>;
 }
 
 export class CodexCliAgent extends CliAgentBase {
-  protected async invokeProvider(prompt: string): Promise<ParsedProviderResult> {
+  protected async invokeProvider(
+    prompt: string,
+    model: string | undefined
+  ): Promise<ParsedProviderResult> {
     const tempDir = await mkdtemp(join(tmpdir(), "relay-codex-"));
     const schemaPath = join(tempDir, "schema.json");
     const outputPath = join(tempDir, "response.json");
@@ -344,8 +353,8 @@ export class CodexCliAgent extends CliAgentBase {
         args.push("--ask-for-approval", "never");
       }
 
-      if (this.model) {
-        args.push("--model", this.model);
+      if (model) {
+        args.push("--model", model);
       }
 
       args.push(prompt);
@@ -413,7 +422,10 @@ export class CodexCliAgent extends CliAgentBase {
 }
 
 export class ClaudeCliAgent extends CliAgentBase {
-  protected async invokeProvider(prompt: string): Promise<ParsedProviderResult> {
+  protected async invokeProvider(
+    prompt: string,
+    model: string | undefined
+  ): Promise<ParsedProviderResult> {
     // When the user sets RELAY_AUTO_APPROVE=1 (or launched with --auto-approve
     // / --yolo), or the channel has opted in to full-access mode (AL-0),
     // internal dispatched agents run fully unattended. Otherwise we stay on
@@ -430,7 +442,7 @@ export class ClaudeCliAgent extends CliAgentBase {
     // NodeCommandInvoker. We fall back to the buffered path otherwise so
     // no call site breaks just because streaming wasn't configured.
     if (this.onStreamLine && typeof this.invoker.spawn === "function") {
-      return this.invokeStreaming(prompt, autoApprove);
+      return this.invokeStreaming(prompt, autoApprove, model);
     }
 
     const args = [
@@ -447,8 +459,8 @@ export class ClaudeCliAgent extends CliAgentBase {
       args.push("--permission-mode", "default");
     }
 
-    if (this.model) {
-      args.push("--model", this.model);
+    if (model) {
+      args.push("--model", model);
     }
 
     // AL-11: when a restricted role is assigned to this agent, tell the
@@ -499,7 +511,8 @@ export class ClaudeCliAgent extends CliAgentBase {
    */
   private async invokeStreaming(
     prompt: string,
-    autoApprove: boolean
+    autoApprove: boolean,
+    model: string | undefined
   ): Promise<ParsedProviderResult> {
     const args: string[] = [
       "-p",
@@ -511,7 +524,7 @@ export class ClaudeCliAgent extends CliAgentBase {
     ];
     if (autoApprove) args.push("--dangerously-skip-permissions");
     else args.push("--permission-mode", "default");
-    if (this.model) args.push("--model", this.model);
+    if (model) args.push("--model", model);
     // AL-11: same `--disallowed-tools` lockdown as the buffered path.
     appendDisallowedBuiltinArgs(args, this.role);
     args.push(prompt);

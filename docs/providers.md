@@ -113,6 +113,18 @@ rly channel set-provider <channelId> clear         # inherit default / HARNESS_P
 
 The GUI exposes the same surface: Settings drawer → About → Provider dropdown on each channel, and a Providers tab in the global Settings page for full CRUD.
 
+## Cost-aware model routing (opt-in)
+
+By default each run uses one model (the profile's `defaultModel` or `--model`). Set `RELAY_COST_ROUTING=1` to let the orchestrator pick the model per task instead:
+
+```bash
+export RELAY_COST_ROUTING=1
+```
+
+When on, each task routes to the model with the lowest **measured cost-per-task** for its complexity tier — read from the per-task cost ledger (`~/.relay/task-costs.jsonl`, see `rly cost`). Until a tier has ≥ 5 measured tasks, it falls back to the cheapest **headline per-token price**. Candidates are the active provider's tier family (Claude: haiku → sonnet → opus; Codex: o3-mini → gpt-5).
+
+It's opt-in because routing across a tier family assumes your auth covers **all** of those models. If you only have access to one, leave it off (or the routed model will fail to spawn). The chosen model is recorded on each `AgentDispatched` event (`model` field) so `rly` surfaces show what actually ran.
+
 ## GitHub Projects v2 auth
 
 The v0.2 GitHub Projects v2 integration ([`docs/trackers.md`](./trackers.md)) reuses the **existing GitHub auth surface** — no new token, no new env var. The classifier and the sync worker both pick `GITHUB_TOKEN` up at the entry boundary (URL paste, scheduled tick) and pass it down to the GraphQL client through the classifier deps bag (`ProjectsClientDeps` in `src/integrations/github-projects/client.ts`). Internal callers never read the env var directly — they receive it as an explicit dependency, which keeps the integration testable without touching `process.env`.

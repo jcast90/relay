@@ -63,6 +63,14 @@ export interface WorkRequest {
   attempt: number;
   maxAttempts: number;
   priorEvidence: string[];
+  /**
+   * Optional per-call model override chosen by the cost-aware router
+   * (`ModelRouter`) for this task's tier. When set, the CLI adapter passes it
+   * as `--model` instead of its statically-configured model. Absent → the
+   * adapter uses its own `this.model` (today's behavior). Lets routing vary
+   * the model per task without rebuilding the agent registry mid-run.
+   */
+  model?: string;
 }
 
 /**
