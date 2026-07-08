@@ -53,6 +53,32 @@ export function extractUsageFromStdout(stdout: string): TokenUsage | undefined {
 }
 
 /**
+ * Best-effort extraction of the model name from an agent child's buffered
+ * stdout. Claude stream-json emits the model on the `system`/`init` event and
+ * on each assistant message (`message.model`); the buffered `--output-format
+ * json` body carries a top-level `model`. We scan line-by-line and return the
+ * first string `model` we find (top-level or nested under `message`). Returns
+ * `undefined` for raw commands / streams with no model — the call then bills
+ * at $0 with the `[cost]` warning, never throws.
+ */
+export function extractModelFromStdout(stdout: string): string | undefined {
+  if (!stdout) return undefined;
+  for (const line of stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{")) continue;
+    try {
+      const obj = JSON.parse(trimmed) as Record<string, unknown>;
+      if (typeof obj.model === "string" && obj.model) return obj.model;
+      const msg = obj.message as { model?: unknown } | undefined;
+      if (msg && typeof msg.model === "string" && msg.model) return msg.model;
+    } catch {
+      // Non-JSON line — skip.
+    }
+  }
+  return undefined;
+}
+
+/**
  * Parse the whole buffer as one JSON object and return its `usage` block if
  * present. Guards the parse so non-JSON stdout (the common case for a raw
  * shell command) returns undefined instead of throwing.

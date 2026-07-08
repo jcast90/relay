@@ -285,6 +285,10 @@ abstract class CliAgentBase implements Agent {
     return {
       ...response.parsed,
       rawResponse: response.rawResponse,
+      // Tag the result with the configured model so per-task cost accounting
+      // can price the call. Omitted when the agent has no model pinned (the
+      // call then bills at $0 with a `[cost]` warning).
+      ...(this.model ? { model: this.model } : {}),
     };
   }
 

@@ -17,6 +17,7 @@ import { AgentRegistry } from "./agents/registry.js";
 import { launchGui, launchTui, parseGuiFlags } from "./cli/launch-gui-tui.js";
 import { parseRebuildFlags, runRebuild } from "./cli/rebuild.js";
 import { handleInstallCommand } from "./cli/install.js";
+import { handleCostCommand } from "./cli/cost.js";
 import { maybePrintUpdateNudge } from "./cli/update-nudge.js";
 import { launchInteractiveCommand } from "./cli/launcher.js";
 import { createStreamActivityRenderer, isQuietMode } from "./cli/stream-activity-renderer.js";
@@ -253,6 +254,17 @@ export async function main(): Promise<void> {
 
   if (command === "handoff") {
     const result = await handleHandoffCommand({
+      argv: args,
+      stdout: process.stdout,
+      stderr: process.stderr,
+      env: process.env,
+    });
+    process.exitCode = result.exitCode;
+    return;
+  }
+
+  if (command === "cost") {
+    const result = await handleCostCommand({
       argv: args,
       stdout: process.stdout,
       stderr: process.stderr,

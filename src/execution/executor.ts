@@ -34,6 +34,14 @@ export interface ExecutionResult {
    * (with the `[cost]` pricing warning) rather than crashing the run.
    */
   tokenUsage?: TokenUsage;
+  /**
+   * Model name extracted from the agent's stdout (Claude stream-json `system`/
+   * `init` event, assistant `message.model`, or the buffered json body's
+   * top-level `model`). Absent for raw commands. Carried alongside
+   * `tokenUsage` so per-task cost accounting can price the call at the model
+   * that actually ran.
+   */
+  model?: string;
 }
 
 export type ExecutionEventKind = "start" | "stdout" | "stderr" | "tool_use" | "heartbeat" | "exit";

@@ -1,6 +1,7 @@
 import type { AgentResult, FailureClassification, WorkRequest } from "../domain/agent.js";
 import { getAgentName } from "../domain/agent-names.js";
 import { roleForWork } from "../domain/agent.js";
+import type { TaskCostLedger } from "../budget/task-cost-ledger.js";
 import type { AgentRegistry } from "../agents/registry.js";
 import type { HarnessRun, RunEventType } from "../domain/run.js";
 import type { TicketDefinition, TicketLedgerEntry } from "../domain/ticket.js";
@@ -43,6 +44,15 @@ export interface TicketSchedulerOptions {
    * Suppling neither is a configuration error; see the ctor for the check.
    */
   executor?: AgentExecutor;
+  /**
+   * Optional per-task cost ledger. When present, every dispatch that returns
+   * `tokenUsage` appends a costed line to `~/.relay/task-costs.jsonl`,
+   * attributed to the ticket (`request.phaseId`) and the run's complexity
+   * tier. Covers BOTH the executor and legacy-dispatch paths because the
+   * recording wraps `this.dispatch` — the single choke point for per-ticket
+   * calls. Omit to disable cost tracking (tests, scripted mode).
+   */
+  costLedger?: TaskCostLedger;
 }
 
 const DEFAULT_OPTIONS: Required<Pick<TicketSchedulerOptions, "maxConcurrency">> = {
@@ -70,6 +80,9 @@ export class TicketScheduler {
   private enqueueTail: Promise<void> = Promise.resolve();
 
   private readonly channelStore: ChannelStore | undefined;
+
+  /** Per-task cost ledger; undefined disables cost recording. */
+  private readonly costLedger: TaskCostLedger | undefined;
 
   /**
    * In-flight best-effort channel writes tracked so `executeAll` / `enqueue`
@@ -125,6 +138,7 @@ export class TicketScheduler {
   ) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
     this.channelStore = options?.channelStore;
+    this.costLedger = options?.costLedger;
 
     const executor = options?.executor;
     if (dispatch && executor) {
@@ -136,7 +150,47 @@ export class TicketScheduler {
       throw new Error("TicketScheduler requires either a dispatch callback or options.executor.");
     }
 
-    this.dispatch = dispatch ?? this.buildExecutorDispatch(executor!);
+    // Wrap the effective dispatch once so per-task cost recording covers both
+    // the executor path and the legacy-dispatch path from a single site.
+    this.dispatch = this.instrumentCost(dispatch ?? this.buildExecutorDispatch(executor!));
+  }
+
+  /**
+   * Wrap a {@link SchedulerDispatch} so each completed call appends a costed
+   * line to the {@link costLedger} (when configured). Attribution: the ticket
+   * is `request.phaseId` (every scheduler dispatch sets it to `ticket.id`),
+   * the task type is the run's classification tier, and cost is priced off
+   * `result.model` + `result.tokenUsage`. No-op when no ledger is wired or the
+   * call surfaced no usage. The ledger write is tracked in `pendingWrites` so
+   * `executeAll` / `enqueue` flush it before returning — never awaited inline,
+   * so cost bookkeeping can't slow or fail a ticket.
+   */
+  private instrumentCost(base: SchedulerDispatch): SchedulerDispatch {
+    return async (run, request) => {
+      const result = await base(run, request);
+      if (this.costLedger && result.tokenUsage) {
+        const taskType = run.classification?.tier ?? "feature_small";
+        const write = this.costLedger
+          .record({
+            runId: run.id,
+            ticketId: request.phaseId,
+            taskType,
+            workKind: request.kind,
+            attempt: request.attempt,
+            model: result.model,
+            tokenUsage: result.tokenUsage,
+          })
+          .catch((err: unknown) => {
+            const message = err instanceof Error ? err.message : String(err);
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[cost] ledger write failed (runId=${run.id} ticketId=${request.phaseId}): ${message}`
+            );
+          });
+        this.pendingWrites.push(write);
+      }
+      return result;
+    };
   }
 
   /**
@@ -248,11 +302,12 @@ export class TicketScheduler {
         evidence,
         proposedCommands,
         blockers,
-        // Carry executor-extracted usage onto the AgentResult so the same
-        // per-task cost accounting the dispatch path gets (via
-        // `result.tokenUsage`) also covers implementation runs. Omitted when
-        // the executor found no usage block — non-fatal, guarded downstream.
+        // Carry executor-extracted usage + model onto the AgentResult so the
+        // same per-task cost accounting the dispatch path gets also covers
+        // implementation runs. Omitted when the executor found no block —
+        // non-fatal, guarded downstream (bills $0 with a `[cost]` warning).
         ...(result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
+        ...(result.model ? { model: result.model } : {}),
       };
     };
   }
