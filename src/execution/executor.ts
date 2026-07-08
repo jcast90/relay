@@ -34,6 +34,17 @@ export interface ExecutionResult {
    * (with the `[cost]` pricing warning) rather than crashing the run.
    */
   tokenUsage?: TokenUsage;
+  /**
+   * The model the agent CLI reported it actually ran, as a dated ID
+   * (`claude-sonnet-4-5-20250929`). Set whenever `tokenUsage` was recovered
+   * from a stream that named a model.
+   *
+   * Usage without a model is unpriceable: `costUsd()` needs it to look up a
+   * rate, and `costUsd(undefined, …)` returns 0. Carrying the tokens but
+   * dropping the model would bill every executor-path call at $0 — the
+   * under-count the cost surface exists to close.
+   */
+  model?: string;
 }
 
 export type ExecutionEventKind = "start" | "stdout" | "stderr" | "tool_use" | "heartbeat" | "exit";

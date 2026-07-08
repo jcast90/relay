@@ -445,13 +445,15 @@ class LocalExecutionHandle implements ExecutionHandle {
     const summary = buildSummary(this.stdoutBuf, this.stderrBuf, exitCode, reason);
     // Best-effort: attach usage if the agent CLI emitted a parseable block.
     // Undefined for raw commands / Codex-file usage — non-fatal downstream.
-    const tokenUsage = extractUsageFromStdout(this.stdoutBuf);
+    // The model rides along with the usage: usage without it prices at $0.
+    const extracted = extractUsageFromStdout(this.stdoutBuf);
     this.cachedResult = {
       exitCode,
       summary,
       stdout: this.stdoutBuf,
       stderr: this.stderrBuf,
-      ...(tokenUsage ? { tokenUsage } : {}),
+      ...(extracted ? { tokenUsage: extracted.usage } : {}),
+      ...(extracted?.model ? { model: extracted.model } : {}),
     };
 
     if (this.timeoutHandle) clearTimeout(this.timeoutHandle);
