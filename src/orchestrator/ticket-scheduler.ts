@@ -248,6 +248,11 @@ export class TicketScheduler {
         evidence,
         proposedCommands,
         blockers,
+        // Carry executor-extracted usage onto the AgentResult so the same
+        // per-task cost accounting the dispatch path gets (via
+        // `result.tokenUsage`) also covers implementation runs. Omitted when
+        // the executor found no usage block — non-fatal, guarded downstream.
+        ...(result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
       };
     };
   }

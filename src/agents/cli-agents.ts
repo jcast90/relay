@@ -17,6 +17,7 @@ import { getDisallowedBuiltinsForRole, type AgentRoleName } from "../mcp/role-al
 import type { CommandInvoker } from "./command-invoker.js";
 import {
   normalizeClaudeUsage,
+  normalizeCodexUsage,
   processStreamLine,
   type StreamParseState,
 } from "./process-stream-line.js";
@@ -118,24 +119,6 @@ interface ParsedProviderResult {
 const CODEX_USAGE_UNAVAILABLE_WARNING =
   "[budget] Codex usage extraction unavailable; bar will not update for this session. " +
   "Re-run the A1 spike with codex installed to enable telemetry.";
-
-/**
- * Normalize Codex's `response.json` `usage` block (Branch A from the A1
- * spike). Mirrors {@link normalizeClaudeUsage} but for the OpenAI/Codex
- * field names — `cached_input_tokens` is the cache hit accounting field.
- * Cached tokens still occupy the context window, so they sum into
- * `inputTokens` (same convention as the Claude path).
- */
-function normalizeCodexUsage(usage: Record<string, unknown>): TokenUsage {
-  const input = numFromUnknown(usage.input_tokens);
-  const cached = numFromUnknown(usage.cached_input_tokens);
-  const result: TokenUsage = {
-    inputTokens: input + cached,
-    outputTokens: numFromUnknown(usage.output_tokens),
-  };
-  if (cached > 0) result.cacheReadTokens = cached;
-  return result;
-}
 
 function numFromUnknown(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return 0;
@@ -529,6 +512,7 @@ export class ClaudeCliAgent extends CliAgentBase {
       accumText: "",
       resultText: null,
       capturedUsage: null,
+      capturedModel: null,
     };
 
     const consume = (line: string) => processStreamLine(line, state, onLine);
