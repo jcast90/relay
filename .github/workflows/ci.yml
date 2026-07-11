@@ -107,9 +107,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: pnpm
 
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Runs the lockfile-pinned Prettier, NOT `pnpm dlx prettier` — dlx
+      # resolves the latest registry version at run time, so a Prettier minor
+      # release silently reformats files nobody touched and every open PR goes
+      # red on someone else's code. Keep the version coming from the lockfile.
       - name: Prettier check
-        run: pnpm dlx prettier --check 'src/**/*.{ts,tsx}' 'test/**/*.{ts,tsx}' 'gui/src/**/*.{ts,tsx}' 'scripts/**/*.{ts,mts}' '*.md' 'docs/**/*.md'
+        run: pnpm format:check
 
       - name: No window.prompt/confirm/alert in gui/src
         # Tauri v2 WKWebView no-ops these (see gui/src/lib/dialogs.ts).
