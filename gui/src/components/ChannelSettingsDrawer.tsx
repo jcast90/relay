@@ -180,7 +180,7 @@ function MembersTab({ channel }: { channel: Channel }) {
               <div
                 style={{
                   fontSize: "var(--font-size-xs)",
-                  color: "var(--color-text-dim)",
+                  color: "var(--color-text-muted)",
                 }}
               >
                 {m.provider} · {m.role}
@@ -375,7 +375,7 @@ function AboutTab({
       </div>
       <div className="drawer-section">
         <h4>Created</h4>
-        <div style={{ fontSize: "var(--font-size-xs)", color: "var(--color-text-dim)" }}>
+        <div style={{ fontSize: "var(--font-size-xs)", color: "var(--color-text-muted)" }}>
           {channel.createdAt ?? "—"}
         </div>
       </div>

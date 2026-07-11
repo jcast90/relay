@@ -387,7 +387,7 @@ function RewindConfirmModal({
                 style={{ display: "flex", gap: 8, fontFamily: "var(--font-mono)", fontSize: 12 }}
               >
                 <code>@{r.alias}</code>
-                <span style={{ color: "var(--color-text-dim)" }}>{r.repoPath}</span>
+                <span style={{ color: "var(--color-text-muted)" }}>{r.repoPath}</span>
               </div>
             ))}
           </div>

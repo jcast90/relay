@@ -87,7 +87,7 @@ export function NewDmModal({ open, onClose, onCreated }: Props) {
                     <div
                       style={{
                         fontSize: "var(--font-size-xs)",
-                        color: "var(--color-text-dim)",
+                        color: "var(--color-text-muted)",
                       }}
                     >
                       {w.repoPath}

@@ -320,7 +320,7 @@ export function NewChannelModal({
                     placeholder="oauth-api-users"
                   />
                 </div>
-                <small style={{ color: "var(--color-text-dim)" }}>
+                <small style={{ color: "var(--color-text-muted)" }}>
                   Lowercase, dashes for spaces. Shown as <code>#{slug || "your-channel"}</code>.
                 </small>
               </label>
@@ -353,7 +353,7 @@ export function NewChannelModal({
                   ))}
                   <option value={CREATE_SECTION_SENTINEL}>+ Create new section…</option>
                 </select>
-                <small style={{ color: "var(--color-text-dim)" }}>
+                <small style={{ color: "var(--color-text-muted)" }}>
                   Change any time from the sidebar kebab menu.
                 </small>
               </label>

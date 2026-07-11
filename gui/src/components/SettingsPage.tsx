@@ -397,7 +397,7 @@ function AgentCliRow({
             {value ? "Clear pin" : "Reset"}
           </button>
         )}
-        <span style={{ color: "var(--color-text-dim)", fontSize: "var(--font-size-xs)" }}>
+        <span style={{ color: "var(--color-text-muted)", fontSize: "var(--font-size-xs)" }}>
           Env var: <code>{agent.envVar}</code>
         </span>
       </div>
@@ -930,7 +930,7 @@ function ProvidersSection() {
             }}
           >
             <thead>
-              <tr style={{ textAlign: "left", color: "var(--color-text-dim)" }}>
+              <tr style={{ textAlign: "left", color: "var(--color-text-muted)" }}>
                 <th style={{ padding: "6px 8px" }}>ID</th>
                 <th style={{ padding: "6px 8px" }}>Name</th>
                 <th style={{ padding: "6px 8px" }}>Adapter</th>

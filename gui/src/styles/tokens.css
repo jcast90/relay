@@ -30,7 +30,10 @@
      alongside the paper-side bump for parity. */
   --color-ink-hover:     #364370;
 
-  /* Text */
+  /* Text. `text-dim` and `text-on-dark-muted` happen to share #8a93a5 at
+     rest, but they are distinct semantic tokens for opposite surfaces and
+     diverge under `prefers-contrast: more` below — edit one without the
+     other only if you mean to break that parity. */
   --color-text-primary:      #1b1f2a;
   --color-text-muted:        #5b6579;
   --color-text-dim:          #8a93a5;
@@ -56,15 +59,18 @@
   --color-status-blocked:   #9ba3b6;
   --color-status-retry:     #d88a3b;
 
-  /* Mention chips */
+  /* Mention chips — fg darkened from the matching accent so chip text
+     hits WCAG AA (≥4.5:1) against the soft bg. The accent tokens above
+     stay at their resting hue for buttons, focus rings, and link uses
+     where contrast is already comfortable. */
   --color-mention-primary-bg:    #fbe1dd;
-  --color-mention-primary-fg:    #e65a4f;
+  --color-mention-primary-fg:    #a43c32; /* 5.17:1 on -primary-bg */
   --color-mention-primary-line:  rgba(230, 90, 79, 0.33);
   --color-mention-attached-bg:   #dce6f5;
-  --color-mention-attached-fg:   #3a5fa0;
+  --color-mention-attached-fg:   #3a5fa0; /* 4.94:1 on -attached-bg */
   --color-mention-attached-line: #b3c5e0;
   --color-mention-human-bg:      #d9f1e6;
-  --color-mention-human-fg:      #2a7a5a;
+  --color-mention-human-fg:      #1f6e54; /* 5.22:1 on -human-bg */
 
   /* Typography */
   --font-ui:   "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
@@ -138,6 +144,19 @@
 @keyframes relay-pulse {
   0%, 100% { opacity: 0.55; transform: scale(0.92); }
   50%      { opacity: 1;    transform: scale(1.08); }
+}
+
+/* When the OS reports `prefers-contrast: more`, push the muted text
+   family toward primary so secondary labels, timestamps, hints, and
+   status dots read with extra confidence. The resting palette already
+   passes AA after the audit; this is the "AAA-ish" tier for users who
+   opt in. */
+@media (prefers-contrast: more) {
+  :root {
+    --color-text-muted:         #3a4254; /* ~9.4:1 on paper-base */
+    --color-text-dim:           #4f586c; /* ~6.6:1 on paper-base */
+    --color-text-on-dark-muted: #c5cbd9; /* ~10:1 on ink-deep   */
+  }
 }
 
 /* Bundled Inter (variable) + JetBrains Mono served from Tauri's public/

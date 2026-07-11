@@ -228,7 +228,7 @@ function TicketDetailModal({
                 style={{
                   fontSize: 10,
                   textTransform: "uppercase",
-                  color: "var(--color-text-dim)",
+                  color: "var(--color-text-muted)",
                   marginBottom: 6,
                 }}
               >
@@ -278,7 +278,7 @@ function TicketDetailModal({
 function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", gap: 8, fontSize: 13 }}>
-      <span style={{ fontSize: 10, textTransform: "uppercase", color: "var(--color-text-dim)" }}>
+      <span style={{ fontSize: 10, textTransform: "uppercase", color: "var(--color-text-muted)" }}>
         {label}
       </span>
       <span>{children}</span>

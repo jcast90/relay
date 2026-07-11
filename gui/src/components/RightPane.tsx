@@ -112,13 +112,13 @@ function ApprovalsSection({
             fontSize: "var(--font-size-xs)",
             textTransform: "uppercase",
             letterSpacing: "0.04em",
-            color: "var(--color-text-dim)",
+            color: "var(--color-text-muted)",
             margin: 0,
           }}
         >
           Pending approvals ({records.length})
         </h4>
-        <span style={{ color: "var(--color-text-dim)", fontSize: "var(--font-size-xs)" }}>
+        <span style={{ color: "var(--color-text-muted)", fontSize: "var(--font-size-xs)" }}>
           {collapsed ? "▸" : "▾"}
         </span>
       </div>
@@ -447,7 +447,7 @@ function PrsTab({
               fontSize: "var(--font-size-xs)",
               textTransform: "uppercase",
               letterSpacing: "0.04em",
-              color: "var(--color-text-dim)",
+              color: "var(--color-text-muted)",
               margin: "0 0 8px",
             }}
           >
