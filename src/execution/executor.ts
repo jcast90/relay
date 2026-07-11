@@ -35,11 +35,14 @@ export interface ExecutionResult {
    */
   tokenUsage?: TokenUsage;
   /**
-   * Model name extracted from the agent's stdout (Claude stream-json `system`/
-   * `init` event, assistant `message.model`, or the buffered json body's
-   * top-level `model`). Absent for raw commands. Carried alongside
-   * `tokenUsage` so per-task cost accounting can price the call at the model
-   * that actually ran.
+   * The model the agent CLI reported it actually ran, as a dated ID
+   * (`claude-sonnet-4-5-20250929`). Set whenever `tokenUsage` was recovered
+   * from a stream that named a model.
+   *
+   * Usage without a model is unpriceable: `costUsd()` needs it to look up a
+   * rate, and `costUsd(undefined, …)` returns 0. Carrying the tokens but
+   * dropping the model would bill every executor-path call at $0 — the
+   * under-count the cost surface exists to close.
    */
   model?: string;
 }

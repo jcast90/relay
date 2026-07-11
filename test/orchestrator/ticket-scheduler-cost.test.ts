@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { NodeCommandInvoker } from "../../src/agents/command-invoker.js";
 import { createLiveAgents } from "../../src/agents/factory.js";
@@ -128,6 +128,53 @@ describe("TicketScheduler per-task cost recording", () => {
         expect(line.costUsd).toBeCloseTo(3, 6); // 1M input @ $3/MTok
       }
     } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("skips an unclassified run rather than attributing it to a guessed tier", async () => {
+    // `taskType` used to default to "feature_small" when a run had no
+    // classification. `rly cost` GROUPS BY taskType, so that doesn't add a data
+    // point — it silently corrupts the feature_small bucket with costs from a
+    // run of unknown complexity. A gap in the report is honest; a wrong bucket
+    // is not.
+    const tmp = await mkdtemp(join(tmpdir(), "ts-cost-unclassified-"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { registry, artifactStore, verificationRunner } = await buildBasics(tmp);
+      const ledger = new TaskCostLedger({ rootDir: tmp });
+
+      const dispatch = async (): Promise<AgentResult> => ({
+        summary: "ok",
+        evidence: [],
+        proposedCommands: [],
+        blockers: [],
+        model: "claude-sonnet-4-5",
+        tokenUsage: { inputTokens: 1_000_000, outputTokens: 0 },
+      });
+
+      const scheduler = new TicketScheduler(
+        tmp,
+        artifactStore,
+        verificationRunner,
+        registry,
+        dispatch,
+        () => {},
+        { costLedger: ledger, maxConcurrency: 1 }
+      );
+
+      const run = buildRun(tmp, [ticket("t_only")]);
+      run.classification = null;
+
+      await scheduler.executeAll(run);
+      await ledger.flush();
+
+      expect(await ledger.readAll(), "unclassified costs must not land in a tier").toEqual([]);
+      expect(warn.mock.calls.some((c) => String(c[0]).includes("no classification tier"))).toBe(
+        true
+      );
+    } finally {
+      warn.mockRestore();
       await rm(tmp, { recursive: true, force: true });
     }
   }, 30_000);

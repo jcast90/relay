@@ -4,6 +4,7 @@ import {
   MODEL_PRICING,
   __resetPricingWarnedForTests,
   costUsd,
+  normalizeModelId,
 } from "../../src/domain/model-pricing.js";
 import { MODEL_CONTEXT_WINDOWS } from "../../src/domain/model-context-windows.js";
 
@@ -58,6 +59,37 @@ describe("model-pricing", () => {
     });
     // freshInput clamps to 0; only the 1000 cache-read tokens bill.
     expect(cost).toBeCloseTo((1_000 * 0.08) / 1_000_000, 6);
+  });
+
+  it("prices a DATED model ID the same as its undated name", () => {
+    // The Claude CLI reports the dated ID it actually ran. MODEL_PRICING is
+    // keyed on undated names. Before normalization this lookup missed and
+    // every executor-path call billed $0 — the exact under-count the cost
+    // surface exists to prevent.
+    const usage = { inputTokens: 1_000_000, outputTokens: 1_000_000 };
+    expect(costUsd("claude-sonnet-4-5-20250929", usage)).toBeCloseTo(3 + 15, 6);
+    expect(costUsd("claude-sonnet-4-5-20250929", usage)).toBeCloseTo(
+      costUsd("claude-sonnet-4-5", usage),
+      6
+    );
+  });
+
+  it("does not warn for a dated ID of a known model", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    costUsd("claude-opus-4-7-20250514", { inputTokens: 100, outputTokens: 100 });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("normalizeModelId only strips a trailing 8-digit date", () => {
+    expect(normalizeModelId("claude-sonnet-4-5-20250929")).toBe("claude-sonnet-4-5");
+    expect(normalizeModelId("claude-sonnet-4-5")).toBe("claude-sonnet-4-5");
+    // Version segments are not dates — must survive untouched, or `gpt-5`-style
+    // names with numeric tails would be mangled into a miss.
+    expect(normalizeModelId("gpt-5")).toBe("gpt-5");
+    expect(normalizeModelId("o3-mini")).toBe("o3-mini");
+    // Too short / too long to be YYYYMMDD.
+    expect(normalizeModelId("model-1234567")).toBe("model-1234567");
+    expect(normalizeModelId("model-123456789")).toBe("model-123456789");
   });
 
   it("returns 0 and warns once for an unknown model", () => {

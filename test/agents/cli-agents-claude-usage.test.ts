@@ -10,7 +10,7 @@ import { processStreamLine, type StreamParseState } from "../../src/agents/proce
  */
 describe("processStreamLine — Claude streaming usage capture", () => {
   function freshState(): StreamParseState {
-    return { accumText: "", resultText: null, capturedUsage: null };
+    return { accumText: "", resultText: null, capturedUsage: null, capturedModel: null };
   }
 
   it("captures `usage` from the `result` event with cache tokens summed into inputTokens", () => {

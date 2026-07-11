@@ -11,6 +11,14 @@ export interface StreamParseState {
   accumText: string;
   resultText: string | null;
   capturedUsage: TokenUsage | null;
+  /**
+   * The model the CLI reports it actually ran, as a dated ID
+   * (`claude-sonnet-4-5-20250929`). Usage without a model is unpriceable —
+   * `costUsd(undefined, usage)` returns 0 — so capturing tokens and dropping
+   * the model bills every call at $0. Read off the `system` init event, with
+   * `assistant` / `result` events as fallbacks.
+   */
+  capturedModel: string | null;
 }
 
 /**
@@ -45,12 +53,35 @@ export function normalizeClaudeUsage(usage: Record<string, unknown>): TokenUsage
 }
 
 /**
+ * Normalize Codex's `response.json` `usage` block (Branch A from the A1
+ * spike). Mirrors {@link normalizeClaudeUsage} but for the OpenAI/Codex field
+ * names — `cached_input_tokens` is the cache-hit accounting field. Cached
+ * tokens still occupy the context window, so they sum into `inputTokens` (same
+ * convention as the Claude path).
+ *
+ * Lives here beside {@link normalizeClaudeUsage}, rather than private to the
+ * adapter, because the executor path has to choose between the two by
+ * inspecting the payload — it genuinely doesn't know which CLI it spawned.
+ */
+export function normalizeCodexUsage(usage: Record<string, unknown>): TokenUsage {
+  const input = num(usage.input_tokens);
+  const cached = num(usage.cached_input_tokens);
+  const result: TokenUsage = {
+    inputTokens: input + cached,
+    outputTokens: num(usage.output_tokens),
+  };
+  if (cached > 0) result.cacheReadTokens = cached;
+  return result;
+}
+
+/**
  * Process one stream-json line from a Claude invocation. Mutates `state` in
  * place — `accumText` accumulates assistant-message text blocks, `resultText`
- * is set on the final `result` event, and `capturedUsage` is set when the
- * `result` event carries a top-level `usage` block. Mid-stream
- * `assistant.message.usage` is intentionally ignored — only the final
- * `result` event is authoritative (pitfall #2 from research).
+ * is set on the final `result` event, `capturedUsage` is set when the `result`
+ * event carries a top-level `usage` block, and `capturedModel` records the
+ * model the CLI resolved. Mid-stream `assistant.message.usage` is intentionally
+ * ignored — only the final `result` event is authoritative (pitfall #2 from
+ * research).
  *
  * `onLine` receives every raw line so callers can render tool-use activity
  * live. Lines that fail to parse as JSON, or don't match a recognized event
@@ -71,8 +102,13 @@ export function processStreamLine(
   }
   if (!parsed || typeof parsed !== "object") return;
   const obj = parsed as Record<string, unknown>;
-  if (obj.type === "assistant") {
-    const msg = obj.message as { content?: unknown } | undefined;
+  if (obj.type === "system") {
+    // The init event names the model the CLI resolved — the first and most
+    // reliable place it appears. The arms below are fallbacks.
+    if (typeof obj.model === "string") state.capturedModel ??= obj.model;
+  } else if (obj.type === "assistant") {
+    const msg = obj.message as { content?: unknown; model?: unknown } | undefined;
+    if (typeof msg?.model === "string") state.capturedModel ??= msg.model;
     const blocks = Array.isArray(msg?.content) ? msg?.content : null;
     if (!blocks) return;
     for (const block of blocks) {
@@ -83,8 +119,14 @@ export function processStreamLine(
         }
       }
     }
-  } else if (obj.type === "result" && typeof obj.result === "string") {
-    state.resultText = obj.result;
+  } else if (obj.type === "result") {
+    // Deliberately NOT gated on `typeof obj.result === "string"`. Claude's
+    // error subtypes (`error_max_turns`, `error_during_execution`) omit the
+    // `result` string but DO carry `usage` — and those are the expensive runs.
+    // Gating usage capture on the text meant a runaway agent that burned $12
+    // recorded exactly $0.
+    if (typeof obj.result === "string") state.resultText = obj.result;
+    if (typeof obj.model === "string") state.capturedModel ??= obj.model;
     if (obj.usage && typeof obj.usage === "object") {
       state.capturedUsage = normalizeClaudeUsage(obj.usage as Record<string, unknown>);
     }

@@ -97,6 +97,8 @@ export class TicketScheduler {
    * caller moves on.
    */
   private pendingWrites: Promise<unknown>[] = [];
+  /** Run IDs already warned about for a missing classification tier. */
+  private warnedUnclassified = new Set<string>();
 
   /**
    * Effective dispatch callback. When the caller supplies an `AgentExecutor`
@@ -164,12 +166,22 @@ export class TicketScheduler {
    * call surfaced no usage. The ledger write is tracked in `pendingWrites` so
    * `executeAll` / `enqueue` flush it before returning — never awaited inline,
    * so cost bookkeeping can't slow or fail a ticket.
+   *
+   * An unclassified run is SKIPPED rather than defaulted. `rly cost` groups by
+   * `taskType`, so guessing a tier doesn't add a data point — it corrupts the
+   * bucket it lands in. A gap in the report is honest; a silent mis-attribution
+   * is not. The skip warns (deduped) so the gap stays loud, matching
+   * `costUsd()`'s fail-loud-but-don't-crash discipline.
    */
   private instrumentCost(base: SchedulerDispatch): SchedulerDispatch {
     return async (run, request) => {
       const result = await base(run, request);
       if (this.costLedger && result.tokenUsage) {
-        const taskType = run.classification?.tier ?? "feature_small";
+        const taskType = run.classification?.tier;
+        if (!taskType) {
+          this.warnUnclassifiedOnce(run.id);
+          return result;
+        }
         const write = this.costLedger
           .record({
             runId: run.id,
@@ -191,6 +203,17 @@ export class TicketScheduler {
       }
       return result;
     };
+  }
+
+  /** Deduped per run — an unclassified run dispatches many calls. */
+  private warnUnclassifiedOnce(runId: string): void {
+    if (this.warnedUnclassified.has(runId)) return;
+    this.warnedUnclassified.add(runId);
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[cost] run ${runId} has no classification tier; its calls are omitted from the ` +
+        `cost ledger rather than attributed to a guessed tier (\`rly cost\` groups by tier).`
+    );
   }
 
   /**
@@ -304,7 +327,9 @@ export class TicketScheduler {
         blockers,
         // Carry executor-extracted usage + model onto the AgentResult so the
         // same per-task cost accounting the dispatch path gets also covers
-        // implementation runs. Omitted when the executor found no block —
+        // implementation runs. The model is load-bearing, not decorative:
+        // costUsd() needs it to look up a rate, and without it every one of
+        // these calls bills $0. Omitted when the executor found no block —
         // non-fatal, guarded downstream (bills $0 with a `[cost]` warning).
         ...(result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
         ...(result.model ? { model: result.model } : {}),

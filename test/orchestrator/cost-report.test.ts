@@ -111,3 +111,33 @@ describe("cost-report", () => {
     expect(rendered).toContain("TASK TYPE");
   });
 });
+
+describe("rollupTasks — composite key", () => {
+  it("does not collide when a runId prefixes another and the ticketId is empty", () => {
+    // The separator between runId and ticketId used to be a raw NUL byte
+    // embedded in the source, which made git classify cost-report.ts as binary
+    // (so the diff was invisible to review) and left the key one control-char
+    // normalization away from plain concatenation. Under plain concatenation
+    // these two rows collapse into one bucket:
+    //   "run-1"  + "0"  -> "run-10"
+    //   "run-10" + ""   -> "run-10"
+    // That is silent cost mis-attribution between two different runs.
+    const rollups = rollupTasks([
+      call({ runId: "run-1", ticketId: "0", outputTokens: 100 }),
+      call({ runId: "run-10", ticketId: "", outputTokens: 500 }),
+    ]);
+
+    expect(rollups, "two distinct (runId, ticketId) pairs must stay separate").toHaveLength(2);
+    const byRun = Object.fromEntries(rollups.map((r) => [r.runId, r]));
+    expect(byRun["run-1"]?.ticketId).toBe("0");
+    expect(byRun["run-10"]?.ticketId).toBe("");
+  });
+
+  it("keeps the same ticketId in different runs in separate buckets", () => {
+    const rollups = rollupTasks([
+      call({ runId: "run-a", ticketId: "t-1" }),
+      call({ runId: "run-b", ticketId: "t-1" }),
+    ]);
+    expect(rollups).toHaveLength(2);
+  });
+});
