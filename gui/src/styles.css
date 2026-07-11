@@ -1042,6 +1042,15 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   font-size: var(--font-size-xs);
   font-family: var(--font-mono);
 }
+/* The contrast audit walked resting backgrounds only. `text-muted` clears AA
+   on paper-base (5.57:1), but `.popover-item:hover` swaps the ground to
+   paper-hover (#d8cfb0), where it drops to 3.76:1 — failing AA exactly while
+   the user is hovering to read it. Darken on interaction: 6.45:1 on hover,
+   4.66:1 on pressed. */
+.popover-item:hover .item-sub,
+.popover-item:active .item-sub {
+  color: var(--color-text-muted-strong);
+}
 .popover-item.disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* ── DM header + banner ───────────────────────────────────── */
