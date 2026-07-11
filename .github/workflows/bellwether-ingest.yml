@@ -1,21 +1,31 @@
 # Bellwether — Test Failure Ingest
 #
-# This workflow listens for completed runs of OTHER workflows in this repo
-# and forwards failed-test artifacts to Bellwether so they can be classified
-# (real regression vs flake vs infra vs test bug).
+# Listens for completed runs of our test workflows and forwards failed-test
+# artifacts to Bellwether for classification (regression vs flake vs infra vs
+# test bug).
 #
-# Created automatically by Bellwether on first install (BEL-90). Safe to
-# customize the `branches` filter, the `if` predicate, or the composite
-# action version — Bellwether reads from whatever workflow is named
-# `bellwether-ingest.yml`.
+# Two hardening changes on top of what Bellwether generates. Please preserve
+# them if you edit this file:
 #
-# Manage your install at https://bellwether.run
+#   1. The action is pinned to a full commit SHA, not the `@v1` tag. This
+#      workflow runs on `workflow_run`, which executes in the BASE repo's
+#      context with access to repo secrets — that is what lets it read runs
+#      triggered by fork PRs, and it means whatever this step resolves to can
+#      see BELLWETHER_TOKEN. A mutable tag can be repointed at any commit by
+#      the upstream owner at any time; a SHA cannot. Bump it deliberately, by
+#      editing the SHA below.
+#
+#   2. `workflows:` names our test workflows explicitly instead of "*".
+#      Release and Changesets don't run tests, so there is nothing in them for
+#      Bellwether to classify and no reason to hand the action their context.
+#
+# Manage the install at https://bellwether.run
 
 name: Bellwether Ingest
 
 on:
   workflow_run:
-    workflows: ["*"]
+    workflows: ["CI", "Integration"]
     types: [completed]
 
 permissions:
@@ -29,7 +39,8 @@ jobs:
           github.event.workflow_run.conclusion == 'cancelled' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: bellwether-run/ingest-action@v1
+      # bellwether-run/ingest-action v1.0.0
+      - uses: bellwether-run/ingest-action@92000d98c24f826bbb02507ec13872a0453d75ef
         with:
           bellwether_token: ${{ secrets.BELLWETHER_TOKEN }}
           workflow_run_id: ${{ github.event.workflow_run.id }}
