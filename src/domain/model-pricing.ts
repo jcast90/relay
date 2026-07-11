@@ -70,6 +70,24 @@ const PER_MTOK = 1_000_000;
 const warnedModels = new Set<string>();
 
 /**
+ * Strip the release-date suffix off a model ID.
+ *
+ * The tables above are keyed on undated names (`claude-sonnet-4-5`), but the
+ * Claude CLI reports the *dated* ID it actually ran
+ * (`claude-sonnet-4-5-20250929`) in its `system`/`result` events. Without this,
+ * the exact-match lookup in {@link costUsd} misses on every real run and bills
+ * $0 — which is the whole thing the cost surface exists to prevent. Dates are
+ * an addressing detail, not a pricing dimension: Anthropic prices a model, not
+ * a snapshot of it.
+ *
+ * Anything without a trailing `-YYYYMMDD` passes through untouched, so undated
+ * IDs (what `CliAgentBase` tags calls with) still resolve.
+ */
+export function normalizeModelId(modelName: string): string {
+  return modelName.replace(/-\d{8}$/, "");
+}
+
+/**
  * USD cost of a single call's {@link TokenUsage} for `modelName`.
  *
  * Cache accounting mirrors the adapter normalizers (research Q3): the
@@ -89,8 +107,10 @@ export function costUsd(modelName: string | undefined | null, usage: TokenUsage)
     warnUnknown("<missing>");
     return 0;
   }
-  const price = MODEL_PRICING[modelName];
+  const price = MODEL_PRICING[normalizeModelId(modelName)];
   if (!price) {
+    // Warn on the ID as given, not the normalized one — the raw string is what
+    // the operator has to go look for.
     warnUnknown(modelName);
     return 0;
   }
