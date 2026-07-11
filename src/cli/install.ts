@@ -1,5 +1,18 @@
-import { runInstall, type InstallResult } from "../install/installer.js";
-import { getSourceVersion, reportDrift, type Surface, SURFACES } from "../install/manifest.js";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+
+import { installSessionStartHooks, runInstall, type InstallResult } from "../install/installer.js";
+import {
+  getSourceVersion,
+  HOOK_TARGETS,
+  type HookTarget,
+  readManifest,
+  reportDrift,
+  reportHookDrift,
+  type Surface,
+  SURFACES,
+} from "../install/manifest.js";
+import { generateSessionStartHookScripts } from "../crosslink/hook.js";
 
 const HELP = [
   "Usage: rly install [target] [options]",
@@ -19,6 +32,7 @@ const HELP = [
   "  --check              Report drift between source and installed; do not build",
   "  --force              Rebuild + reinstall even when manifest is current",
   "  --json               Machine-readable output (only honored with --check)",
+  "  --skip-codex         Skip Codex SessionStart hook + config.toml writes",
   "  --help               Show this message",
   "",
   "Env:",
@@ -32,6 +46,8 @@ interface ParsedArgs {
   force: boolean;
   json: boolean;
   help: boolean;
+  /** Plan 04-03: skip writing `~/.codex/hooks.json` and `~/.codex/config.toml`. */
+  skipCodex: boolean;
   errors: string[];
 }
 
@@ -42,6 +58,7 @@ function parseArgs(args: string[]): ParsedArgs {
     force: false,
     json: false,
     help: false,
+    skipCodex: false,
     errors: [],
   };
   for (const raw of args) {
@@ -49,6 +66,7 @@ function parseArgs(args: string[]): ParsedArgs {
     else if (raw === "--check") parsed.check = true;
     else if (raw === "--force") parsed.force = true;
     else if (raw === "--json") parsed.json = true;
+    else if (raw === "--skip-codex") parsed.skipCodex = true;
     else if (raw === "all") {
       // explicit "all" is the same as no surface arg — install everything
     } else if (raw === "cli" || raw === "tui" || raw === "gui") {
@@ -77,11 +95,34 @@ function formatSurfaceLine(
   return `  ${symbol} ${surface.padEnd(4)} installed: ${installed.padEnd(20)} source: ${source.version}${sourceTag}`;
 }
 
-async function runCheck(json: boolean): Promise<number> {
+/**
+ * Compute the source SHA for the SessionStart hook node-script body.
+ * Runs the generator (idempotent — produces byte-identical output for a
+ * fixed relayDir) and hashes the generated `session-start.mjs`. The
+ * hash is compared against the manifest's stored hook SHA to detect
+ * drift on `~/.claude/settings.json` or `~/.codex/hooks.json`.
+ */
+async function computeHookSourceSha(): Promise<string> {
+  const { nodeScriptPath } = await generateSessionStartHookScripts();
+  const body = await readFile(nodeScriptPath, "utf8");
+  return createHash("sha256").update(body).digest("hex");
+}
+
+async function runCheck(json: boolean, skipCodex: boolean): Promise<number> {
   const drift = await reportDrift();
+  const hookSourceSha = await computeHookSourceSha();
+  const manifest = await readManifest();
+  const hookSources: Partial<Record<HookTarget, { sha: string }>> = {
+    claude: { sha: hookSourceSha },
+  };
+  if (!skipCodex) hookSources.codex = { sha: hookSourceSha };
+  const hookDrift = reportHookDrift(manifest, hookSources);
+  const hooksBehind = hookDrift.filter((h) => h.state === "behind").map((h) => h.target);
+  const hooksFresh = hookDrift.filter((h) => h.state === "fresh").map((h) => h.target);
+
   if (json) {
-    console.log(JSON.stringify(drift, null, 2));
-    return drift.behind.length === 0 ? 0 : 1;
+    console.log(JSON.stringify({ ...drift, hooks: hookDrift, hookSourceSha }, null, 2));
+    return drift.behind.length === 0 && hooksBehind.length === 0 ? 0 : 1;
   }
   const freshSurfaces: Surface[] = [];
   console.log(
@@ -94,26 +135,41 @@ async function runCheck(json: boolean): Promise<number> {
       formatSurfaceLine(surface, state, record?.version, record?.sourceSha, drift.source)
     );
   }
+
+  // Per-target hook drift — same vocabulary / symbol set as surfaces.
+  for (const entry of hookDrift) {
+    const symbol = entry.state === "current" ? "✓" : entry.state === "behind" ? "↻" : "·";
+    const installedSha = entry.record?.sha ? `${entry.record.sha.slice(0, 7)}` : "—";
+    const stateWord = entry.state === "behind" ? "drifted" : entry.state;
+    console.log(
+      `  ${symbol} hook:${entry.target.padEnd(6)} installed: ${installedSha.padEnd(20)} (${stateWord})`
+    );
+  }
   console.log("");
 
   // Three buckets the user cares about: nothing installed yet (fresh),
   // installed but stale (behind), or all good (current). The non-zero
   // exits below let scripts run `rly install --check || rly install`
   // cleanly — exit 1 means "do something."
-  if (drift.behind.length === 0 && freshSurfaces.length === 0) {
-    console.log("All surfaces match source. Nothing to do.");
+  const anyFresh = freshSurfaces.length > 0 || hooksFresh.length > 0;
+  const anyBehind = drift.behind.length > 0 || hooksBehind.length > 0;
+
+  if (!anyFresh && !anyBehind) {
+    console.log("All surfaces and hooks match source. Nothing to do.");
     return 0;
   }
-  if (drift.behind.length === 0) {
-    const list = freshSurfaces.join(" ");
+  if (!anyBehind) {
+    const surfaceList = freshSurfaces.join(" ");
+    const hookList = hooksFresh.length > 0 ? ` (hooks: ${hooksFresh.join(", ")})` : "";
     console.log(
-      `Not installed: ${list}. Run \`rly install${freshSurfaces.length === SURFACES.length ? "" : ` ${list}`}\` to set up.`
+      `Not installed: ${surfaceList || "(none)"}${hookList}. Run \`rly install${freshSurfaces.length === SURFACES.length ? "" : ` ${surfaceList}`}\` to set up.`
     );
     return 1;
   }
   const list = drift.behind.join(" ");
+  const hookSuffix = hooksBehind.length > 0 ? ` (hooks drifted: ${hooksBehind.join(", ")})` : "";
   console.log(
-    `Run \`rly install ${drift.behind.length === SURFACES.length ? "" : list}\` to update.`
+    `Run \`rly install ${drift.behind.length === SURFACES.length ? "" : list}\` to update.${hookSuffix}`
   );
   return 1;
 }
@@ -147,7 +203,7 @@ export async function handleInstallCommand(args: string[]): Promise<number> {
   }
 
   if (parsed.check) {
-    return runCheck(parsed.json);
+    return runCheck(parsed.json, parsed.skipCodex);
   }
 
   // Print what we're about to do up-front so the user sees a single header
@@ -158,7 +214,34 @@ export async function handleInstallCommand(args: string[]): Promise<number> {
     `[rly install] target: ${targetLabel} — source v${source.version}${source.sourceSha ? ` (${source.sourceSha.slice(0, 7)})` : ""}`
   );
   if (parsed.force) console.log("[rly install] --force — will rebuild even when current");
+  if (parsed.skipCodex)
+    console.log("[rly install] --skip-codex — Codex hook configs will be skipped");
 
   const results = await runInstall({ surfaces: parsed.surfaces, force: parsed.force });
-  return summarize(results);
+  const summarizeExit = summarize(results);
+
+  // Wire SessionStart hooks AFTER the surface install. If a surface install
+  // failed, skip the hook step — the user will see the failure summary and
+  // re-run after fixing the build. Hook install is cheap and idempotent,
+  // so a future retry costs nothing.
+  if (summarizeExit === 0) {
+    try {
+      const hookResult = await installSessionStartHooks({ skipCodex: parsed.skipCodex });
+      console.log(
+        `[rly install] hooks: claude=installed${hookResult.codex ? ", codex=installed" : ", codex=skipped"}`
+      );
+    } catch (err) {
+      // Best-effort: log the failure but don't fail the whole install. The
+      // user can re-run; surface artifacts are already in place.
+      console.error(
+        `[rly install] hook install failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+      return 1;
+    }
+  }
+  // HOOK_TARGETS is imported for use by callers that re-import it from
+  // this module path (some CLI consumers do this); silence the
+  // "unused import" lint by referencing it once here.
+  void HOOK_TARGETS;
+  return summarizeExit;
 }

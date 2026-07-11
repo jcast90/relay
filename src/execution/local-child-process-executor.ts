@@ -14,6 +14,7 @@ import type {
   ExecutorStartOptions,
 } from "./executor.js";
 import type { SandboxProvider, SandboxRef } from "./sandbox.js";
+import { extractUsageFromStdout } from "./extract-usage.js";
 
 /**
  * Resolves a ticket to the argv the child process should run.
@@ -442,11 +443,17 @@ class LocalExecutionHandle implements ExecutionHandle {
   private finalize(exitCode: number, reason?: string): void {
     if (this.cachedResult) return;
     const summary = buildSummary(this.stdoutBuf, this.stderrBuf, exitCode, reason);
+    // Best-effort: attach usage if the agent CLI emitted a parseable block.
+    // Undefined for raw commands / Codex-file usage — non-fatal downstream.
+    // The model rides along with the usage: usage without it prices at $0.
+    const extracted = extractUsageFromStdout(this.stdoutBuf);
     this.cachedResult = {
       exitCode,
       summary,
       stdout: this.stdoutBuf,
       stderr: this.stderrBuf,
+      ...(extracted ? { tokenUsage: extracted.usage } : {}),
+      ...(extracted?.model ? { model: extracted.model } : {}),
     };
 
     if (this.timeoutHandle) clearTimeout(this.timeoutHandle);

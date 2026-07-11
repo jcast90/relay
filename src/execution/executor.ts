@@ -1,3 +1,4 @@
+import type { TokenUsage } from "../domain/agent.js";
 import type { TicketDefinition } from "../domain/ticket.js";
 import type { SandboxRef } from "./sandbox.js";
 
@@ -23,6 +24,27 @@ export interface ExecutionResult {
   summary?: string;
   stdout: string;
   stderr: string;
+  /**
+   * Per-run token usage extracted from the agent's stdout, when the agent CLI
+   * emitted a recognizable usage block (Claude stream-json `result` event or
+   * `--output-format json` body). Absent when the child produced no parseable
+   * usage — e.g. a raw shell command, or a Codex run whose usage lands in a
+   * `response.json` file rather than stdout. Consumers MUST guard with
+   * `if (result.tokenUsage)`; a missing block is non-fatal and bills as $0
+   * (with the `[cost]` pricing warning) rather than crashing the run.
+   */
+  tokenUsage?: TokenUsage;
+  /**
+   * The model the agent CLI reported it actually ran, as a dated ID
+   * (`claude-sonnet-4-5-20250929`). Set whenever `tokenUsage` was recovered
+   * from a stream that named a model.
+   *
+   * Usage without a model is unpriceable: `costUsd()` needs it to look up a
+   * rate, and `costUsd(undefined, …)` returns 0. Carrying the tokens but
+   * dropping the model would bill every executor-path call at $0 — the
+   * under-count the cost surface exists to close.
+   */
+  model?: string;
 }
 
 export type ExecutionEventKind = "start" | "stdout" | "stderr" | "tool_use" | "heartbeat" | "exit";

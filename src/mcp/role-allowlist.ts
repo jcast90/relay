@@ -131,7 +131,7 @@ export const REPO_ADMIN_ALLOWED_TOOLS: ReadonlySet<string> = new Set<string>([
   // once at end-of-onboarding to flip its CrosslinkSession.readyAt and
   // post a single `agent_ready` channel-feed entry. Distinct from the
   // `repo-ready` typed coordination message (PR merged → blocker gone)
-  // and from `RepoAdminSession._state = "ready"` (process is spawned).
+  // and from `RepoAdminSession._processState = "ready"` (process is spawned).
   "agent_ready",
 ]);
 

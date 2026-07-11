@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
@@ -294,6 +294,20 @@ export class GitWorktreeSandboxProvider implements SandboxProvider {
       throw new Error(
         `Cannot destroy sandbox ${ref.id}: owner repo unknown and ref.meta.repoRoot is missing`
       );
+    }
+
+    // The harness is alive and explicitly tearing down — the on-disk stamp's
+    // crash-recovery purpose (sweep walks `.relay-state.json` to find orphans
+    // when a prior process exited without calling destroy) does not apply
+    // here. Strip it before invoking `git worktree remove`, otherwise git
+    // sees its own provider's bookkeeping file as an untracked-file dirty
+    // marker and refuses with `use --force to delete it`. Real agent output
+    // still trips the dirty branch below (and the worktree is preserved with
+    // the agent's work intact).
+    try {
+      await unlink(join(path, ".relay-state.json"));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     }
 
     const args = ["worktree", "remove"];

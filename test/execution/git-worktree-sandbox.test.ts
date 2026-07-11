@@ -449,9 +449,12 @@ describe("GitWorktreeSandboxProvider.destroy", () => {
       expect(outcome.stderr).toMatch(/contains modified or untracked files/);
     }
 
-    // On-disk state intact for T-203 recovery.
+    // On-disk worktree intact for T-203 recovery — the agent's uncommitted
+    // work is what matters here. The provider unlinks its own
+    // `.relay-state.json` stamp at the start of destroy (it's harness
+    // bookkeeping, only consulted by the cross-process sweep that walks
+    // orphans left by harness crashes — not by graceful destroy paths).
     expect(await exists(path)).toBe(true);
-    expect(await exists(join(path, ".relay-state.json"))).toBe(true);
 
     await rm(baseDir, { recursive: true, force: true });
   });
