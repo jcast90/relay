@@ -618,6 +618,20 @@ pub struct CrosslinkSession {
     pub ready_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ready_kind: Option<String>,
+    /// Phase 4 Plan 02 (D-04) — per-session watermark for the
+    /// "Feed: N new entries" count rendered by the SessionStart hook.
+    /// Holds the feed-line index this session has already been shown;
+    /// the hook subtracts this from `feed.jsonl`'s line count to derive
+    /// the "new" delta, then advances the field via
+    /// `CrosslinkStore.advanceFeedWatermark` (monotonic, atomic).
+    ///
+    /// Additive optional field — no schemaVersion bump. Sessions written
+    /// before Phase 4 deserialize cleanly with `None` (the
+    /// `#[serde(default)]` makes the field a no-op in the back-compat
+    /// fixture). Skipped on serialization when absent so we don't churn
+    /// existing files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_feed_idx: Option<u64>,
 }
 
 /// Read every crosslink-session record from
@@ -649,6 +663,162 @@ pub fn load_crosslink_sessions() -> Vec<CrosslinkSession> {
         }
     }
     out
+}
+
+// --- Phase 4: RepoAdminState canonical enum + derivation ----------------
+//
+// Mirror of `src/domain/repo-admin-state.ts`. The wire format is
+// kebab-case (`disconnected | booting | ready | stale`); both this enum
+// and the TS zod schema must accept exactly these four strings.
+//
+// `derive_state` is the single source of truth for state mapping across
+// every Phase 4 consumer (TUI sidebar, GUI Tauri cmd, SessionStart hook
+// shell-out, `rly status` block). Phase 3's lesson — "alive != ready" —
+// translates here to: one function, called identically everywhere.
+//
+// `Disconnected` is NEVER returned by `derive_state`: it is decided at
+// the channel-rendering layer when no `CrosslinkSession` exists for a
+// repoAssignment. The enum carries the variant so the four-state vocabulary
+// covers every cell in the rendered grid; the function only ever returns
+// one of the other three.
+//
+// The enum is CLOSED — no `#[serde(other)] Unknown` fallback. Adding a
+// fifth state requires a coordinated TS+Rust change in the same PR per
+// AGENTS.md cross-dashboard rule.
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum RepoAdminState {
+    Disconnected,
+    Booting,
+    Ready,
+    Stale,
+}
+
+/// Heartbeat staleness threshold in milliseconds. Mirrors the TS constant
+/// in `src/domain/repo-admin-state.ts::STALE_HEARTBEAT_MS`. Phase 4 owns
+/// this value; bumping it requires changing both this constant and the TS
+/// constant in the same PR.
+pub const STALE_HEARTBEAT_MS: i64 = 120_000;
+
+/// True when `kill(pid, 0)` indicates the process exists. `EPERM` means
+/// the process exists but we lack signal permission — still alive.
+/// `ESRCH` (and any other error) means dead.
+///
+/// 4-line wrapper around `libc::kill`. Unix-only — Phase 4 runs on
+/// macOS / Linux (the only OSes where TUI / GUI are exercised). Windows
+/// is non-goal for Phase 4 readiness rendering.
+pub fn is_pid_alive(pid: u32) -> bool {
+    // SAFETY: `kill` is a thread-safe syscall; passing signal 0 only
+    // probes liveness without delivering a signal.
+    let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if ret == 0 {
+        return true;
+    }
+    // Any non-zero return means errno was set. EPERM means the process
+    // exists; anything else (ESRCH most commonly) means it does not.
+    // SAFETY: `__errno_location` / `errno()` access is the standard
+    // libc idiom; std::io::Error::last_os_error reads the same value.
+    let err = std::io::Error::last_os_error();
+    err.raw_os_error() == Some(libc::EPERM)
+}
+
+/// Derive the canonical `RepoAdminState` for an existing session.
+///
+/// Branch order MUST match `src/domain/repo-admin-state.ts::deriveRepoAdminState`
+/// byte-for-byte:
+///   1. Not alive OR heartbeat aged → `Stale`. Stale wins over Ready.
+///   2. `ready_at` is `Some` → `Ready`.
+///   3. Otherwise → `Booting`.
+///
+/// Note: `Disconnected` is NEVER returned here — it is decided at the
+/// channel-rendering layer when no `CrosslinkSession` exists for a
+/// repoAssignment. See the module docs above.
+pub fn derive_state(session: &CrosslinkSession, now_ms: i64) -> RepoAdminState {
+    let alive = is_pid_alive(session.pid);
+    let hb = parse_rfc3339_to_ms(&session.last_heartbeat).unwrap_or(0);
+    if !alive || now_ms - hb > STALE_HEARTBEAT_MS {
+        return RepoAdminState::Stale;
+    }
+    if session.ready_at.is_some() {
+        return RepoAdminState::Ready;
+    }
+    RepoAdminState::Booting
+}
+
+/// Parse an RFC3339 / ISO-8601 timestamp to milliseconds since epoch.
+/// Returns `None` on parse failure so `derive_state` can fall back to 0
+/// (which forces a `stale` classification — the safest default for a
+/// session whose heartbeat string is unreadable).
+fn parse_rfc3339_to_ms(s: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.timestamp_millis())
+}
+
+/// One repo-admin with its (eventually-populated) worker sessions.
+///
+/// Phase 4 ships `workers` empty for every admin — workers are reserved
+/// for Phase 5 / AL-14 (`spawn_worker`). The schema is forward-compat:
+/// when Phase 5 emits `readyKind: "worker"` sessions, `group_by_admin`
+/// will start populating this Vec without a schema change. Consumers
+/// that render only admins today can ignore the field.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AdminWithWorkers {
+    pub admin: CrosslinkSession,
+    pub workers: Vec<CrosslinkSession>,
+}
+
+/// Group a flat session list into `AdminWithWorkers` rows.
+///
+/// Rules (Phase 4 + forward-compat for Phase 5):
+///   - A session whose `ready_kind == Some("admin")` OR `ready_kind == None`
+///     is an admin (Phase 3 default treats absent kind as admin).
+///   - A session whose `ready_kind == Some("worker")` is grouped under
+///     the admin sharing the same `channel_id`. Workers without a
+///     matching admin are dropped (Phase 4 invariant: every worker
+///     belongs to exactly one admin per channel).
+///   - Stable ordering: admins sorted by `session_id` ascending; workers
+///     sorted by `session_id` within each admin. Phase 4 surfaces don't
+///     reshuffle on every tick.
+pub fn group_by_admin(sessions: &[CrosslinkSession]) -> Vec<AdminWithWorkers> {
+    let mut admins: Vec<CrosslinkSession> = sessions
+        .iter()
+        .filter(|s| {
+            s.ready_kind.is_none() || s.ready_kind.as_deref() == Some("admin")
+        })
+        .cloned()
+        .collect();
+    admins.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+
+    let workers: Vec<&CrosslinkSession> = sessions
+        .iter()
+        .filter(|s| s.ready_kind.as_deref() == Some("worker"))
+        .collect();
+
+    admins
+        .into_iter()
+        .map(|admin| {
+            let mut my_workers: Vec<CrosslinkSession> = workers
+                .iter()
+                .filter(|w| {
+                    // A worker maps to an admin iff their channel_id
+                    // strings are both Some and equal. Workers without
+                    // a channel are unattached and skipped.
+                    match (&admin.channel_id, &w.channel_id) {
+                        (Some(ac), Some(wc)) => ac == wc,
+                        _ => false,
+                    }
+                })
+                .map(|w| (*w).clone())
+                .collect();
+            my_workers.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+            AdminWithWorkers {
+                admin,
+                workers: my_workers,
+            }
+        })
+        .collect()
 }
 
 // --- GUI Settings ---
@@ -2722,6 +2892,67 @@ mod tests {
         assert_eq!(session.ready_kind, None);
     }
 
+    // --- Phase 4 Plan 02: lastSeenFeedIdx watermark serde ------------------
+    //
+    // Mirrors `src/crosslink/types.ts CrosslinkSessionSchema.lastSeenFeedIdx`.
+    // Additive optional field — sessions written before Phase 4 (without
+    // this field) MUST still deserialize cleanly so the Rust readers in
+    // `load_crosslink_sessions` don't poison the list when an older record
+    // is encountered. Sessions written after Phase 4 (with the field)
+    // round-trip the integer value.
+
+    #[test]
+    fn parses_session_with_watermark() {
+        // Phase 4+ shape — lastSeenFeedIdx present.
+        let json = r#"{
+            "sessionId": "session-phase4",
+            "pid": 1234,
+            "repoPath": "/tmp/repo",
+            "description": "Phase 4 watermark",
+            "capabilities": ["general"],
+            "agentProvider": "claude",
+            "registeredAt": "2026-05-13T10:00:00Z",
+            "lastHeartbeat": "2026-05-13T10:00:30Z",
+            "status": "active",
+            "readyAt": "2026-05-13T10:00:15Z",
+            "readyKind": "admin",
+            "lastSeenFeedIdx": 7
+        }"#;
+        let session: CrosslinkSession = serde_json::from_str(json).expect("parse");
+        assert_eq!(session.session_id, "session-phase4");
+        assert_eq!(session.last_seen_feed_idx, Some(7));
+    }
+
+    #[test]
+    fn parses_session_without_watermark() {
+        // Pre-Phase-4 (and pre-Phase-3) shape — lastSeenFeedIdx absent.
+        // Both legacy shapes MUST deserialize cleanly so a watermark-less
+        // session.json on disk doesn't break the readers when the field
+        // lands. `#[serde(default)]` carries this guarantee.
+        let json = r#"{
+            "sessionId": "session-pre-phase4",
+            "pid": 4321,
+            "repoPath": "/tmp/repo",
+            "description": "back-compat",
+            "capabilities": [],
+            "agentProvider": "claude",
+            "registeredAt": "2026-04-01T10:00:00Z",
+            "lastHeartbeat": "2026-04-01T10:00:30Z",
+            "status": "active"
+        }"#;
+        let session: CrosslinkSession = serde_json::from_str(json).expect("parse");
+        assert_eq!(session.session_id, "session-pre-phase4");
+        assert_eq!(session.last_seen_feed_idx, None);
+        // Round-trip back to JSON — the field is skipped when None so the
+        // serialized output doesn't churn existing files with a noisy
+        // "lastSeenFeedIdx": null.
+        let round_trip = serde_json::to_string(&session).expect("serialize");
+        assert!(
+            !round_trip.contains("lastSeenFeedIdx"),
+            "skip_serializing_if=Option::is_none must omit absent watermark; got: {round_trip}"
+        );
+    }
+
     #[test]
     fn load_crosslink_sessions_returns_valid_rows_skips_malformed() {
         let _root = scoped_root();
@@ -2906,5 +3137,290 @@ mod tests {
             .collect();
         assert_eq!(chat_only.len(), 1, "filter to chat only");
         assert_eq!(chat_only[0].session_id, "sess-chat");
+    }
+
+    // --- Phase 4: RepoAdminState + derive_state + group_by_admin ----------
+    //
+    // The truth table here MUST match the TS test cases in
+    // `test/domain/repo-admin-state.test.ts`. Any divergence is a
+    // Phase 4 invariant violation — the TS mirror and Rust authoritative
+    // implementation must agree on every cell.
+
+    use super::{
+        derive_state, group_by_admin, AdminWithWorkers, CrosslinkSession, RepoAdminState,
+        STALE_HEARTBEAT_MS,
+    };
+
+    fn session_fixture(
+        session_id: &str,
+        pid: u32,
+        last_heartbeat: &str,
+        ready_at: Option<&str>,
+        ready_kind: Option<&str>,
+        channel_id: Option<&str>,
+    ) -> CrosslinkSession {
+        CrosslinkSession {
+            session_id: session_id.into(),
+            pid,
+            repo_path: "/tmp/repo".into(),
+            description: "fixture".into(),
+            display_name: None,
+            channel_id: channel_id.map(String::from),
+            capabilities: vec!["general".into()],
+            agent_provider: "claude".into(),
+            registered_at: "2026-05-11T11:50:00Z".into(),
+            last_heartbeat: last_heartbeat.into(),
+            status: "active".into(),
+            ready_at: ready_at.map(String::from),
+            ready_kind: ready_kind.map(String::from),
+            // Phase 4 Plan 02: fixture default is None — derive_state and
+            // group_by_admin don't read the watermark; this keeps the
+            // existing test bodies untouched while the struct field is
+            // mandatory at construction.
+            last_seen_feed_idx: None,
+        }
+    }
+
+    /// A PID guaranteed to not exist on a sane system. Linux's default
+    /// `kernel.pid_max` is 32768 (sometimes 4 million); macOS caps at
+    /// 99999. 999_999 sits above both ceilings so `kill(999999, 0)`
+    /// reliably ESRCHs across both platforms. Using PID 0 would be
+    /// wrong — POSIX defines `kill(0, sig)` as "signal current process
+    /// group" which succeeds.
+    const DEAD_PID: u32 = 999_999;
+
+    #[test]
+    fn derive_state_returns_stale_when_pid_dead() {
+        // Fresh heartbeat but a PID that cannot exist → stale.
+        let now_ms = 1_715_443_200_000_i64; // 2024-05-11T12:00:00Z (unused except via now-hb math)
+        let hb_iso = chrono::DateTime::from_timestamp_millis(now_ms - 5_000)
+            .unwrap()
+            .to_rfc3339();
+        let session = session_fixture("admin-1", DEAD_PID, &hb_iso, None, Some("admin"), None);
+        assert_eq!(derive_state(&session, now_ms), RepoAdminState::Stale);
+    }
+
+    #[test]
+    fn derive_state_returns_stale_when_heartbeat_aged() {
+        // Heartbeat older than STALE_HEARTBEAT_MS even with an alive PID
+        // (our own pid) → stale.
+        let now_ms = 1_715_443_200_000_i64;
+        let aged_hb_iso = chrono::DateTime::from_timestamp_millis(now_ms - STALE_HEARTBEAT_MS - 1)
+            .unwrap()
+            .to_rfc3339();
+        let alive_pid = std::process::id();
+        let session = session_fixture(
+            "admin-1",
+            alive_pid,
+            &aged_hb_iso,
+            None,
+            Some("admin"),
+            None,
+        );
+        assert_eq!(derive_state(&session, now_ms), RepoAdminState::Stale);
+    }
+
+    #[test]
+    fn derive_state_returns_ready_when_ready_at_set() {
+        // Alive + fresh + readyAt populated → ready.
+        let now_ms = 1_715_443_200_000_i64;
+        let fresh_hb_iso = chrono::DateTime::from_timestamp_millis(now_ms - 5_000)
+            .unwrap()
+            .to_rfc3339();
+        let alive_pid = std::process::id();
+        let session = session_fixture(
+            "admin-1",
+            alive_pid,
+            &fresh_hb_iso,
+            Some("2026-05-11T11:59:50Z"),
+            Some("admin"),
+            None,
+        );
+        assert_eq!(derive_state(&session, now_ms), RepoAdminState::Ready);
+    }
+
+    #[test]
+    fn derive_state_returns_booting_when_alive_no_ready_at() {
+        // Alive + fresh + readyAt absent → booting.
+        let now_ms = 1_715_443_200_000_i64;
+        let fresh_hb_iso = chrono::DateTime::from_timestamp_millis(now_ms - 5_000)
+            .unwrap()
+            .to_rfc3339();
+        let alive_pid = std::process::id();
+        let session = session_fixture(
+            "admin-1",
+            alive_pid,
+            &fresh_hb_iso,
+            None,
+            Some("admin"),
+            None,
+        );
+        assert_eq!(derive_state(&session, now_ms), RepoAdminState::Booting);
+    }
+
+    #[test]
+    fn derive_state_stale_wins_over_ready_when_pid_dead() {
+        // readyAt set but pid dead → stale, not ready. Mirrors the TS
+        // precedence test case in test/domain/repo-admin-state.test.ts.
+        let now_ms = 1_715_443_200_000_i64;
+        let fresh_hb_iso = chrono::DateTime::from_timestamp_millis(now_ms - 5_000)
+            .unwrap()
+            .to_rfc3339();
+        let session = session_fixture(
+            "admin-1",
+            DEAD_PID,
+            &fresh_hb_iso,
+            Some("2026-05-11T11:59:50Z"),
+            Some("admin"),
+            None,
+        );
+        assert_eq!(derive_state(&session, now_ms), RepoAdminState::Stale);
+    }
+
+    #[test]
+    fn repo_admin_state_serde_roundtrip_kebab_case() {
+        // Asserts that all four variants serialize to the kebab-case wire
+        // strings the TS schema accepts. Any deviation breaks the
+        // TS↔Rust contract.
+        let cases = [
+            (RepoAdminState::Disconnected, "\"disconnected\""),
+            (RepoAdminState::Booting, "\"booting\""),
+            (RepoAdminState::Ready, "\"ready\""),
+            (RepoAdminState::Stale, "\"stale\""),
+        ];
+        for (variant, expected_json) in cases {
+            let s = serde_json::to_string(&variant).expect("serialize");
+            assert_eq!(s, expected_json, "wire format drifted for {:?}", variant);
+            let back: RepoAdminState = serde_json::from_str(expected_json).expect("deserialize");
+            assert_eq!(back, variant, "round-trip failed for {:?}", variant);
+        }
+    }
+
+    #[test]
+    fn group_by_admin_returns_admins_with_empty_workers() {
+        // Phase 4 case: two admins, no workers. group_by_admin returns
+        // two AdminWithWorkers entries, each with an empty workers Vec.
+        // Forward-compat for Phase 5 WORKER-06: same call surface,
+        // populated workers when readyKind="worker" sessions exist.
+        let a1 = session_fixture(
+            "admin-1",
+            1,
+            "2026-05-11T11:59:55Z",
+            None,
+            Some("admin"),
+            Some("ch-a"),
+        );
+        let a2 = session_fixture(
+            "admin-2",
+            2,
+            "2026-05-11T11:59:55Z",
+            None,
+            Some("admin"),
+            Some("ch-b"),
+        );
+        let groups = group_by_admin(&[a1.clone(), a2.clone()]);
+        assert_eq!(groups.len(), 2);
+        // Stable order: session_id ascending.
+        assert_eq!(groups[0].admin.session_id, "admin-1");
+        assert_eq!(groups[1].admin.session_id, "admin-2");
+        assert!(groups[0].workers.is_empty());
+        assert!(groups[1].workers.is_empty());
+    }
+
+    #[test]
+    fn group_by_admin_nests_worker_under_admin_with_same_channel_id() {
+        // One admin + one worker on the same channel_id. The worker
+        // lands under that admin (Phase 5 forward-compat).
+        let admin = session_fixture(
+            "admin-1",
+            1,
+            "2026-05-11T11:59:55Z",
+            None,
+            Some("admin"),
+            Some("ch-a"),
+        );
+        let worker = session_fixture(
+            "worker-1",
+            2,
+            "2026-05-11T11:59:55Z",
+            None,
+            Some("worker"),
+            Some("ch-a"),
+        );
+        let groups = group_by_admin(&[admin, worker]);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].admin.session_id, "admin-1");
+        assert_eq!(groups[0].workers.len(), 1);
+        assert_eq!(groups[0].workers[0].session_id, "worker-1");
+    }
+
+    #[test]
+    fn group_by_admin_treats_missing_ready_kind_as_admin() {
+        // Phase 3 default: a session with `ready_kind: None` is an admin
+        // (back-compat for pre-Phase-3 records). Verifies the predicate
+        // covers both Some("admin") and None.
+        let legacy = session_fixture(
+            "admin-legacy",
+            1,
+            "2026-05-11T11:59:55Z",
+            None,
+            None, // no ready_kind
+            Some("ch-x"),
+        );
+        let groups = group_by_admin(&[legacy]);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].admin.session_id, "admin-legacy");
+    }
+
+    #[test]
+    fn group_by_admin_drops_workers_without_matching_admin() {
+        // Worker on channel-z, no admin on channel-z → worker is dropped
+        // (Phase 4 invariant: every worker belongs to an admin in its
+        // channel). The unattached admin in another channel is unaffected.
+        let admin = session_fixture(
+            "admin-1",
+            1,
+            "2026-05-11T11:59:55Z",
+            None,
+            Some("admin"),
+            Some("ch-a"),
+        );
+        let orphan_worker = session_fixture(
+            "worker-orphan",
+            2,
+            "2026-05-11T11:59:55Z",
+            None,
+            Some("worker"),
+            Some("ch-z"),
+        );
+        let groups = group_by_admin(&[admin, orphan_worker]);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].admin.session_id, "admin-1");
+        assert!(
+            groups[0].workers.is_empty(),
+            "orphan worker on a different channel must NOT attach to admin-1"
+        );
+    }
+
+    // Touch AdminWithWorkers in a way that forces it to be considered
+    // used even in `--locked` builds where dead-code analysis might
+    // otherwise emit a warning. Tests above already construct it, but
+    // this single-line assertion documents the field surface explicitly.
+    #[test]
+    fn admin_with_workers_struct_shape() {
+        let a = session_fixture(
+            "admin-shape",
+            1,
+            "2026-05-11T11:59:55Z",
+            None,
+            Some("admin"),
+            None,
+        );
+        let g = AdminWithWorkers {
+            admin: a.clone(),
+            workers: vec![],
+        };
+        assert_eq!(g.admin.session_id, "admin-shape");
+        assert_eq!(g.workers.len(), 0);
     }
 }

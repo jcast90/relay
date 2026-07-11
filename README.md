@@ -16,14 +16,15 @@
 <p align="center">
   <a href="https://github.com/jcast90/relay/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI" src="https://github.com/jcast90/relay/actions/workflows/ci.yml/badge.svg?branch=main"/></a>
   <a href="https://github.com/jcast90/relay/actions/workflows/release.yml"><img alt="Release" src="https://github.com/jcast90/relay/actions/workflows/release.yml/badge.svg"/></a>
-  <a href="https://github.com/jcast90/relay/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/jcast90/relay?include_prereleases&sort=semver&display_name=tag"/></a>
   <a href="https://www.npmjs.com/package/@jcast90/relay"><img alt="npm" src="https://img.shields.io/npm/v/@jcast90/relay?label=npm&color=cb3837"/></a>
+  <a href="https://www.npmjs.com/package/@jcast90/relay"><img alt="npm downloads" src="https://img.shields.io/npm/dm/@jcast90/relay?label=downloads&color=cb3837"/></a>
 </p>
 
 <p align="center">
-  <a href="#install"><img alt="install" src="https://img.shields.io/badge/install-one_command-89b4fa?style=flat-square"/></a>
-  <a href="#license"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-a6e3a1?style=flat-square"/></a>
-  <a href="#dashboards"><img alt="dashboards" src="https://img.shields.io/badge/dashboards-CLI_%2B_TUI_%2B_GUI-cba6f7?style=flat-square"/></a>
+  <a href="https://github.com/jcast90/relay/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/jcast90/relay?style=flat&color=f9e2af"/></a>
+  <a href="https://github.com/jcast90/relay/issues"><img alt="open issues" src="https://img.shields.io/github/issues/jcast90/relay?color=fab387"/></a>
+  <a href="https://github.com/jcast90/relay/commits/main"><img alt="last commit" src="https://img.shields.io/github/last-commit/jcast90/relay/main?color=cba6f7"/></a>
+  <a href="#license"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-a6e3a1"/></a>
 </p>
 
 ---
@@ -363,6 +364,7 @@ Right pane shows repo assignments (with `PRIMARY` badge), pinned refs, and — w
 | `rly run --autonomous <channelId> --budget-tokens <N> [--max-hours N] [--trust supervised\|god] [--allow-repo <alias>]... [--json]` | Start an autonomous session against a channel's ticket board. Records a tagged decision entry; driver (AL-4) executes until budget / wall-clock / queue exhausts                                                                                                                                                                  |
 | `rly chat rewind --channel <id> --session <id> [--to <iso> \| --interactive]`                                                       | Roll repos + session transcript back to a rewindable user turn                                                                                                                                                                                                                                                                    |
 | `rly handoff <channelId> [--to <profile\|adapter\|alias>] [--save] [--resume <briefId\|latest>]`                                    | Synthesize a handoff brief from channel artifacts and (optionally) seed a fresh session in the destination provider — see [`docs/cli/rly-handoff.md`](./docs/cli/rly-handoff.md)                                                                                                                                                  |
+| `rly cost [--json]`                                                                                                                 | Cost-per-task report by complexity tier, aggregated from the per-task cost ledger at `~/.relay/task-costs.jsonl` (mean / median / p90 USD, tokens, avg retries)                                                                                                                                                                   |
 | `rly crosslink status`                                                                                                              | Active cross-session chatter                                                                                                                                                                                                                                                                                                      |
 | `rly tui`                                                                                                                           | Terminal dashboard (auto-builds on first run)                                                                                                                                                                                                                                                                                     |
 | `rly gui [--dev] [--rebuild]`                                                                                                       | Desktop dashboard                                                                                                                                                                                                                                                                                                                 |
@@ -524,6 +526,9 @@ Verification commands run through an `Executor` abstraction (`src/execution/exec
                               #   one line per record() call; kind: "chat" | "run" | "admin"
                               #   fueled by orchestrator dispatch + `rly chat record-usage`
                               #   read by TUI + GUI bars + `rly status`
+  task-costs.jsonl            # global per-task cost ledger — one costed line per
+                              #   agent call, tagged with ticketId + complexity tier;
+                              #   aggregated by `rly cost` and the cost-aware router
   crosslink/
     sessions/<sessionId>.json # live session heartbeats
     mailboxes/<sessionId>/    # pending crosslink messages

@@ -17,6 +17,7 @@ import { AgentRegistry } from "./agents/registry.js";
 import { launchGui, launchTui, parseGuiFlags } from "./cli/launch-gui-tui.js";
 import { parseRebuildFlags, runRebuild } from "./cli/rebuild.js";
 import { handleInstallCommand } from "./cli/install.js";
+import { handleCostCommand } from "./cli/cost.js";
 import { maybePrintUpdateNudge } from "./cli/update-nudge.js";
 import { launchInteractiveCommand } from "./cli/launcher.js";
 import { createStreamActivityRenderer, isQuietMode } from "./cli/stream-activity-renderer.js";
@@ -51,7 +52,13 @@ import { startDashboard } from "./tui/dashboard.js";
 import { SessionStore } from "./cli/session-store.js";
 import { buildSystemPrompt, resolveChannelRefs, findMcpConfig } from "./cli/chat-context.js";
 import { handleChatRecordUsageCommand } from "./cli/chat-record-usage.js";
-import { formatActiveSessionsBlock, loadActiveSessions } from "./cli/print-status-context.js";
+import { COMMANDS } from "./cli/channel-show.js";
+import {
+  formatActiveSessionsBlock,
+  formatChannelStatesBlock,
+  loadActiveSessions,
+  loadChannelStates,
+} from "./cli/print-status-context.js";
 import { rewindApply, rewindSnapshot } from "./cli/chat-rewind.js";
 import { submitApproval } from "./orchestrator/approval-gate.js";
 import { getWorkspaceDir } from "./cli/workspace-registry.js";
@@ -194,7 +201,29 @@ export async function main(): Promise<void> {
   }
 
   if (command === "channel") {
+    // Intercept `rly channel show <id>` so it dispatches to the same
+    // handler as the `rly project show` alias (D-01). Other channel
+    // subcommands (create, archive, post, etc.) flow through the legacy
+    // `handleChannelCommand` switch.
+    if (args[0] === "show") {
+      process.exitCode = await COMMANDS.channel.show(args.slice(1));
+      return;
+    }
     await handleChannelCommand(args);
+    return;
+  }
+
+  // `rly project show <id>` — alias for `rly channel show <id>` (D-01:
+  // channel IS the project). Routes through the SAME function reference
+  // as COMMANDS.channel.show so the alias-equivalence test in
+  // test/cli/channel-show.test.ts can verify byte-identical behavior.
+  if (command === "project") {
+    if (args[0] === "show") {
+      process.exitCode = await COMMANDS.project.show(args.slice(1));
+      return;
+    }
+    console.error("Usage: rly project show <channelId|name> [--json] [--feed-tail=N]");
+    process.exitCode = 2;
     return;
   }
 
@@ -225,6 +254,17 @@ export async function main(): Promise<void> {
 
   if (command === "handoff") {
     const result = await handleHandoffCommand({
+      argv: args,
+      stdout: process.stdout,
+      stderr: process.stderr,
+      env: process.env,
+    });
+    process.exitCode = result.exitCode;
+    return;
+  }
+
+  if (command === "cost") {
+    const result = await handleCostCommand({
       argv: args,
       stdout: process.stdout,
       stderr: process.stderr,
@@ -2817,6 +2857,16 @@ async function printStatus(artifactStore: LocalArtifactStore, cwd: string): Prom
   const activeBlock = formatActiveSessionsBlock(activeSessions);
   if (activeBlock) {
     console.log(activeBlock);
+    console.log("");
+  }
+
+  // Phase 4 Plan 05 (SURFACE-05): per-channel repo-admin states. Mirrors
+  // the active-sessions block: empty-list → no block at all so non-channel
+  // operators don't see a dangling header.
+  const channelStates = loadChannelStates();
+  const channelBlock = formatChannelStatesBlock(channelStates);
+  if (channelBlock) {
+    console.log(channelBlock);
     console.log("");
   }
 

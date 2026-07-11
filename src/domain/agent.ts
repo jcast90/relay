@@ -93,6 +93,15 @@ export interface AgentResult {
   rawResponse?: string;
   /** Provider token usage for this call, if the adapter extracted it. */
   tokenUsage?: TokenUsage;
+  /**
+   * Model that produced this result (e.g. `claude-opus-4-7`). Set by the CLI
+   * adapters from their configured model, and by the executor path from the
+   * agent's stdout. Consumed by per-task cost accounting to price the call —
+   * absent means the call bills at $0 with a `[cost]` warning. Distinct from
+   * the context-window model on `agent.capability`: this is what actually ran,
+   * which matters once cost-aware routing (PR 4) varies the model per call.
+   */
+  model?: string;
 }
 
 export interface Agent {
@@ -139,6 +148,7 @@ export const AgentResultSchema = z.object({
   failureClassification: FailureClassificationSchema.optional(),
   phasePlan: z.unknown().optional(),
   tokenUsage: TokenUsageSchema.optional(),
+  model: z.string().optional(),
 });
 
 export const agentResultJsonSchema = {

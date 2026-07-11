@@ -3452,3 +3452,45 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   color: var(--color-status-failed);
   border-color: var(--color-status-failed);
 }
+
+/* Phase 4 plan 04 / SURFACE-04: per-repo admin state badges. D-07
+   color mapping — muted ready / emphasized exceptions. Eye is drawn
+   to attention-needed states (booting / stale), not to the baseline.
+   Tokens consumed: --color-text-muted, --color-text-on-dark-muted,
+   --color-accent-amber, --color-status-failed (from tokens.css). */
+.repo-state-stack {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  align-items: center;
+}
+.repo-state-badge {
+  border-radius: 3px;
+  padding: 1px 6px;
+  border: 1px solid transparent;
+  line-height: 1.4;
+}
+.state-ready {
+  /* Baseline — muted, no emphasis. The eye should slide right past. */
+  color: var(--color-text-on-dark-muted);
+}
+.state-booting {
+  /* Warning — in-progress. Yellow/amber to draw attention. */
+  color: var(--color-accent-amber);
+  background: rgba(232, 154, 43, 0.08);
+  border-color: rgba(232, 154, 43, 0.30);
+}
+.state-stale {
+  /* Error — pid dead or heartbeat aged. Red to demand attention. */
+  color: var(--color-status-failed);
+  background: rgba(230, 90, 79, 0.10);
+  border-color: rgba(230, 90, 79, 0.35);
+}
+.state-disconnected {
+  /* Repo not configured for this channel — dim, present but de-emphasized. */
+  color: var(--color-text-on-dark-muted);
+  opacity: 0.55;
+}

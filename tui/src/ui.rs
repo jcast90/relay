@@ -6,6 +6,46 @@ use ratatui::{
 
 use crate::{App, ChatRole, CompletionKind, FocusPanel, InputMode, RepoSelectStep, Tab, TextSelection};
 
+/// Phase 4 plan 04 / SURFACE-03: map a `RepoAdminState` to its glyph,
+/// color, and canonical vocabulary word per D-06 (state vocabulary)
+/// and D-07 (muted ready, emphasized exceptions). Pure function —
+/// unit-tested below covering all four variants.
+///
+/// The word component is the canonical kebab-case wire format from
+/// plan 04-01 (`"disconnected" | "booting" | "ready" | "stale"`),
+/// matching the hook, the CLI, and the GUI byte-for-byte.
+///
+/// Color choices (D-07):
+/// - ready:        DarkGray — baseline, muted (no attention drawn)
+/// - booting:      Yellow   — warning, in-progress
+/// - stale:        Red      — error, attention required
+/// - disconnected: DarkGray — dim, "not configured for this channel"
+pub(crate) fn state_visual(state: data::RepoAdminState) -> (char, Color, &'static str) {
+    match state {
+        data::RepoAdminState::Ready => ('●', Color::DarkGray, "ready"),
+        data::RepoAdminState::Booting => ('○', Color::Yellow, "booting"),
+        data::RepoAdminState::Stale => ('×', Color::Red, "stale"),
+        data::RepoAdminState::Disconnected => ('·', Color::DarkGray, "disconnected"),
+    }
+}
+
+#[cfg(test)]
+mod state_visual_tests {
+    use super::*;
+
+    #[test]
+    fn state_visual_covers_all_four_variants() {
+        use data::RepoAdminState::*;
+        assert_eq!(state_visual(Ready), ('●', Color::DarkGray, "ready"));
+        assert_eq!(state_visual(Booting), ('○', Color::Yellow, "booting"));
+        assert_eq!(state_visual(Stale), ('×', Color::Red, "stale"));
+        assert_eq!(
+            state_visual(Disconnected),
+            ('·', Color::DarkGray, "disconnected")
+        );
+    }
+}
+
 /// Phase 1 PR-3 / Task 9: map a context-window percent (0–100+) to a
 /// ratatui [`Color`] matching the GUI's `tokenPctSeverity` ladder
 /// (`gui/src/lib/tokenSeverity.ts`). Pure function — unit-tested below.
@@ -225,8 +265,34 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
 
     let mut agent_items: Vec<ListItem> = Vec::new();
 
-    // Show repo agents first (these are the per-repo Claude sessions)
+    // Show repo agents first (these are the per-repo Claude sessions).
+    // Phase 4 plan 04 / SURFACE-03: each repo assignment now also shows
+    // a state badge sourced from `harness_data::derive_state` (single
+    // source of truth across TUI / GUI / hook / CLI). Workers (Phase 5
+    // WORKER-06) nest under their admin via `group_by_admin` — today's
+    // workers Vec is always empty per admin; renderer is forward-compat.
     if !repo_assignments.is_empty() {
+        // Per-tick now_ms — derive_state needs unix millis; the cache
+        // stores SESSIONS, not pre-computed state strings, so state is
+        // fresh at render time (SURFACE-07: no cache of derived state).
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+
+        // Look up the grouped admin cache for the currently selected
+        // channel. None means refresh() hasn't run yet — degrade
+        // gracefully to "every repo disconnected".
+        let current_ch_id = app
+            .channels
+            .get(app.selected_channel)
+            .map(|c| c.channel_id.as_str());
+        let empty: Vec<data::AdminWithWorkers> = Vec::new();
+        let grouped: &[data::AdminWithWorkers] = current_ch_id
+            .and_then(|id| app.admins_by_channel.get(id))
+            .map(|v| v.as_slice())
+            .unwrap_or(&empty);
+
         for repo in &repo_assignments {
             let is_streaming = app.is_worker_streaming(&repo.alias);
             let is_active = app.active_worker_alias.as_deref() == Some(&repo.alias);
@@ -252,6 +318,52 @@ fn draw_sidebar(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled(format!(" {}", repo_short), Style::default().fg(Color::DarkGray)),
             ]);
             agent_items.push(ListItem::new(line));
+
+            // Find the AdminWithWorkers entry whose admin session
+            // matches this repo by repo_path (the only field shared
+            // between RepoAssignment and CrosslinkSession). If no
+            // match exists, the repo is disconnected.
+            let matched: Option<&data::AdminWithWorkers> = grouped
+                .iter()
+                .find(|a| a.admin.repo_path == repo.repo_path);
+            let state = match matched {
+                Some(a) => data::derive_state(&a.admin, now_ms),
+                None => data::RepoAdminState::Disconnected,
+            };
+            let (glyph, color, word) = state_visual(state);
+
+            // Indented state line under the repo agent.
+            let state_line = Line::from(vec![
+                Span::styled("    ", Style::default()),
+                Span::styled(format!("{} ", glyph), Style::default().fg(color)),
+                Span::styled(word, Style::default().fg(color)),
+            ]);
+            agent_items.push(ListItem::new(state_line));
+
+            // Nest workers under the admin (Phase 5 WORKER-06 forward-
+            // compat). Today this loop is a no-op (empty Vec); when
+            // Phase 5 emits worker sessions they render here without
+            // any rendering-layer change.
+            if let Some(a) = matched {
+                for worker in &a.workers {
+                    let w_state = data::derive_state(worker, now_ms);
+                    let (w_glyph, w_color, w_word) = state_visual(w_state);
+                    let worker_short = worker
+                        .display_name
+                        .clone()
+                        .unwrap_or_else(|| worker.session_id.clone());
+                    let worker_line = Line::from(vec![
+                        Span::styled("      ", Style::default()),
+                        Span::styled(format!("{} ", w_glyph), Style::default().fg(w_color)),
+                        Span::styled(
+                            format!("worker:{worker_short} "),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                        Span::styled(w_word, Style::default().fg(w_color)),
+                    ]);
+                    agent_items.push(ListItem::new(worker_line));
+                }
+            }
         }
     }
 

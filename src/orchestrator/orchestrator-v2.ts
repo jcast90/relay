@@ -26,6 +26,7 @@ import { decomposePlanToTickets, buildTicketPlanFromPhases } from "./ticket-deco
 import { checkApproval } from "./approval-gate.js";
 import { TicketScheduler } from "./ticket-scheduler.js";
 import { SessionTrackerPool } from "../budget/session-tracker-pool.js";
+import { TaskCostLedger } from "../budget/task-cost-ledger.js";
 import { dispatchTokenUsageOrThrow } from "./dispatch-token-usage.js";
 import { attachThresholdFeed } from "../budget/threshold-feed-bridge.js";
 
@@ -70,6 +71,13 @@ export interface OrchestratorV2Options {
    * so the orchestrator constructs a fresh pool per instance.
    */
   trackerPool?: SessionTrackerPool;
+  /**
+   * Optional injection point for the global per-task {@link TaskCostLedger}.
+   * Tests point it at a tmp `~/.relay` (or omit cost tracking by leaving the
+   * scheduler's ledger unset); production leaves this undefined so the
+   * orchestrator constructs one writing to `~/.relay/task-costs.jsonl`.
+   */
+  costLedger?: TaskCostLedger;
 }
 
 export class OrchestratorV2 {
@@ -87,6 +95,14 @@ export class OrchestratorV2 {
    * Drained in {@link waitForPendingWrites} on run completion.
    */
   private readonly trackerPool: SessionTrackerPool;
+
+  /**
+   * Global per-task cost ledger (`~/.relay/task-costs.jsonl`). Passed to every
+   * per-run scheduler so completed dispatches append costed lines attributed
+   * to their ticket + tier. Flushed in {@link waitForPendingWrites} on run
+   * completion so `rly cost` sees the run's costs immediately after it ends.
+   */
+  private readonly costLedger: TaskCostLedger;
 
   /**
    * Per-tracker unsubscribe handles for the threshold-feed bridge. Keyed
@@ -120,6 +136,7 @@ export class OrchestratorV2 {
   ) {
     this.executor = options?.executor ?? null;
     this.trackerPool = options?.trackerPool ?? new SessionTrackerPool();
+    this.costLedger = options?.costLedger ?? new TaskCostLedger();
   }
 
   /**
@@ -482,6 +499,7 @@ export class OrchestratorV2 {
       (r, type, phaseId, details) => this.recordEvent(r, type, phaseId, details),
       {
         channelStore: this.channelStore,
+        costLedger: this.costLedger,
         ...(this.executor ? { executor: this.executor } : {}),
       }
     );
@@ -738,6 +756,10 @@ export class OrchestratorV2 {
     }
     this.thresholdFeedUnsubs.clear();
     await this.trackerPool.closeAll();
+    // Flush per-task cost lines so `rly cost` reflects this run the moment it
+    // ends. Scheduler writes go through its own pendingWrites; this awaits the
+    // ledger's serialized write chain to be safe against any late append.
+    await this.costLedger.flush();
     if (this.pendingWrites.length === 0) return;
     const pending = this.pendingWrites;
     this.pendingWrites = [];
