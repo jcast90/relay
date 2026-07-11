@@ -37,6 +37,12 @@
   --color-text-primary:      #1b1f2a;
   --color-text-muted:        #5b6579;
   --color-text-dim:          #8a93a5;
+  /* `text-muted` clears AA only on the RESTING paper surfaces (5.57:1 on
+     paper-base). The interaction fills are far darker — on paper-hover
+     (#d8cfb0) it drops to 3.76:1 and on paper-pressed (#bdb088) to 2.72:1, so
+     it fails exactly while the user is hovering to read it. Use this for muted
+     text sitting on a hover/pressed fill: 6.45:1 and 4.66:1 respectively. */
+  --color-text-muted-strong: #3a4254;
   --color-text-on-dark:      #e8ecf4;
   --color-text-on-dark-muted:#8a93a5;
 
@@ -67,10 +73,10 @@
   --color-mention-primary-fg:    #a43c32; /* 5.17:1 on -primary-bg */
   --color-mention-primary-line:  rgba(230, 90, 79, 0.33);
   --color-mention-attached-bg:   #dce6f5;
-  --color-mention-attached-fg:   #3a5fa0; /* 4.94:1 on -attached-bg */
+  --color-mention-attached-fg:   #3a5fa0; /* 5.02:1 on -attached-bg */
   --color-mention-attached-line: #b3c5e0;
   --color-mention-human-bg:      #d9f1e6;
-  --color-mention-human-fg:      #1f6e54; /* 5.22:1 on -human-bg */
+  --color-mention-human-fg:      #1f6e54; /* 5.17:1 on -human-bg */
 
   /* Typography */
   --font-ui:   "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
