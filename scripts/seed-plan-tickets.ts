@@ -441,10 +441,11 @@ async function main(): Promise<void> {
     retryPolicy: { maxAgentAttempts: 1, maxTestFixLoops: 1 },
   }));
 
-  const ticketLedger = initializeTicketLedger(tickets, runId);
+  const taskType = "architectural" as const;
+  const ticketLedger = initializeTicketLedger(tickets, runId, taskType);
 
   const classification = {
-    tier: "architectural" as const,
+    tier: taskType,
     rationale:
       "Cross-cutting refactor across storage, execution, and transport layers; enables cloud deployment without breaking local usage.",
     suggestedSpecialties: ["general", "devops"] as string[],

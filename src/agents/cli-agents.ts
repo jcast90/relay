@@ -517,6 +517,7 @@ export class ClaudeCliAgent extends CliAgentBase {
       resultText: null,
       capturedUsage: null,
       capturedModel: null,
+      reportedCostUsd: null,
     };
 
     const consume = (line: string) => processStreamLine(line, state, onLine);

@@ -342,10 +342,11 @@ async function main(): Promise<void> {
     retryPolicy: { maxAgentAttempts: 1, maxTestFixLoops: 1 },
   }));
 
-  const ticketLedger = initializeTicketLedger(tickets, runId);
+  const taskType = "architectural" as const;
+  const ticketLedger = initializeTicketLedger(tickets, runId, taskType);
 
   const classification = {
-    tier: "architectural" as const,
+    tier: taskType,
     rationale:
       "Builds a long-running autonomous execution loop with budget tracking, trust modes, PR review integration, and post-completion audit. Touches storage, orchestrator, execution, and all three UIs.",
     suggestedSpecialties: ["general"] as string[],

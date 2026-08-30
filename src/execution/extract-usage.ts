@@ -51,6 +51,7 @@ export function extractUsageFromStdout(stdout: string): ExtractedUsage | undefin
     resultText: null,
     capturedUsage: null,
     capturedModel: null,
+    reportedCostUsd: null,
   };
   for (const line of stdout.split("\n")) {
     const trimmed = line.trim();

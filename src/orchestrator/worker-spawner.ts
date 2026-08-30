@@ -33,6 +33,7 @@
 
 import { EventEmitter } from "node:events";
 
+import type { TokenUsage } from "../domain/agent.js";
 import type { Channel, RepoAssignment } from "../domain/channel.js";
 import type { AgentSpecialty } from "../domain/specialty.js";
 import type { TicketLedgerEntry } from "../domain/ticket.js";
@@ -42,6 +43,7 @@ import {
   type CommandInvoker,
   type SpawnedProcess,
 } from "../agents/command-invoker.js";
+import { processStreamLine, type StreamParseState } from "../agents/process-stream-line.js";
 import { GitWorktreeSandboxProvider } from "../execution/sandboxes/git-worktree.js";
 import type { SandboxProvider, SandboxRef } from "../execution/sandbox.js";
 
@@ -52,6 +54,18 @@ import type { SandboxProvider, SandboxRef } from "../execution/sandbox.js";
  */
 export const WORKER_STDOUT_TAIL_LINES = 200;
 export const WORKER_STDERR_TAIL_LINES = 200;
+export const WORKER_STREAM_TEXT_CHARS = 64 * 1024;
+export const WORKER_STREAM_LINE_CHARS = 1024 * 1024;
+
+function appendBoundedTail(lines: string[], text: string, maxLines: number): string[] {
+  const retainedText =
+    text.length > WORKER_STREAM_TEXT_CHARS ? text.slice(-WORKER_STREAM_TEXT_CHARS) : text;
+  const nextLines = [...lines, ...retainedText.split(/\r?\n/).filter(Boolean)].slice(-maxLines);
+  const joined = nextLines.join("\n");
+  const bounded =
+    joined.length > WORKER_STREAM_TEXT_CHARS ? joined.slice(-WORKER_STREAM_TEXT_CHARS) : joined;
+  return bounded ? bounded.split("\n").slice(-maxLines) : [];
+}
 
 /**
  * Env vars a worker's Claude/Codex subprocess is allowed to read from the
@@ -97,8 +111,11 @@ export interface WorkerExitEvent {
   stdoutTail: string;
   /** Last {@link WORKER_STDERR_TAIL_LINES} lines of stderr for diagnostics. */
   stderrTail: string;
-  /** PR URL detected in stdout, if any. Used by the ticket runner for AC3. */
+  /** PR URL detected in parsed assistant text, if any. Used by the ticket runner for AC3. */
   detectedPrUrl: string | null;
+  tokenUsage?: TokenUsage;
+  model?: string;
+  reportedCostUsd?: number;
 }
 
 export interface WorkerHandle {
@@ -179,6 +196,7 @@ export interface WorkerSpawnerOptions {
   invoker?: CommandInvoker;
   /** Session-id factory. Tests inject a deterministic one. */
   buildSessionId?: () => string;
+  buildPrompt?: typeof buildWorkerPrompt;
   /** Clock for short-timestamp branch suffixes. Tests inject a fixed value. */
   clock?: () => number;
   /**
@@ -261,6 +279,7 @@ export class WorkerSpawner {
   private readonly sandboxProvider: SandboxProvider;
   private readonly invoker: CommandInvoker;
   private readonly buildSessionId: () => string;
+  private readonly buildPrompt: typeof buildWorkerPrompt;
   private readonly clock: () => number;
   private readonly stopGraceMs: number;
 
@@ -268,6 +287,7 @@ export class WorkerSpawner {
     this.sandboxProvider = options.sandboxProvider ?? new GitWorktreeSandboxProvider();
     this.invoker = options.invoker ?? new NodeCommandInvoker();
     this.buildSessionId = options.buildSessionId ?? defaultBuildWorkerSessionId;
+    this.buildPrompt = options.buildPrompt ?? buildWorkerPrompt;
     this.clock = options.clock ?? Date.now;
     this.stopGraceMs = options.stopGraceMs ?? WORKER_STOP_GRACE_MS;
   }
@@ -322,10 +342,10 @@ export class WorkerSpawner {
     // stdin like a repo-admin session. The worker's own agent role governs
     // *what* it does; AL-14's scope is the spawn + monitoring, not the
     // prompt content.
-    const prompt = buildWorkerPrompt(ticket, repoAssignment, specialty);
+    const prompt = this.buildPrompt(ticket, repoAssignment, specialty);
     const fullAccess = channel.fullAccess === true;
 
-    const args: string[] = ["-p"];
+    const args: string[] = ["-p", "--output-format", "stream-json", "--verbose"];
     if (fullAccess) {
       // AC2 — inherit the channel's full-access flag.
       args.push("--dangerously-skip-permissions");
@@ -406,8 +426,18 @@ class LiveWorkerHandle implements WorkerHandle {
 
   private stdoutBuf = "";
   private stderrBuf = "";
+  private stdoutLineOverflowed = false;
+  private stderrLineOverflowed = false;
   private stdoutLines: string[] = [];
   private stderrLines: string[] = [];
+  private readonly streamState: StreamParseState = {
+    accumText: "",
+    resultText: null,
+    capturedUsage: null,
+    capturedModel: null,
+    reportedCostUsd: null,
+    maxAccumTextChars: WORKER_STREAM_TEXT_CHARS,
+  };
   private _detectedPrUrl: string | null = null;
   private finalEvent: WorkerExitEvent | null = null;
 
@@ -501,60 +531,92 @@ class LiveWorkerHandle implements WorkerHandle {
 
   private wireChild(): void {
     this.child.onStdout((chunk) => {
-      this.stdoutBuf += chunk;
-      let idx: number;
-      while ((idx = this.stdoutBuf.indexOf("\n")) >= 0) {
-        const line = this.stdoutBuf.slice(0, idx);
-        this.stdoutBuf = this.stdoutBuf.slice(idx + 1);
-        this.pushStdoutLine(line);
-      }
+      const drained = this.drainLines(this.stdoutBuf + chunk, this.stdoutLineOverflowed, "stdout");
+      this.stdoutBuf = drained.buffer;
+      this.stdoutLineOverflowed = drained.overflowed;
     });
     this.child.onStderr((chunk) => {
-      this.stderrBuf += chunk;
-      let idx: number;
-      while ((idx = this.stderrBuf.indexOf("\n")) >= 0) {
-        const line = this.stderrBuf.slice(0, idx);
-        this.stderrBuf = this.stderrBuf.slice(idx + 1);
-        this.pushStderrLine(line);
-      }
+      const drained = this.drainLines(this.stderrBuf + chunk, this.stderrLineOverflowed, "stderr");
+      this.stderrBuf = drained.buffer;
+      this.stderrLineOverflowed = drained.overflowed;
     });
     this.child.onError((err) => {
       // Spawn-level error (e.g. ENOENT) — treat as failure.
-      this.stderrLines.push(`[spawn-error] ${err.message}`);
+      this.pushStderrLine(`[spawn-error] ${err.message}`);
       this.finish(null, null);
     });
     this.child.onExit((code, signal) => {
       // Flush any leftover partial lines before we stamp the tail.
-      if (this.stdoutBuf) {
+      if (this.stdoutLineOverflowed) {
+        this.pushOversizedLine("stdout");
+      } else if (this.stdoutBuf) {
         this.pushStdoutLine(this.stdoutBuf);
-        this.stdoutBuf = "";
       }
-      if (this.stderrBuf) {
+      this.stdoutBuf = "";
+      this.stdoutLineOverflowed = false;
+      if (this.stderrLineOverflowed) {
+        this.pushOversizedLine("stderr");
+      } else if (this.stderrBuf) {
         this.pushStderrLine(this.stderrBuf);
-        this.stderrBuf = "";
       }
+      this.stderrBuf = "";
+      this.stderrLineOverflowed = false;
       this.finish(code ?? null, signal ?? null);
     });
   }
 
+  private drainLines(
+    initialBuffer: string,
+    initialOverflowed: boolean,
+    stream: "stdout" | "stderr"
+  ): { buffer: string; overflowed: boolean } {
+    let buffer = initialBuffer;
+    let overflowed = initialOverflowed;
+    let idx: number;
+    while ((idx = buffer.indexOf("\n")) >= 0) {
+      if (overflowed || idx > WORKER_STREAM_LINE_CHARS) {
+        this.pushOversizedLine(stream);
+      } else {
+        const line = buffer.slice(0, idx);
+        if (stream === "stdout") this.pushStdoutLine(line);
+        else this.pushStderrLine(line);
+      }
+      buffer = buffer.slice(idx + 1);
+      overflowed = false;
+    }
+    if (buffer.length > WORKER_STREAM_LINE_CHARS) {
+      buffer = "";
+      overflowed = true;
+    }
+    return { buffer, overflowed };
+  }
+
+  private pushOversizedLine(stream: "stdout" | "stderr"): void {
+    const message =
+      `[relay] worker ${stream} line exceeded ${WORKER_STREAM_LINE_CHARS} characters ` +
+      "and was omitted";
+    if (stream === "stdout") this.pushHumanText(message);
+    else this.pushStderrLine(message);
+  }
+
   private pushStdoutLine(line: string): void {
     if (!line) return;
-    this.stdoutLines.push(line);
-    if (this.stdoutLines.length > WORKER_STDOUT_TAIL_LINES) {
-      this.stdoutLines.splice(0, this.stdoutLines.length - WORKER_STDOUT_TAIL_LINES);
-    }
-    if (!this._detectedPrUrl) {
-      const match = line.match(PR_URL_PATTERN);
+    const processed = processStreamLine(line, this.streamState, () => {});
+    const text = processed.kind === "diagnostic" ? processed.text : processed.assistantText;
+    if (text) this.pushHumanText(text);
+    if (!this._detectedPrUrl && processed.kind === "structured" && processed.assistantText) {
+      const match = processed.assistantText.match(PR_URL_PATTERN);
       if (match) this._detectedPrUrl = match[0];
     }
   }
 
+  private pushHumanText(text: string): void {
+    this.stdoutLines = appendBoundedTail(this.stdoutLines, text, WORKER_STDOUT_TAIL_LINES);
+  }
+
   private pushStderrLine(line: string): void {
     if (!line) return;
-    this.stderrLines.push(line);
-    if (this.stderrLines.length > WORKER_STDERR_TAIL_LINES) {
-      this.stderrLines.splice(0, this.stderrLines.length - WORKER_STDERR_TAIL_LINES);
-    }
+    this.stderrLines = appendBoundedTail(this.stderrLines, line, WORKER_STDERR_TAIL_LINES);
   }
 
   private finish(exitCode: number | null, signal: NodeJS.Signals | null): void {
@@ -585,6 +647,11 @@ class LiveWorkerHandle implements WorkerHandle {
       stdoutTail: this.stdoutLines.join("\n"),
       stderrTail: this.stderrLines.join("\n"),
       detectedPrUrl: this._detectedPrUrl,
+      ...(this.streamState.capturedUsage ? { tokenUsage: this.streamState.capturedUsage } : {}),
+      ...(this.streamState.capturedModel ? { model: this.streamState.capturedModel } : {}),
+      ...(this.streamState.reportedCostUsd !== null
+        ? { reportedCostUsd: this.streamState.reportedCostUsd }
+        : {}),
     };
     this.finalEvent = evt;
 

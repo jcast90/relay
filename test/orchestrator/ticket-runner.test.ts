@@ -19,7 +19,9 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { TaskCostLedger } from "../../src/budget/task-cost-ledger.js";
 import { ChannelStore } from "../../src/channels/channel-store.js";
+import type { TokenUsage } from "../../src/domain/agent.js";
 import type { Channel, RepoAssignment } from "../../src/domain/channel.js";
 import type { TicketLedgerEntry } from "../../src/domain/ticket.js";
 import type { SandboxRef } from "../../src/execution/sandbox.js";
@@ -109,6 +111,9 @@ class FakeWorkerHandle implements WorkerHandle {
     stdoutTail?: string;
     stderrTail?: string;
     prUrl?: string | null;
+    tokenUsage?: TokenUsage;
+    model?: string;
+    reportedCostUsd?: number;
   }): void {
     if (this.finalEvent) return; // idempotent
     this._prUrl = args.prUrl ?? null;
@@ -124,6 +129,9 @@ class FakeWorkerHandle implements WorkerHandle {
       stdoutTail: args.stdoutTail ?? "",
       stderrTail: args.stderrTail ?? "",
       detectedPrUrl: args.prUrl ?? null,
+      ...(args.tokenUsage ? { tokenUsage: args.tokenUsage } : {}),
+      ...(args.model ? { model: args.model } : {}),
+      ...(args.reportedCostUsd !== undefined ? { reportedCostUsd: args.reportedCostUsd } : {}),
     };
     if (args.exitCode === 0) this._state = "completed";
     else if (args.exitCode === null) this._state = "stopped";
@@ -245,12 +253,14 @@ async function buildHarness() {
 
   const admin = new FakeAdmin("backend");
   const spawner = new FakeSpawner();
+  const costLedger = new TaskCostLedger({ rootDir: root });
   const runner = new TicketRunner({
     admin: admin as unknown as RepoAdminSession,
     repoAssignment: repoAssignments[0],
     channel,
     channelStore,
     spawner: spawner as unknown as WorkerSpawner,
+    costLedger,
     now: () => "2026-04-21T00:00:00.000Z",
   });
 
@@ -258,7 +268,7 @@ async function buildHarness() {
     await rm(root, { recursive: true, force: true });
   };
 
-  return { root, channelStore, channel, admin, spawner, runner, cleanup };
+  return { root, channelStore, channel, admin, spawner, costLedger, runner, cleanup };
 }
 
 describe("TicketRunner", () => {
@@ -368,6 +378,71 @@ describe("TicketRunner", () => {
 
     // Event emitted on the runner (AC4).
     expect(failures).toEqual([{ ticketId: "t-fail", exitCode: 2 }]);
+  });
+
+  it("records usage from a failed live worker and prefers its reported total cost", async () => {
+    const h = await buildHarness();
+    cleanup = h.cleanup;
+
+    h.admin.enqueue(
+      buildTicket("t-cost", { runId: "run-cost", taskType: "feature_small", attempt: 2 })
+    );
+    const drainP = h.runner.drain();
+    await waitUntil(() => h.spawner.spawned.length >= 1);
+    h.spawner.last().fire({
+      exitCode: 2,
+      tokenUsage: { inputTokens: 1_000_000, outputTokens: 1_000_000 },
+      model: "claude-sonnet-4-5",
+      reportedCostUsd: 0.5,
+    });
+    await drainP;
+
+    const lines = await h.costLedger.readAll();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      runId: "run-cost",
+      ticketId: "t-cost",
+      taskType: "feature_small",
+      attempt: 3,
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      costUsd: 0.5,
+    });
+  });
+
+  it("records a positive provider estimate when token usage is missing", async () => {
+    const h = await buildHarness();
+    cleanup = h.cleanup;
+
+    h.admin.enqueue(buildTicket("t-no-usage", { runId: "run-cost", taskType: "feature_small" }));
+    const drainP = h.runner.drain();
+    await waitUntil(() => h.spawner.spawned.length >= 1);
+    h.spawner.last().fire({ exitCode: 2, reportedCostUsd: 0.5 });
+    await drainP;
+
+    expect(await h.costLedger.readAll()).toEqual([
+      expect.objectContaining({
+        runId: "run-cost",
+        ticketId: "t-no-usage",
+        taskType: "feature_small",
+        inputTokens: 0,
+        outputTokens: 0,
+        costUsd: 0.5,
+      }),
+    ]);
+  });
+
+  it("does not fabricate a ledger entry when the worker reports no cost data", async () => {
+    const h = await buildHarness();
+    cleanup = h.cleanup;
+
+    h.admin.enqueue(buildTicket("t-no-cost", { runId: "run-cost", taskType: "feature_small" }));
+    const drainP = h.runner.drain();
+    await waitUntil(() => h.spawner.spawned.length >= 1);
+    h.spawner.last().fire({ exitCode: 2 });
+    await drainP;
+
+    expect(await h.costLedger.readAll()).toEqual([]);
   });
 
   it("clean exit with no PR URL fails the ticket and preserves the worktree", async () => {

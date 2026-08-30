@@ -52,6 +52,7 @@
 
 import { EventEmitter } from "node:events";
 
+import type { TaskCostLedger } from "../budget/task-cost-ledger.js";
 import type { ChannelStore } from "../channels/channel-store.js";
 import type { Channel, RepoAssignment } from "../domain/channel.js";
 import type { TicketLedgerEntry, TicketStatus } from "../domain/ticket.js";
@@ -83,6 +84,7 @@ export interface TicketRunnerOptions {
   channel: Channel;
   channelStore: ChannelStore;
   spawner: WorkerSpawner;
+  costLedger?: TaskCostLedger;
   /**
    * Clock for `updatedAt` stamps. Tests inject deterministic values so the
    * ticket mirror is snapshot-friendly. Defaults to `() => new Date().toISOString()`.
@@ -120,6 +122,7 @@ export class TicketRunner {
   private readonly channel: Channel;
   private readonly channelStore: ChannelStore;
   private readonly spawner: WorkerSpawner;
+  private readonly costLedger?: TaskCostLedger;
   private readonly now: () => string;
   private readonly prUrlFallback?: (args: {
     branch: string;
@@ -159,6 +162,7 @@ export class TicketRunner {
     this.channel = options.channel;
     this.channelStore = options.channelStore;
     this.spawner = options.spawner;
+    this.costLedger = options.costLedger;
     this.now = options.now ?? (() => new Date().toISOString());
     this.prUrlFallback = options.prUrlFallback;
   }
@@ -432,6 +436,7 @@ export class TicketRunner {
     });
 
     this.activeHandles.delete(ticket.ticketId);
+    await this.recordCost(ticket, evt);
 
     // Resolve the PR URL: prefer stdout-tail; fall back to an injected
     // probe (typically `gh pr list --head <branch>`).
@@ -545,6 +550,40 @@ export class TicketRunner {
           }`
         );
       });
+  }
+
+  private async recordCost(ticket: TicketLedgerEntry, evt: WorkerExitEvent): Promise<void> {
+    if (!this.costLedger) return;
+    const hasReportedCost =
+      evt.reportedCostUsd !== undefined &&
+      Number.isFinite(evt.reportedCostUsd) &&
+      evt.reportedCostUsd > 0;
+    if (!evt.tokenUsage && !hasReportedCost) return;
+    if (!ticket.runId || !ticket.taskType) {
+      console.warn(
+        `[cost] live worker ${ticket.ticketId} has cost data but no run classification; ` +
+          `omitting it from the task cost ledger.`
+      );
+      return;
+    }
+    try {
+      await this.costLedger.record({
+        runId: ticket.runId,
+        ticketId: ticket.ticketId,
+        taskType: ticket.taskType,
+        workKind: "implement_phase",
+        attempt: (ticket.attempt ?? 0) + 1,
+        model: evt.model,
+        tokenUsage: evt.tokenUsage ?? { inputTokens: 0, outputTokens: 0 },
+        ...(evt.reportedCostUsd !== undefined ? { reportedCostUsd: evt.reportedCostUsd } : {}),
+      });
+    } catch (err) {
+      console.warn(
+        `[cost] ledger write failed (runId=${ticket.runId} ticketId=${ticket.ticketId}): ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
   }
 
   private async updateTicket(

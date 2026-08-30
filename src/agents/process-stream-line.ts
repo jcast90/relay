@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { TokenUsage } from "../domain/agent.js";
 
 /**
@@ -19,7 +21,14 @@ export interface StreamParseState {
    * `assistant` / `result` events as fallbacks.
    */
   capturedModel: string | null;
+  reportedCostUsd: number | null;
+  maxAccumTextChars?: number;
+  lastAssistantTextHash?: string;
 }
+
+export type ProcessedStreamLine =
+  | { kind: "diagnostic"; text: string }
+  | { kind: "structured"; assistantText?: string };
 
 /**
  * Coerce an unknown value to a non-negative integer. Non-finite / non-numeric
@@ -28,7 +37,22 @@ export interface StreamParseState {
  */
 function num(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return 0;
-  return Math.trunc(value);
+  const truncated = Math.trunc(value);
+  return Number.isSafeInteger(truncated) ? truncated : 0;
+}
+
+function sumTokens(...values: number[]): number {
+  const total = values.reduce((sum, value) => sum + value, 0);
+  return Number.isSafeInteger(total) ? total : 0;
+}
+
+function retainTextTail(text: string, maxChars: number | undefined): string {
+  if (maxChars === undefined || text.length <= maxChars) return text;
+  return maxChars === 0 ? "" : text.slice(-maxChars);
+}
+
+function hashText(text: string): string {
+  return createHash("sha256").update(text).digest("base64");
 }
 
 /**
@@ -44,7 +68,7 @@ export function normalizeClaudeUsage(usage: Record<string, unknown>): TokenUsage
   const cacheRead = num(usage.cache_read_input_tokens);
   const cacheWrite = num(usage.cache_creation_input_tokens);
   const result: TokenUsage = {
-    inputTokens: input + cacheRead + cacheWrite,
+    inputTokens: sumTokens(input, cacheRead, cacheWrite),
     outputTokens: num(usage.output_tokens),
   };
   if (cacheRead > 0) result.cacheReadTokens = cacheRead;
@@ -67,7 +91,7 @@ export function normalizeCodexUsage(usage: Record<string, unknown>): TokenUsage 
   const input = num(usage.input_tokens);
   const cached = num(usage.cached_input_tokens);
   const result: TokenUsage = {
-    inputTokens: input + cached,
+    inputTokens: sumTokens(input, cached),
     outputTokens: num(usage.output_tokens),
   };
   if (cached > 0) result.cacheReadTokens = cached;
@@ -91,16 +115,16 @@ export function processStreamLine(
   line: string,
   state: StreamParseState,
   onLine: (line: string) => void
-): void {
-  if (!line) return;
+): ProcessedStreamLine {
+  if (!line) return { kind: "diagnostic", text: line };
   onLine(line);
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
   } catch {
-    return;
+    return { kind: "diagnostic", text: line };
   }
-  if (!parsed || typeof parsed !== "object") return;
+  if (!parsed || typeof parsed !== "object") return { kind: "structured" };
   const obj = parsed as Record<string, unknown>;
   if (obj.type === "system") {
     // The init event names the model the CLI resolved — the first and most
@@ -110,25 +134,56 @@ export function processStreamLine(
     const msg = obj.message as { content?: unknown; model?: unknown } | undefined;
     if (typeof msg?.model === "string") state.capturedModel ??= msg.model;
     const blocks = Array.isArray(msg?.content) ? msg?.content : null;
-    if (!blocks) return;
+    if (!blocks) return { kind: "structured" };
+    let assistantText = "";
     for (const block of blocks) {
       if (block && typeof block === "object") {
         const b = block as Record<string, unknown>;
         if (b.type === "text" && typeof b.text === "string") {
           state.accumText += b.text;
+          assistantText += b.text;
         }
       }
     }
+    const maxRetainedChars = state.maxAccumTextChars;
+    if (maxRetainedChars !== undefined && state.accumText.length > maxRetainedChars) {
+      state.accumText = retainTextTail(state.accumText, maxRetainedChars);
+    }
+    if (assistantText && maxRetainedChars !== undefined) {
+      state.lastAssistantTextHash = hashText(assistantText);
+    }
+    return assistantText ? { kind: "structured", assistantText } : { kind: "structured" };
   } else if (obj.type === "result") {
     // Deliberately NOT gated on `typeof obj.result === "string"`. Claude's
     // error subtypes (`error_max_turns`, `error_during_execution`) omit the
     // `result` string but DO carry `usage` — and those are the expensive runs.
     // Gating usage capture on the text meant a runaway agent that burned $12
     // recorded exactly $0.
-    if (typeof obj.result === "string") state.resultText = obj.result;
+    if (typeof obj.result === "string") {
+      state.resultText = retainTextTail(obj.result, state.maxAccumTextChars);
+    }
     if (typeof obj.model === "string") state.capturedModel ??= obj.model;
+    if (
+      typeof obj.total_cost_usd === "number" &&
+      Number.isFinite(obj.total_cost_usd) &&
+      obj.total_cost_usd >= 0 &&
+      obj.total_cost_usd <= Number.MAX_SAFE_INTEGER
+    ) {
+      state.reportedCostUsd = obj.total_cost_usd;
+    }
     if (obj.usage && typeof obj.usage === "object") {
-      state.capturedUsage = normalizeClaudeUsage(obj.usage as Record<string, unknown>);
+      const usage = normalizeClaudeUsage(obj.usage as Record<string, unknown>);
+      if (usage.inputTokens > 0 || usage.outputTokens > 0) {
+        state.capturedUsage = usage;
+      }
+    }
+    if (typeof obj.result === "string") {
+      const alreadyEmitted =
+        state.maxAccumTextChars === undefined
+          ? state.accumText.includes(obj.result)
+          : state.lastAssistantTextHash === hashText(obj.result);
+      if (!alreadyEmitted) return { kind: "structured", assistantText: obj.result };
     }
   }
+  return { kind: "structured" };
 }
