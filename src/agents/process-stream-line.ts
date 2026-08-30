@@ -20,6 +20,8 @@ export interface StreamParseState {
    */
   capturedModel: string | null;
   reportedCostUsd: number | null;
+  maxAccumTextChars?: number;
+  lastAssistantText?: string;
 }
 
 export type ProcessedStreamLine =
@@ -126,6 +128,18 @@ export function processStreamLine(
         }
       }
     }
+    const maxRetainedChars = state.maxAccumTextChars;
+    if (maxRetainedChars !== undefined && state.accumText.length > maxRetainedChars) {
+      state.accumText = maxRetainedChars === 0 ? "" : state.accumText.slice(-maxRetainedChars);
+    }
+    if (assistantText) {
+      state.lastAssistantText =
+        maxRetainedChars !== undefined && assistantText.length > maxRetainedChars
+          ? maxRetainedChars === 0
+            ? ""
+            : assistantText.slice(-maxRetainedChars)
+          : assistantText;
+    }
     return assistantText ? { kind: "structured", assistantText } : { kind: "structured" };
   } else if (obj.type === "result") {
     // Deliberately NOT gated on `typeof obj.result === "string"`. Claude's
@@ -148,7 +162,7 @@ export function processStreamLine(
         state.capturedUsage = usage;
       }
     }
-    if (typeof obj.result === "string" && !state.accumText.includes(obj.result)) {
+    if (typeof obj.result === "string" && state.lastAssistantText !== obj.result) {
       return { kind: "structured", assistantText: obj.result };
     }
   }

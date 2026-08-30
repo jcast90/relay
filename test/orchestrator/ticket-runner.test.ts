@@ -410,7 +410,7 @@ describe("TicketRunner", () => {
     });
   });
 
-  it("does not fabricate a ledger entry when the worker reports no usage", async () => {
+  it("records a positive provider estimate when token usage is missing", async () => {
     const h = await buildHarness();
     cleanup = h.cleanup;
 
@@ -418,6 +418,28 @@ describe("TicketRunner", () => {
     const drainP = h.runner.drain();
     await waitUntil(() => h.spawner.spawned.length >= 1);
     h.spawner.last().fire({ exitCode: 2, reportedCostUsd: 0.5 });
+    await drainP;
+
+    expect(await h.costLedger.readAll()).toEqual([
+      expect.objectContaining({
+        runId: "run-cost",
+        ticketId: "t-no-usage",
+        taskType: "feature_small",
+        inputTokens: 0,
+        outputTokens: 0,
+        costUsd: 0.5,
+      }),
+    ]);
+  });
+
+  it("does not fabricate a ledger entry when the worker reports no cost data", async () => {
+    const h = await buildHarness();
+    cleanup = h.cleanup;
+
+    h.admin.enqueue(buildTicket("t-no-cost", { runId: "run-cost", taskType: "feature_small" }));
+    const drainP = h.runner.drain();
+    await waitUntil(() => h.spawner.spawned.length >= 1);
+    h.spawner.last().fire({ exitCode: 2 });
     await drainP;
 
     expect(await h.costLedger.readAll()).toEqual([]);

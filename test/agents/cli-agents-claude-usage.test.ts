@@ -87,4 +87,60 @@ describe("processStreamLine — Claude streaming usage capture", () => {
 
     expect(state.reportedCostUsd).toBe(0.2);
   });
+
+  it("bounds retained assistant text when the caller configures a limit", () => {
+    const state = { ...freshState(), maxAccumTextChars: 8 };
+
+    processStreamLine(
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "0123456789" }] },
+      }),
+      state,
+      () => {}
+    );
+
+    expect(state.accumText).toBe("23456789");
+    expect(state.lastAssistantText).toBe("23456789");
+  });
+
+  it("retains a terminal result that is only a substring of earlier assistant text", () => {
+    const state = freshState();
+
+    processStreamLine(
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Work already done earlier." }] },
+      }),
+      state,
+      () => {}
+    );
+    const result = processStreamLine(
+      JSON.stringify({ type: "result", result: "done" }),
+      state,
+      () => {}
+    );
+
+    expect(result).toEqual({ kind: "structured", assistantText: "done" });
+  });
+
+  it("does not repeat a terminal result that exactly matches the last assistant text", () => {
+    const state = freshState();
+
+    processStreamLine(
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "done" }] },
+      }),
+      state,
+      () => {}
+    );
+    const result = processStreamLine(
+      JSON.stringify({ type: "result", result: "done" }),
+      state,
+      () => {}
+    );
+
+    expect(result).toEqual({ kind: "structured" });
+  });
 });

@@ -553,10 +553,15 @@ export class TicketRunner {
   }
 
   private async recordCost(ticket: TicketLedgerEntry, evt: WorkerExitEvent): Promise<void> {
-    if (!this.costLedger || !evt.tokenUsage) return;
+    if (!this.costLedger) return;
+    const hasReportedCost =
+      evt.reportedCostUsd !== undefined &&
+      Number.isFinite(evt.reportedCostUsd) &&
+      evt.reportedCostUsd > 0;
+    if (!evt.tokenUsage && !hasReportedCost) return;
     if (!ticket.runId || !ticket.taskType) {
       console.warn(
-        `[cost] live worker ${ticket.ticketId} has usage but no run classification; ` +
+        `[cost] live worker ${ticket.ticketId} has cost data but no run classification; ` +
           `omitting it from the task cost ledger.`
       );
       return;
@@ -569,7 +574,7 @@ export class TicketRunner {
         workKind: "implement_phase",
         attempt: (ticket.attempt ?? 0) + 1,
         model: evt.model,
-        tokenUsage: evt.tokenUsage,
+        tokenUsage: evt.tokenUsage ?? { inputTokens: 0, outputTokens: 0 },
         ...(evt.reportedCostUsd !== undefined ? { reportedCostUsd: evt.reportedCostUsd } : {}),
       });
     } catch (err) {

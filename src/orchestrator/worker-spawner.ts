@@ -54,6 +54,7 @@ import type { SandboxProvider, SandboxRef } from "../execution/sandbox.js";
  */
 export const WORKER_STDOUT_TAIL_LINES = 200;
 export const WORKER_STDERR_TAIL_LINES = 200;
+export const WORKER_STREAM_TEXT_CHARS = 64 * 1024;
 
 /**
  * Env vars a worker's Claude/Codex subprocess is allowed to read from the
@@ -422,6 +423,7 @@ class LiveWorkerHandle implements WorkerHandle {
     capturedUsage: null,
     capturedModel: null,
     reportedCostUsd: null,
+    maxAccumTextChars: WORKER_STREAM_TEXT_CHARS,
   };
   private _detectedPrUrl: string | null = null;
   private finalEvent: WorkerExitEvent | null = null;
@@ -557,11 +559,8 @@ class LiveWorkerHandle implements WorkerHandle {
     const processed = processStreamLine(line, this.streamState, () => {});
     const text = processed.kind === "diagnostic" ? processed.text : processed.assistantText;
     if (text) this.pushHumanText(text);
-    const prText =
-      processed.kind === "diagnostic"
-        ? processed.text
-        : (processed.assistantText ?? this.streamState.accumText);
-    if (!this._detectedPrUrl) {
+    const prText = processed.kind === "diagnostic" ? processed.text : processed.assistantText;
+    if (!this._detectedPrUrl && prText) {
       const match = prText.match(PR_URL_PATTERN);
       if (match) this._detectedPrUrl = match[0];
     }
