@@ -617,7 +617,7 @@ A **`CLAUDE.md`** at the repo root (when present) tells any Claude agent working
 ## Known limits
 
 - **Spawn is cross-platform but lightly tested off macOS.** macOS is daily-driven; Linux and Windows branches are compile-checked and unit-tested but real-device integration testing is still the gate before tagging a release.
-- **Cost guardrails not yet implemented.** Per-session context-window telemetry ships in v0.7.x (see [Token-usage telemetry](#token-usage-telemetry)); cost tracking and per-run dollar / token budget caps are still a follow-up. Use `RELAY_AUTO_APPROVE=1` with care.
+- **Cost reporting is observational, not a guardrail.** `rly cost` aggregates the per-task ledger, using Claude's provider-reported estimate when available and token-table estimates otherwise. These are not billing statements, and enforced per-run dollar / token caps are still a follow-up. Use `RELAY_AUTO_APPROVE=1` with care.
 
 ## Roadmap
 

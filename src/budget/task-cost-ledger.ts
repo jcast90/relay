@@ -65,7 +65,7 @@ export class TaskCostLedger {
    */
   record(input: TaskCostRecordInput): Promise<void> {
     const usage = input.tokenUsage;
-    const line: TaskCostCall = {
+    const candidate = {
       schemaVersion: TASK_COST_SCHEMA_VERSION,
       ts: input.ts ?? new Date().toISOString(),
       runId: input.runId,
@@ -81,10 +81,15 @@ export class TaskCostLedger {
       costUsd:
         input.reportedCostUsd !== undefined &&
         Number.isFinite(input.reportedCostUsd) &&
-        input.reportedCostUsd > 0
+        input.reportedCostUsd > 0 &&
+        input.reportedCostUsd <= Number.MAX_SAFE_INTEGER
           ? input.reportedCostUsd
           : costUsd(input.model, usage),
     };
+
+    const parsed = TaskCostCallSchema.safeParse(candidate);
+    if (!parsed.success) return Promise.reject(parsed.error);
+    const line: TaskCostCall = parsed.data;
 
     const serialized = JSON.stringify(line) + "\n";
     this.writeChain = this.writeChain.then(async () => {

@@ -32,7 +32,12 @@ import type {
   SandboxProvider,
   SandboxRef,
 } from "../../src/execution/sandbox.js";
-import { WorkerSpawner, type WorkerExitEvent } from "../../src/orchestrator/worker-spawner.js";
+import {
+  WORKER_STREAM_LINE_CHARS,
+  WORKER_STREAM_TEXT_CHARS,
+  WorkerSpawner,
+  type WorkerExitEvent,
+} from "../../src/orchestrator/worker-spawner.js";
 
 type ExitListener = (code: number | null, signal: NodeJS.Signals | null) => void;
 type StdListener = (chunk: string) => void;
@@ -337,6 +342,70 @@ describe("WorkerSpawner", () => {
     expect(evt.stdoutTail).toBe('starting worker\n{"type":"assistant"');
     expect(evt.tokenUsage).toBeUndefined();
     expect(evt.reportedCostUsd).toBeUndefined();
+  });
+
+  it("does not treat a PR URL in diagnostic output as assistant-authored", async () => {
+    const { handle } = await spawner.spawn({
+      ticket: buildTicket("t-diagnostic-pr"),
+      repoAssignment: BACKEND,
+      channel: buildChannel(false),
+    });
+    const child = invoker.last();
+    const exitP = new Promise<WorkerExitEvent>((resolve) => handle.onExit(resolve));
+
+    child.emitStdout("warning: https://github.com/example/project/pull/123\n");
+    child.emitExit(0);
+
+    const evt = await exitP;
+    expect(evt.stdoutTail).toContain("https://github.com/example/project/pull/123");
+    expect(evt.detectedPrUrl).toBeNull();
+  });
+
+  it("bounds retained stdout and stderr by characters as well as lines", async () => {
+    const { handle } = await spawner.spawn({
+      ticket: buildTicket("t-bounded-tail"),
+      repoAssignment: BACKEND,
+      channel: buildChannel(false),
+    });
+    const child = invoker.last();
+    const exitP = new Promise<WorkerExitEvent>((resolve) => handle.onExit(resolve));
+    const suffix = "tail-marker";
+
+    child.emitStdout(
+      `${JSON.stringify({
+        type: "result",
+        result: `${"x".repeat(WORKER_STREAM_TEXT_CHARS + 100)}${suffix}`,
+      })}\n`
+    );
+    child.emitStderr(`${"e".repeat(WORKER_STREAM_TEXT_CHARS + 100)}${suffix}\n`);
+    child.emitExit(0);
+
+    const evt = await exitP;
+    expect(evt.stdoutTail.length).toBeLessThanOrEqual(WORKER_STREAM_TEXT_CHARS);
+    expect(evt.stderrTail.length).toBeLessThanOrEqual(WORKER_STREAM_TEXT_CHARS);
+    expect(evt.stdoutTail.endsWith(suffix)).toBe(true);
+    expect(evt.stderrTail.endsWith(suffix)).toBe(true);
+  });
+
+  it("omits oversized unterminated stdout and stderr lines", async () => {
+    const { handle } = await spawner.spawn({
+      ticket: buildTicket("t-oversized-partial"),
+      repoAssignment: BACKEND,
+      channel: buildChannel(false),
+    });
+    const child = invoker.last();
+    const exitP = new Promise<WorkerExitEvent>((resolve) => handle.onExit(resolve));
+    const oversized = "x".repeat(WORKER_STREAM_LINE_CHARS + 1);
+
+    child.emitStdout(oversized);
+    child.emitStderr(oversized);
+    child.emitExit(2);
+
+    const evt = await exitP;
+    expect(evt.stdoutTail).toContain("stdout line exceeded");
+    expect(evt.stderrTail).toContain("stderr line exceeded");
+    expect(evt.stdoutTail.length).toBeLessThanOrEqual(WORKER_STREAM_TEXT_CHARS);
+    expect(evt.stderrTail.length).toBeLessThanOrEqual(WORKER_STREAM_TEXT_CHARS);
   });
 
   it("parses a final partial result line before exit", async () => {

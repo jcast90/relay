@@ -10,6 +10,8 @@ import { ComplexityTierSchema } from "./classification.js";
  */
 export const TASK_COST_SCHEMA_VERSION = 1 as const;
 
+const SafeTokenCountSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+
 /**
  * One appended line in `~/.relay/task-costs.jsonl` — the USD cost of a SINGLE
  * agent call (one `agent.run()` / executor run), tagged with the task it
@@ -42,12 +44,12 @@ export const TaskCostCallSchema = z.object({
   attempt: z.number().int().positive().default(1),
   /** Model that produced this call. Absent → costUsd was billed at $0. */
   model: z.string().optional(),
-  inputTokens: z.number().int().nonnegative(),
-  outputTokens: z.number().int().nonnegative(),
-  cacheReadTokens: z.number().int().nonnegative().optional(),
-  cacheWriteTokens: z.number().int().nonnegative().optional(),
+  inputTokens: SafeTokenCountSchema,
+  outputTokens: SafeTokenCountSchema,
+  cacheReadTokens: SafeTokenCountSchema.optional(),
+  cacheWriteTokens: SafeTokenCountSchema.optional(),
   /** USD cost of this call, computed via `costUsd()` at record time. */
-  costUsd: z.number().nonnegative(),
+  costUsd: z.number().nonnegative().max(Number.MAX_SAFE_INTEGER),
 });
 
 export type TaskCostCall = z.infer<typeof TaskCostCallSchema>;

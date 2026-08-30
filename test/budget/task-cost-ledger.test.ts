@@ -87,6 +87,50 @@ describe("TaskCostLedger", () => {
     }
   });
 
+  it("falls back to token pricing when a provider total is outside the safe range", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "task-cost-"));
+    try {
+      const ledger = new TaskCostLedger({ rootDir: dir });
+      await ledger.record({
+        runId: "run-1",
+        ticketId: "t-1",
+        taskType: "bugfix",
+        workKind: "implement_phase",
+        attempt: 1,
+        model: "claude-sonnet-4-5",
+        tokenUsage: { inputTokens: 1_000_000, outputTokens: 0 },
+        reportedCostUsd: 1e308,
+      });
+
+      const [line] = await ledger.readAll();
+      expect(line?.costUsd).toBe(3);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unsafe token values instead of appending a corrupt line", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "task-cost-"));
+    try {
+      const ledger = new TaskCostLedger({ rootDir: dir });
+
+      await expect(
+        ledger.record({
+          runId: "run-1",
+          ticketId: "t-unsafe",
+          taskType: "bugfix",
+          workKind: "implement_phase",
+          attempt: 1,
+          model: "claude-sonnet-4-5",
+          tokenUsage: { inputTokens: Number.MAX_VALUE, outputTokens: 0 },
+        })
+      ).rejects.toThrow();
+      expect(await ledger.readAll()).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("bills $0 (with a warning) when the model is missing", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const dir = await mkdtemp(join(tmpdir(), "task-cost-"));
