@@ -1,6 +1,10 @@
 import { z } from "zod";
 
-import { ClassificationResultSchema, type ClassificationResult } from "./classification.js";
+import {
+  ClassificationResultSchema,
+  type ClassificationResult,
+  type ComplexityTier,
+} from "./classification.js";
 import { RetryPolicySchema } from "./phase-plan.js";
 import type { FailureCategory } from "./agent.js";
 import { AgentSpecialtySchema, type AgentSpecialty } from "./specialty.js";
@@ -83,6 +87,7 @@ export interface TicketLedgerEntry {
    * must do so by re-initializing, not by patching this field in place.
    */
   runId: string | null;
+  taskType?: ComplexityTier;
   /**
    * Optional alias of the repo (from `Channel.repoAssignments[].alias`) this
    * ticket should be routed to. When set, the orchestrator / spawner uses
@@ -126,7 +131,8 @@ export interface TicketExternalIds {
 
 export function initializeTicketLedger(
   tickets: TicketDefinition[],
-  runId: string | null = null
+  runId: string | null = null,
+  taskType?: ComplexityTier
 ): TicketLedgerEntry[] {
   const now = new Date().toISOString();
 
@@ -147,6 +153,7 @@ export function initializeTicketLedger(
     completedAt: null,
     updatedAt: now,
     runId,
+    ...(taskType ? { taskType } : {}),
   }));
 }
 

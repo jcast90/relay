@@ -33,6 +33,7 @@
 
 import { EventEmitter } from "node:events";
 
+import type { TokenUsage } from "../domain/agent.js";
 import type { Channel, RepoAssignment } from "../domain/channel.js";
 import type { AgentSpecialty } from "../domain/specialty.js";
 import type { TicketLedgerEntry } from "../domain/ticket.js";
@@ -42,6 +43,7 @@ import {
   type CommandInvoker,
   type SpawnedProcess,
 } from "../agents/command-invoker.js";
+import { processStreamLine, type StreamParseState } from "../agents/process-stream-line.js";
 import { GitWorktreeSandboxProvider } from "../execution/sandboxes/git-worktree.js";
 import type { SandboxProvider, SandboxRef } from "../execution/sandbox.js";
 
@@ -99,6 +101,9 @@ export interface WorkerExitEvent {
   stderrTail: string;
   /** PR URL detected in stdout, if any. Used by the ticket runner for AC3. */
   detectedPrUrl: string | null;
+  tokenUsage?: TokenUsage;
+  model?: string;
+  reportedCostUsd?: number;
 }
 
 export interface WorkerHandle {
@@ -179,6 +184,7 @@ export interface WorkerSpawnerOptions {
   invoker?: CommandInvoker;
   /** Session-id factory. Tests inject a deterministic one. */
   buildSessionId?: () => string;
+  buildPrompt?: typeof buildWorkerPrompt;
   /** Clock for short-timestamp branch suffixes. Tests inject a fixed value. */
   clock?: () => number;
   /**
@@ -261,6 +267,7 @@ export class WorkerSpawner {
   private readonly sandboxProvider: SandboxProvider;
   private readonly invoker: CommandInvoker;
   private readonly buildSessionId: () => string;
+  private readonly buildPrompt: typeof buildWorkerPrompt;
   private readonly clock: () => number;
   private readonly stopGraceMs: number;
 
@@ -268,6 +275,7 @@ export class WorkerSpawner {
     this.sandboxProvider = options.sandboxProvider ?? new GitWorktreeSandboxProvider();
     this.invoker = options.invoker ?? new NodeCommandInvoker();
     this.buildSessionId = options.buildSessionId ?? defaultBuildWorkerSessionId;
+    this.buildPrompt = options.buildPrompt ?? buildWorkerPrompt;
     this.clock = options.clock ?? Date.now;
     this.stopGraceMs = options.stopGraceMs ?? WORKER_STOP_GRACE_MS;
   }
@@ -322,10 +330,10 @@ export class WorkerSpawner {
     // stdin like a repo-admin session. The worker's own agent role governs
     // *what* it does; AL-14's scope is the spawn + monitoring, not the
     // prompt content.
-    const prompt = buildWorkerPrompt(ticket, repoAssignment, specialty);
+    const prompt = this.buildPrompt(ticket, repoAssignment, specialty);
     const fullAccess = channel.fullAccess === true;
 
-    const args: string[] = ["-p"];
+    const args: string[] = ["-p", "--output-format", "stream-json", "--verbose"];
     if (fullAccess) {
       // AC2 — inherit the channel's full-access flag.
       args.push("--dangerously-skip-permissions");
@@ -408,6 +416,13 @@ class LiveWorkerHandle implements WorkerHandle {
   private stderrBuf = "";
   private stdoutLines: string[] = [];
   private stderrLines: string[] = [];
+  private readonly streamState: StreamParseState = {
+    accumText: "",
+    resultText: null,
+    capturedUsage: null,
+    capturedModel: null,
+    reportedCostUsd: null,
+  };
   private _detectedPrUrl: string | null = null;
   private finalEvent: WorkerExitEvent | null = null;
 
@@ -539,13 +554,25 @@ class LiveWorkerHandle implements WorkerHandle {
 
   private pushStdoutLine(line: string): void {
     if (!line) return;
-    this.stdoutLines.push(line);
+    const processed = processStreamLine(line, this.streamState, () => {});
+    const text = processed.kind === "diagnostic" ? processed.text : processed.assistantText;
+    if (text) this.pushHumanText(text);
+    const prText =
+      processed.kind === "diagnostic"
+        ? processed.text
+        : (processed.assistantText ?? this.streamState.accumText);
+    if (!this._detectedPrUrl) {
+      const match = prText.match(PR_URL_PATTERN);
+      if (match) this._detectedPrUrl = match[0];
+    }
+  }
+
+  private pushHumanText(text: string): void {
+    for (const line of text.split("\n")) {
+      if (line) this.stdoutLines.push(line);
+    }
     if (this.stdoutLines.length > WORKER_STDOUT_TAIL_LINES) {
       this.stdoutLines.splice(0, this.stdoutLines.length - WORKER_STDOUT_TAIL_LINES);
-    }
-    if (!this._detectedPrUrl) {
-      const match = line.match(PR_URL_PATTERN);
-      if (match) this._detectedPrUrl = match[0];
     }
   }
 
@@ -585,6 +612,11 @@ class LiveWorkerHandle implements WorkerHandle {
       stdoutTail: this.stdoutLines.join("\n"),
       stderrTail: this.stderrLines.join("\n"),
       detectedPrUrl: this._detectedPrUrl,
+      ...(this.streamState.capturedUsage ? { tokenUsage: this.streamState.capturedUsage } : {}),
+      ...(this.streamState.capturedModel ? { model: this.streamState.capturedModel } : {}),
+      ...(this.streamState.reportedCostUsd !== null
+        ? { reportedCostUsd: this.streamState.reportedCostUsd }
+        : {}),
     };
     this.finalEvent = evt;
 

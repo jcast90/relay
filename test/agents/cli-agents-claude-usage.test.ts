@@ -10,7 +10,13 @@ import { processStreamLine, type StreamParseState } from "../../src/agents/proce
  */
 describe("processStreamLine — Claude streaming usage capture", () => {
   function freshState(): StreamParseState {
-    return { accumText: "", resultText: null, capturedUsage: null, capturedModel: null };
+    return {
+      accumText: "",
+      resultText: null,
+      capturedUsage: null,
+      capturedModel: null,
+      reportedCostUsd: null,
+    };
   }
 
   it("captures `usage` from the `result` event with cache tokens summed into inputTokens", () => {
@@ -55,5 +61,30 @@ describe("processStreamLine — Claude streaming usage capture", () => {
     processStreamLine(line, state, () => {});
     expect(state.capturedUsage?.inputTokens).toBe(100 + 200);
     expect(state.capturedUsage?.cacheWriteTokens).toBe(200);
+  });
+
+  it("keeps the latest valid reported total cost without summing cumulative result events", () => {
+    const state = freshState();
+
+    processStreamLine(
+      JSON.stringify({
+        type: "result",
+        total_cost_usd: 0.12,
+        usage: { input_tokens: 10, output_tokens: 2 },
+      }),
+      state,
+      () => {}
+    );
+    processStreamLine(
+      JSON.stringify({
+        type: "result",
+        total_cost_usd: 0.2,
+        usage: { input_tokens: 20, output_tokens: 4 },
+      }),
+      state,
+      () => {}
+    );
+
+    expect(state.reportedCostUsd).toBe(0.2);
   });
 });

@@ -32,7 +32,7 @@ import type {
   SandboxProvider,
   SandboxRef,
 } from "../../src/execution/sandbox.js";
-import { WorkerSpawner } from "../../src/orchestrator/worker-spawner.js";
+import { WorkerSpawner, type WorkerExitEvent } from "../../src/orchestrator/worker-spawner.js";
 
 type ExitListener = (code: number | null, signal: NodeJS.Signals | null) => void;
 type StdListener = (chunk: string) => void;
@@ -234,6 +234,9 @@ describe("WorkerSpawner", () => {
     expect(invoker.spawned).toHaveLength(1);
     expect(invoker.last().invocation.cwd).toBe(result.worktreePath);
     expect(invoker.last().invocation.command).toBe("claude");
+    expect(invoker.last().invocation.args).toContain("--output-format");
+    expect(invoker.last().invocation.args).toContain("stream-json");
+    expect(invoker.last().invocation.args).toContain("--verbose");
     expect(invoker.last().invocation.args).not.toContain("--dangerously-skip-permissions");
     expect(invoker.last().invocation.args).toContain("--permission-mode");
   });
@@ -267,26 +270,141 @@ describe("WorkerSpawner", () => {
     expect(args).not.toContain("--dangerously-skip-permissions");
   });
 
-  it("picks up PR URLs from stdout and surfaces them on the exit event", async () => {
+  it("parses structured output into a readable tail, PR URL, usage, model, and cost", async () => {
     const ticket = buildTicket("t-pr");
     const channel = buildChannel(false);
     const { handle } = await spawner.spawn({ ticket, repoAssignment: BACKEND, channel });
 
     const child = invoker.last();
-    const exitP = new Promise<{ detectedPrUrl: string | null; exitCode: number | null }>(
-      (resolve) => {
-        handle.onExit((e) => resolve({ detectedPrUrl: e.detectedPrUrl, exitCode: e.exitCode }));
-      }
-    );
+    const exitP = new Promise<WorkerExitEvent>((resolve) => handle.onExit(resolve));
 
-    child.emitStdout("opening PR...\nhttps://github.com/jcast90/relay/pull/42\ndone\n");
+    child.emitStdout(
+      [
+        JSON.stringify({ type: "system", subtype: "init", model: "claude-sonnet-4-5" }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            content: [
+              {
+                type: "text",
+                text: "Opened https://github.com/jcast90/relay/pull/42 for review.",
+              },
+            ],
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          result: "done",
+          total_cost_usd: 0.42,
+          usage: { input_tokens: 100, output_tokens: 25, cache_read_input_tokens: 50 },
+        }),
+        "",
+      ].join("\n")
+    );
     child.emitExit(0);
 
     const evt = await exitP;
     expect(evt.detectedPrUrl).toBe("https://github.com/jcast90/relay/pull/42");
     expect(evt.exitCode).toBe(0);
+    expect(evt.stdoutTail).toBe(
+      "Opened https://github.com/jcast90/relay/pull/42 for review.\ndone"
+    );
+    expect(evt.stdoutTail).not.toContain('\"type\":\"assistant\"');
+    expect(evt.tokenUsage).toEqual({
+      inputTokens: 150,
+      outputTokens: 25,
+      cacheReadTokens: 50,
+    });
+    expect(evt.model).toBe("claude-sonnet-4-5");
+    expect(evt.reportedCostUsd).toBe(0.42);
     expect(handle.state).toBe("completed");
     expect(handle.detectedPrUrl).toBe("https://github.com/jcast90/relay/pull/42");
+  });
+
+  it("preserves non-JSON diagnostics and malformed structured lines", async () => {
+    const { handle } = await spawner.spawn({
+      ticket: buildTicket("t-diagnostics"),
+      repoAssignment: BACKEND,
+      channel: buildChannel(false),
+    });
+    const child = invoker.last();
+    const exitP = new Promise<WorkerExitEvent>((resolve) => handle.onExit(resolve));
+
+    child.emitStdout('starting worker\n{"type":"assistant"\n');
+    child.emitExit(2);
+
+    const evt = await exitP;
+    expect(evt.stdoutTail).toBe('starting worker\n{"type":"assistant"');
+    expect(evt.tokenUsage).toBeUndefined();
+    expect(evt.reportedCostUsd).toBeUndefined();
+  });
+
+  it("parses a final partial result line before exit", async () => {
+    const { handle } = await spawner.spawn({
+      ticket: buildTicket("t-partial"),
+      repoAssignment: BACKEND,
+      channel: buildChannel(false),
+    });
+    const child = invoker.last();
+    const exitP = new Promise<WorkerExitEvent>((resolve) => handle.onExit(resolve));
+
+    child.emitStdout(
+      JSON.stringify({
+        type: "result",
+        total_cost_usd: 0.01,
+        usage: { input_tokens: 3, output_tokens: 1 },
+      })
+    );
+    child.emitExit(0);
+
+    const evt = await exitP;
+    expect(evt.tokenUsage).toEqual({ inputTokens: 3, outputTokens: 1 });
+    expect(evt.reportedCostUsd).toBe(0.01);
+  });
+
+  it("does not emit a confident usage reading for an empty usage object", async () => {
+    const { handle } = await spawner.spawn({
+      ticket: buildTicket("t-empty-usage"),
+      repoAssignment: BACKEND,
+      channel: buildChannel(false),
+    });
+    const child = invoker.last();
+    const exitP = new Promise<WorkerExitEvent>((resolve) => handle.onExit(resolve));
+
+    child.emitStdout(`${JSON.stringify({ type: "result", usage: {} })}\n`);
+    child.emitExit(2);
+
+    expect((await exitP).tokenUsage).toBeUndefined();
+  });
+
+  it("retains terminal result text and its PR URL after earlier assistant output", async () => {
+    const { handle } = await spawner.spawn({
+      ticket: buildTicket("t-terminal-result"),
+      repoAssignment: BACKEND,
+      channel: buildChannel(false),
+    });
+    const child = invoker.last();
+    const exitP = new Promise<WorkerExitEvent>((resolve) => handle.onExit(resolve));
+
+    child.emitStdout(
+      [
+        JSON.stringify({
+          type: "assistant",
+          message: { content: [{ type: "text", text: "Still working." }] },
+        }),
+        JSON.stringify({
+          type: "result",
+          result: "Opened https://github.com/jcast90/relay/pull/43",
+          usage: { input_tokens: 10, output_tokens: 2 },
+        }),
+        "",
+      ].join("\n")
+    );
+    child.emitExit(0);
+
+    const evt = await exitP;
+    expect(evt.stdoutTail).toBe("Still working.\nOpened https://github.com/jcast90/relay/pull/43");
+    expect(evt.detectedPrUrl).toBe("https://github.com/jcast90/relay/pull/43");
   });
 
   it("reports failure + stdout/stderr tail on non-zero exit", async () => {

@@ -1,5 +1,6 @@
 import type { SessionLifecycle, TransitionEvent } from "../lifecycle/session-lifecycle.js";
 import type { TokenTracker } from "../budget/token-tracker.js";
+import { TaskCostLedger } from "../budget/task-cost-ledger.js";
 import type { Channel, RepoAssignment } from "../domain/channel.js";
 import type { TicketLedgerEntry } from "../domain/ticket.js";
 import { ChannelStore } from "../channels/channel-store.js";
@@ -414,6 +415,9 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
   // instance avoids redundant on-disk state checks and keeps all
   // writes going through the same in-memory mirror.
   const channelStore = testOverrides?.channelStore ?? new ChannelStore();
+  const costLedger = new TaskCostLedger(
+    testOverrides?.rootDir ? { rootDir: testOverrides.rootDir } : {}
+  );
 
   // AL-16: inter-admin coordination bus. Construct BEFORE the pool so
   // the pool can thread the reference into each session it spawns —
@@ -644,6 +648,7 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
       allowedRepos,
       lifecycle,
       workerSpawner: testOverrides?.workerSpawner ?? new WorkerSpawner(),
+      costLedger,
       pollIntervalMs: testOverrides?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
       prPoller: testOverrides?.prPoller,
     });
@@ -696,6 +701,13 @@ export async function startAutonomousSession(opts: StartAutonomousSessionOptions
       })
     )
   );
+  await costLedger.flush().catch((err) => {
+    console.warn(
+      `[cost] ledger flush failed for session ${sessionId}: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+  });
 
   // AL-14 follow-up: terminal worktree sweep. Before we transition the
   // lifecycle, walk any ticket in `verifying` state whose PR has already
@@ -1074,6 +1086,7 @@ interface SteadyStateDriverArgs {
   allowedRepos: RepoAssignment[];
   lifecycle: SessionLifecycle;
   workerSpawner: WorkerSpawner;
+  costLedger: TaskCostLedger;
   pollIntervalMs: number;
   /**
    * AL-14 follow-up: optional merge-event subscription bus. When set,
@@ -1129,6 +1142,7 @@ async function runSteadyStateDriver(args: SteadyStateDriverArgs): Promise<Steady
     allowedRepos,
     lifecycle,
     workerSpawner,
+    costLedger,
     pollIntervalMs,
     prPoller,
   } = args;
@@ -1404,6 +1418,7 @@ async function runSteadyStateDriver(args: SteadyStateDriverArgs): Promise<Steady
           channel,
           channelStore,
           spawner: workerSpawner,
+          costLedger,
         });
         // A runner created AFTER a wind-down / kill fired inherits the
         // stop-accepting-new flag immediately so its drain loop exits

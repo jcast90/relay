@@ -112,4 +112,9 @@ describe("initializeTicketLedger", () => {
     expect(ledger[0].runId).toBe("run-abc");
     expect(ledger[1].runId).toBe("run-abc");
   });
+
+  it("tags every entry with the supplied task type", () => {
+    const ledger = initializeTicketLedger([ticket("a"), ticket("b")], "run-abc", "bugfix");
+    expect(ledger.map((entry) => entry.taskType)).toEqual(["bugfix", "bugfix"]);
+  });
 });

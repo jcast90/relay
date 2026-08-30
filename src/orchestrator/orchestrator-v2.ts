@@ -314,7 +314,7 @@ export class OrchestratorV2 {
     });
 
     run.ticketPlan = ticketPlan;
-    run.ticketLedger = initializeTicketLedger(ticketPlan.tickets, run.id);
+    run.ticketLedger = initializeTicketLedger(ticketPlan.tickets, run.id, classification.tier);
 
     await this.artifactStore.saveTicketLedger({
       runId: run.id,
@@ -434,7 +434,7 @@ export class OrchestratorV2 {
 
     const ticketPlan = buildTicketPlanFromPhases(trivialPlan, classification);
     run.ticketPlan = ticketPlan;
-    run.ticketLedger = initializeTicketLedger(ticketPlan.tickets, run.id);
+    run.ticketLedger = initializeTicketLedger(ticketPlan.tickets, run.id, classification.tier);
 
     // Same log-and-continue policy as the regular decomposition path.
     await this.mirrorToChannelBoard(run);

@@ -35,7 +35,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SpawnedProcess } from "../../src/agents/command-invoker.js";
+import { TaskCostLedger } from "../../src/budget/task-cost-ledger.js";
 import { ChannelStore } from "../../src/channels/channel-store.js";
+import type { TokenUsage } from "../../src/domain/agent.js";
 import type { Channel, RepoAssignment } from "../../src/domain/channel.js";
 import type { TicketLedgerEntry } from "../../src/domain/ticket.js";
 import type { SandboxRef } from "../../src/execution/sandbox.js";
@@ -161,6 +163,9 @@ class FakeWorkerHandle implements WorkerHandle {
     prUrl?: string | null;
     stdoutTail?: string;
     stderrTail?: string;
+    tokenUsage?: TokenUsage;
+    model?: string;
+    reportedCostUsd?: number;
   }): void {
     if (this.finalEvent) return;
     this._prUrl = args.prUrl ?? null;
@@ -176,6 +181,9 @@ class FakeWorkerHandle implements WorkerHandle {
       stdoutTail: args.stdoutTail ?? "",
       stderrTail: args.stderrTail ?? "",
       detectedPrUrl: args.prUrl ?? null,
+      ...(args.tokenUsage ? { tokenUsage: args.tokenUsage } : {}),
+      ...(args.model ? { model: args.model } : {}),
+      ...(args.reportedCostUsd !== undefined ? { reportedCostUsd: args.reportedCostUsd } : {}),
     };
     if (args.exitCode === 0) this._state = "completed";
     else if (args.exitCode === null) this._state = "stopped";
@@ -283,7 +291,8 @@ function makeTicket(id: string, alias: string): TicketLedgerEntry {
     startedAt: null,
     completedAt: null,
     updatedAt: "2026-04-21T00:00:00.000Z",
-    runId: null,
+    runId: "run-drain-cost",
+    taskType: "feature_small",
     assignedAlias: alias,
   };
 }
@@ -428,12 +437,20 @@ describe("startAutonomousSession — AL-14 drain wiring", () => {
     // Complete fe-1 and be-1 so each admin progresses to its second
     // ticket (fe-2 / be-2 respectively). PR URLs are distinct so the
     // verifying-state mirror on the board doesn't collide.
-    fx.workerSpawner
-      .handles("frontend")[0]
-      .fire({ exitCode: 0, prUrl: "https://github.com/o/r/pull/1" });
-    fx.workerSpawner
-      .handles("backend")[0]
-      .fire({ exitCode: 0, prUrl: "https://github.com/o/r/pull/2" });
+    fx.workerSpawner.handles("frontend")[0].fire({
+      exitCode: 0,
+      prUrl: "https://github.com/o/r/pull/1",
+      tokenUsage: { inputTokens: 10, outputTokens: 2 },
+      model: "claude-sonnet-4-6",
+      reportedCostUsd: 0.01,
+    });
+    fx.workerSpawner.handles("backend")[0].fire({
+      exitCode: 0,
+      prUrl: "https://github.com/o/r/pull/2",
+      tokenUsage: { inputTokens: 20, outputTokens: 4 },
+      model: "claude-sonnet-4-6",
+      reportedCostUsd: 0.02,
+    });
 
     await waitUntil(
       () =>
@@ -444,12 +461,20 @@ describe("startAutonomousSession — AL-14 drain wiring", () => {
     expect(fx.workerSpawner.handles("backend")[1].ticketId).toBe("be-2");
 
     // Complete the second ticket on each admin.
-    fx.workerSpawner
-      .handles("frontend")[1]
-      .fire({ exitCode: 0, prUrl: "https://github.com/o/r/pull/3" });
-    fx.workerSpawner
-      .handles("backend")[1]
-      .fire({ exitCode: 0, prUrl: "https://github.com/o/r/pull/4" });
+    fx.workerSpawner.handles("frontend")[1].fire({
+      exitCode: 0,
+      prUrl: "https://github.com/o/r/pull/3",
+      tokenUsage: { inputTokens: 30, outputTokens: 6 },
+      model: "claude-sonnet-4-6",
+      reportedCostUsd: 0.03,
+    });
+    fx.workerSpawner.handles("backend")[1].fire({
+      exitCode: 0,
+      prUrl: "https://github.com/o/r/pull/4",
+      tokenUsage: { inputTokens: 40, outputTokens: 8 },
+      model: "claude-sonnet-4-6",
+      reportedCostUsd: 0.04,
+    });
 
     await driverP;
 
@@ -478,6 +503,13 @@ describe("startAutonomousSession — AL-14 drain wiring", () => {
     // SPAWN-COUNT INVARIANT: exactly one spawn per ticket (no retries,
     // no duplicates).
     expect(fx.workerSpawner.spawn).toHaveBeenCalledTimes(4);
+
+    const costLines = await new TaskCostLedger({ rootDir: fx.root }).readAll();
+    expect(costLines).toHaveLength(4);
+    expect(costLines.map((line) => line.ticketId).sort()).toEqual(["be-1", "be-2", "fe-1", "fe-2"]);
+    expect(costLines.every((line) => line.runId === "run-drain-cost")).toBe(true);
+    expect(costLines.every((line) => line.taskType === "feature_small")).toBe(true);
+    expect(costLines.reduce((sum, line) => sum + line.costUsd, 0)).toBeCloseTo(0.1);
   }, 10_000);
 
   it("one admin's drain failure does NOT wedge the other admin's drain", async () => {

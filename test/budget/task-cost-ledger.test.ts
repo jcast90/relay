@@ -43,6 +43,50 @@ describe("TaskCostLedger", () => {
     }
   });
 
+  it("uses a provider-reported total instead of adding token-derived cost", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "task-cost-"));
+    try {
+      const ledger = new TaskCostLedger({ rootDir: dir });
+      await ledger.record({
+        runId: "run-1",
+        ticketId: "t-1",
+        taskType: "feature_small",
+        workKind: "implement_phase",
+        attempt: 1,
+        model: "claude-sonnet-4-5",
+        tokenUsage: { inputTokens: 1_000_000, outputTokens: 1_000_000 },
+        reportedCostUsd: 0.123,
+      });
+
+      const [line] = await ledger.readAll();
+      expect(line?.costUsd).toBe(0.123);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to token pricing when a failed provider reports zero cost", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "task-cost-"));
+    try {
+      const ledger = new TaskCostLedger({ rootDir: dir });
+      await ledger.record({
+        runId: "run-1",
+        ticketId: "t-1",
+        taskType: "bugfix",
+        workKind: "implement_phase",
+        attempt: 1,
+        model: "claude-sonnet-4-5",
+        tokenUsage: { inputTokens: 1_000_000, outputTokens: 0 },
+        reportedCostUsd: 0,
+      });
+
+      const [line] = await ledger.readAll();
+      expect(line?.costUsd).toBe(3);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("bills $0 (with a warning) when the model is missing", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const dir = await mkdtemp(join(tmpdir(), "task-cost-"));

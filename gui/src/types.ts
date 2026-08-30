@@ -26,6 +26,13 @@ export type ChannelRef = {
 };
 
 export type ChannelTier = "feature_large" | "feature" | "bugfix" | "chore" | "question";
+export type ComplexityTier =
+  | "trivial"
+  | "bugfix"
+  | "feature_small"
+  | "feature_large"
+  | "architectural"
+  | "multi_repo";
 
 // Must stay in sync with the Rust `TicketProvider` enum in
 // `crates/harness-data/src/lib.rs`. `unknown` is the forward-compat catch-all
@@ -193,6 +200,7 @@ export type TicketLedgerEntry = {
   // Alias of the channel repo assignment this ticket is routed to.
   // Optional; absent on tickets written before per-repo routing existed.
   assignedAlias?: string;
+  taskType?: ComplexityTier;
   // Provenance. Absent = Relay-authored. "linear" = read-only mirror of
   // a Linear issue surfaced by the Linear → channel-board poller.
   source?: "relay" | "linear";

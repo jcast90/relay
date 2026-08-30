@@ -19,7 +19,12 @@ export interface StreamParseState {
    * `assistant` / `result` events as fallbacks.
    */
   capturedModel: string | null;
+  reportedCostUsd: number | null;
 }
+
+export type ProcessedStreamLine =
+  | { kind: "diagnostic"; text: string }
+  | { kind: "structured"; assistantText?: string };
 
 /**
  * Coerce an unknown value to a non-negative integer. Non-finite / non-numeric
@@ -91,16 +96,16 @@ export function processStreamLine(
   line: string,
   state: StreamParseState,
   onLine: (line: string) => void
-): void {
-  if (!line) return;
+): ProcessedStreamLine {
+  if (!line) return { kind: "diagnostic", text: line };
   onLine(line);
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
   } catch {
-    return;
+    return { kind: "diagnostic", text: line };
   }
-  if (!parsed || typeof parsed !== "object") return;
+  if (!parsed || typeof parsed !== "object") return { kind: "structured" };
   const obj = parsed as Record<string, unknown>;
   if (obj.type === "system") {
     // The init event names the model the CLI resolved — the first and most
@@ -110,15 +115,18 @@ export function processStreamLine(
     const msg = obj.message as { content?: unknown; model?: unknown } | undefined;
     if (typeof msg?.model === "string") state.capturedModel ??= msg.model;
     const blocks = Array.isArray(msg?.content) ? msg?.content : null;
-    if (!blocks) return;
+    if (!blocks) return { kind: "structured" };
+    let assistantText = "";
     for (const block of blocks) {
       if (block && typeof block === "object") {
         const b = block as Record<string, unknown>;
         if (b.type === "text" && typeof b.text === "string") {
           state.accumText += b.text;
+          assistantText += b.text;
         }
       }
     }
+    return assistantText ? { kind: "structured", assistantText } : { kind: "structured" };
   } else if (obj.type === "result") {
     // Deliberately NOT gated on `typeof obj.result === "string"`. Claude's
     // error subtypes (`error_max_turns`, `error_during_execution`) omit the
@@ -127,8 +135,22 @@ export function processStreamLine(
     // recorded exactly $0.
     if (typeof obj.result === "string") state.resultText = obj.result;
     if (typeof obj.model === "string") state.capturedModel ??= obj.model;
+    if (
+      typeof obj.total_cost_usd === "number" &&
+      Number.isFinite(obj.total_cost_usd) &&
+      obj.total_cost_usd >= 0
+    ) {
+      state.reportedCostUsd = obj.total_cost_usd;
+    }
     if (obj.usage && typeof obj.usage === "object") {
-      state.capturedUsage = normalizeClaudeUsage(obj.usage as Record<string, unknown>);
+      const usage = normalizeClaudeUsage(obj.usage as Record<string, unknown>);
+      if (usage.inputTokens > 0 || usage.outputTokens > 0) {
+        state.capturedUsage = usage;
+      }
+    }
+    if (typeof obj.result === "string" && !state.accumText.includes(obj.result)) {
+      return { kind: "structured", assistantText: obj.result };
     }
   }
+  return { kind: "structured" };
 }

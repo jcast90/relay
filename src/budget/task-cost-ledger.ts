@@ -20,6 +20,7 @@ export interface TaskCostRecordInput {
   attempt: number;
   model: string | undefined;
   tokenUsage: TokenUsage;
+  reportedCostUsd?: number;
   /** ISO timestamp; defaults to now. Injectable so tests get stable lines. */
   ts?: string;
 }
@@ -35,8 +36,9 @@ export interface TaskCostRecordInput {
  * partial line (mirrors `token-tracker.ts`).
  *
  * `record()` is fire-and-forget from the caller's view but returns the write
- * promise so a run-completion drain can `await` outstanding writes. Cost is
- * computed here (via {@link costUsd}) so callers only supply raw token usage.
+ * promise so a run-completion drain can `await` outstanding writes. A positive
+ * provider-reported estimate takes precedence; otherwise cost falls back to
+ * {@link costUsd} from the raw token usage.
  */
 export class TaskCostLedger {
   private readonly filePath: string;
@@ -56,10 +58,10 @@ export class TaskCostLedger {
   }
 
   /**
-   * Append one call's cost. Computes `costUsd` from the token usage + model
-   * (unknown/missing model → $0 with the `[cost]` warning from
-   * model-pricing). Returns the write promise; callers that need durability
-   * before proceeding should await it (or {@link flush}).
+   * Append one call's cost. Uses a positive provider-reported estimate when
+   * available, otherwise computes `costUsd` from token usage + model. Returns
+   * the write promise; callers that need durability should await it or
+   * {@link flush}.
    */
   record(input: TaskCostRecordInput): Promise<void> {
     const usage = input.tokenUsage;
@@ -76,7 +78,12 @@ export class TaskCostLedger {
       outputTokens: usage.outputTokens,
       ...(usage.cacheReadTokens ? { cacheReadTokens: usage.cacheReadTokens } : {}),
       ...(usage.cacheWriteTokens ? { cacheWriteTokens: usage.cacheWriteTokens } : {}),
-      costUsd: costUsd(input.model, usage),
+      costUsd:
+        input.reportedCostUsd !== undefined &&
+        Number.isFinite(input.reportedCostUsd) &&
+        input.reportedCostUsd > 0
+          ? input.reportedCostUsd
+          : costUsd(input.model, usage),
     };
 
     const serialized = JSON.stringify(line) + "\n";

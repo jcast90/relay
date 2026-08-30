@@ -566,7 +566,7 @@ export class TicketScheduler {
       return;
     }
 
-    const [entry] = initializeTicketLedger([ticket]);
+    const [entry] = initializeTicketLedger([ticket], run.id, run.classification?.tier);
     run.ticketLedger.push(entry);
 
     if (run.ticketPlan) {

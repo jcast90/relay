@@ -80,6 +80,8 @@ pub struct TicketLedgerEntry {
     /// before per-repo routing existed still deserialize.
     #[serde(default)]
     pub assigned_alias: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_type: Option<String>,
     /// Provenance of the ticket. Omitted / "relay" = Relay-produced;
     /// "linear" = read-only mirror of a Linear issue. All
     /// `#[serde(default)]` for back-compat with ticket files written before
@@ -1966,12 +1968,14 @@ mod tests {
             "dependsOn":["T-0"],
             "verification":"tests",
             "attempt":0,
-            "assignedAlias":"ui"
+            "assignedAlias":"ui",
+            "taskType":"bugfix"
         }"#;
         let t: TicketLedgerEntry = serde_json::from_str(json).unwrap();
         assert_eq!(t.ticket_id, "T-1");
         assert_eq!(t.depends_on, vec!["T-0"]);
         assert_eq!(t.assigned_alias.as_deref(), Some("ui"));
+        assert_eq!(t.task_type.as_deref(), Some("bugfix"));
         assert!(t.assigned_agent_id.is_none());
     }
 
@@ -2097,6 +2101,7 @@ mod tests {
         let t: TicketLedgerEntry = serde_json::from_str(json).unwrap();
         assert_eq!(t.attempt, 3);
         assert!(t.assigned_alias.is_none());
+        assert!(t.task_type.is_none());
     }
 
     #[test]
